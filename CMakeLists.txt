@@ -4,6 +4,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+string(TOLOWER "${CMAKE_CXX_COMPILER}" _cxx_compiler_lower)
+
 project(tetris_ai)
 add_library(${PROJECT_NAME} SHARED
     src/ai.cpp
@@ -32,6 +34,9 @@ add_library(${PROJECT_NAME} SHARED
     src/rule_srs.cpp
 )
 target_include_directories(${PROJECT_NAME} PRIVATE src)
+if (_cxx_compiler_lower MATCHES "mingw")
+    target_link_options(${PROJECT_NAME} PRIVATE -static-libgcc -static-libstdc++ -static)
+endif()
 
 
 project(tetris_ai_runner)
