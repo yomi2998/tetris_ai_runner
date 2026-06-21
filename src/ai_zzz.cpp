@@ -1005,7 +1005,7 @@ namespace ai_zzz
 
     size_t TOJ::map_in_danger_(m_tetris::TetrisMap const &map, size_t t, size_t up) const
     {
-        if (up >= 20)
+        if (up >= 19)
         {
             return 1;
         }
@@ -1558,7 +1558,7 @@ namespace ai_zzz
 
     size_t TOJ_v08::map_in_danger_(m_tetris::TetrisMap const &map, size_t t, size_t up) const
     {
-        if (up >= 20)
+        if (up >= 19)
         {
             return 1;
         }
