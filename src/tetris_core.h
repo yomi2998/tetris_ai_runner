@@ -1143,6 +1143,7 @@ namespace m_tetris
             else
             {
                 new_root->parent = nullptr;
+                new_root->node_flag.clear();
             }
             context->dealloc(this);
             return new_root;
