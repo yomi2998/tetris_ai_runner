@@ -80,3 +80,18 @@ add_library(${PROJECT_NAME} SHARED
     src/ppt_pso.cpp
 )
 target_include_directories(${PROJECT_NAME} PRIVATE src)
+
+
+project(match)
+add_executable(${PROJECT_NAME}
+    src/match.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_simple.cpp
+    src/integer_utils.cpp
+    src/random.cpp
+)
+target_include_directories(${PROJECT_NAME} PRIVATE src)
+if (_cxx_compiler_lower MATCHES "mingw")
+    target_link_options(${PROJECT_NAME} PRIVATE -static-libgcc -static-libstdc++ -static)
+endif()
