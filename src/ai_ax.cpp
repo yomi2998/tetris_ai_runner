@@ -41,15 +41,13 @@ namespace ai_ax
         return "Tetris_ax_C ZZZ Mod v1.2";
     }
 
-    AI::Result AI::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map, size_t clear) const
+    AI::Result AI::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map) const
     {
         //消行数
         double LandHeight = node->status.y + 1;
         //设置左中右平衡破缺参数
         double Middle = std::abs((node->status.x + 1) * 2 - map.width);
         //当前块行数
-        double EraseCount = clear;
-
         const int width_m1 = map.width - 1;
         //行列变换
         int ColTrans = 2 * (map.height - map.roof);
@@ -169,7 +167,6 @@ namespace ai_ax
         result.land_point = (0
                              - LandHeight * 1750 / map.height
                              + Middle * 2
-                             + EraseCount * 60
                              );
         result.map = (0
                       - ColTrans * 80
@@ -184,10 +181,10 @@ namespace ai_ax
         return result;
     }
 
-    AI::Status AI::get(Result const &eval_result, size_t depth, Status const &status) const
+    AI::Status AI::get(Result const &eval_result, size_t clear, size_t depth, Status const &status) const
     {
         Status result;
-        result.land_point = eval_result.land_point + status.land_point;
+        result.land_point = eval_result.land_point + clear * 60 + status.land_point;
         result.value = result.land_point / depth + eval_result.map;
         return result;
     }

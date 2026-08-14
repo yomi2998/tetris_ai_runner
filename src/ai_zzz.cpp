@@ -98,11 +98,10 @@ namespace ai_zzz
             return "AX Attack v0.1";
         }
 
-        Attack::Result Attack::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map, size_t clear) const
+        Attack::Result Attack::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map) const
         {
             double LandHeight = node->row + node->height;
             double Middle = std::fabs((node->status.x + 1) * 2 - map.width);
-            double EraseCount = clear;
             double DeadZone = node->row + node->height == map.height ? 500000. : 0;
             double BoardDeadZone = map_in_danger_(map);
             if (map.roof == map.height)
@@ -282,7 +281,6 @@ namespace ai_zzz
             result.land_point = (0.
                 - LandHeight * 16
                 + Middle * 0.2
-                + EraseCount * 6
                 - DeadZone
                 - BoardDeadZone * 500000
                 );
@@ -296,24 +294,24 @@ namespace ai_zzz
                 - v.HolePiece * 2
                 + v.AttackDepth * 100
                 );
-            result.clear = clear;
             result.danger = v.Danger;
             return result;
         }
 
-        Attack::Status Attack::get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t depth, Status const &status) const
+        Attack::Status Attack::get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, size_t depth, Status const &status) const
         {
 
             Status result = status;
             result.land_point += eval_result.land_point;
+            result.land_point += clear * 6;
             double length_rate = 10. / (depth + 1);
-            switch (eval_result.clear)
+            switch (clear)
             {
             case 0:
                 break;
             case 1:
             case 2:
-                result.rubbish += eval_result.clear;
+                result.rubbish += clear;
                 break;
             case 3:
                 if (config_->mode != 0)
@@ -322,7 +320,7 @@ namespace ai_zzz
                     break;
                 }
             default:
-                result.attack += (eval_result.clear * 10 * length_rate);
+                result.attack += (clear * 10 * length_rate);
                 break;
             }
             result.value = (0.
@@ -373,7 +371,7 @@ namespace ai_zzz
         return "ZZZ Dig v0.2";
     }
 
-    double Dig::eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const
+    double Dig::eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const
     {
         const int width_m1 = map.width - 1;
         size_t ColTrans = 2 * (map.height - map.roof);
@@ -732,7 +730,7 @@ namespace ai_zzz
         }
     };
 
-    TOJ::Result TOJ::eval(TetrisNodeEx const &node, TetrisMap const &map, TetrisMap const &src_map, size_t clear) const
+    TOJ::Result TOJ::eval(TetrisNodeEx const &node, TetrisMap const &map, TetrisMap const &src_map) const
     {
         const int width_m1 = map.width - 1;
 
@@ -807,17 +805,16 @@ namespace ai_zzz
             + v.Wide[4] * p.wide_4
             );
         result.count = t_map.count;
-        result.clear = int8_t(clear);
         result.top_out = node->row >= 20;
         result.map = &map;
         return result;
     }
 
-    TOJ::Status TOJ::get(TetrisNodeEx &node, Result const &eval_result, size_t depth, Status const &status, TetrisContext::Env const &env) const
+    TOJ::Status TOJ::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const &status, TetrisContext::Env const &env) const
     {
-        if (eval_result.clear > 0 && node.is_check && node.is_last_rotate)
+        if (clear > 0 && node.is_check && node.is_last_rotate)
         {
-            if (eval_result.clear == 1 && node.is_mini_ready)
+            if (clear == 1 && node.is_mini_ready)
             {
                 node.type = TSpinType::TSpinMini;
             }
@@ -846,7 +843,7 @@ namespace ai_zzz
         };
         int safe = node->row >= 20 ? -1 : env.length > 0 ? get_safe(*eval_result.map,  *env.next) : eval_result.map->roof;
         auto& p = config_->param;
-        switch (eval_result.clear)
+        switch (clear)
         {
         case 0:
             result.combo = 0;
@@ -950,7 +947,7 @@ namespace ai_zzz
             }
             break;
         case 'I':
-            if (eval_result.clear != 4)
+            if (clear != 4)
             {
                 update_like(double(40 - config_safe) * p.hold_i);
             }
@@ -1041,7 +1038,7 @@ namespace ai_zzz
         row_mask_ = context->full();
     }
 
-    TOJ_PC::Result TOJ_PC::eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &, size_t clear) const
+    TOJ_PC::Result TOJ_PC::eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &) const
     {
         const int width_m1 = map.width - 1;
         int ColTrans = 2 * (map.height - map.roof);
@@ -1070,17 +1067,16 @@ namespace ai_zzz
 
         Result result;
         result.value = (map.roof > 4 ? 0 : 10000) - ColTrans * 3 - RowTrans * 2;
-        result.clear = clear;
         result.roof = map.roof;
         return result;
     }
 
-    TOJ_PC::Status TOJ_PC::get(TetrisNodeEx &node, Result const &eval_result, size_t depth, Status const & status) const {
+    TOJ_PC::Status TOJ_PC::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const & status) const {
 
         Status result = status;
-        if (eval_result.clear > 0 && node.is_check && node.is_last_rotate)
+        if (clear > 0 && node.is_check && node.is_last_rotate)
         {
-            if (eval_result.clear == 1 && node.is_mini_ready)
+            if (clear == 1 && node.is_mini_ready)
             {
                 node.type = TSpinType::TSpinMini;
             }
@@ -1094,7 +1090,7 @@ namespace ai_zzz
             }
         }
 
-        switch (eval_result.clear)
+        switch (clear)
         {
         case 0:
             result.combo = 0;
@@ -1188,7 +1184,7 @@ namespace ai_zzz
         return "ZZZ TOJ v0.8";
     }
 
-    TOJ_v08::Result TOJ_v08::eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const
+    TOJ_v08::Result TOJ_v08::eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const
     {
         const int width_m1 = map.width - 1;
         int ColTrans = 2 * (map.height - map.roof);
@@ -1310,7 +1306,6 @@ namespace ai_zzz
             result.value -= a[i].ClearWidth * rate;
         }
         result.count = map.count + v.HoleCount;
-        result.clear = clear;
         result.t2_value = 0;
         result.t3_value = 0;
         result.map = &map;
@@ -1436,12 +1431,12 @@ namespace ai_zzz
         return result;
     }
 
-    TOJ_v08::Status TOJ_v08::get(TetrisNodeEx &node, Result const &eval_result, size_t depth, Status const &status, TetrisContext::Env const &env) const
+    TOJ_v08::Status TOJ_v08::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const &status, TetrisContext::Env const &env) const
     {
         Status result = status;
-        if (eval_result.clear > 0 && node.is_check && node.is_last_rotate)
+        if (clear > 0 && node.is_check && node.is_last_rotate)
         {
-            if (eval_result.clear == 1 && node.is_mini_ready)
+            if (clear == 1 && node.is_mini_ready)
             {
                 node.type = TSpinType::TSpinMini;
             }
@@ -1460,7 +1455,7 @@ namespace ai_zzz
         {
             result.value -= 99999;
         }
-        switch (eval_result.clear)
+        switch (clear)
         {
         case 0:
             if (status.combo > 0 && status.combo < 3)
@@ -1556,7 +1551,7 @@ namespace ai_zzz
             }
             break;
         case 'I':
-            if (eval_result.clear != 4)
+            if (clear != 4)
             {
                 result.like += 2;
             }
@@ -1620,7 +1615,7 @@ namespace ai_zzz
         return "C2 v0.1";
     }
 
-    C2::Result C2::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map, size_t clear) const
+    C2::Result C2::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map) const
     {
         const int width_m1 = map.width - 1;
         size_t ColTrans = 2 * (map.height - map.roof);
@@ -1794,7 +1789,6 @@ namespace ai_zzz
                 + ((attack_well * attack_well) + config_->p[16]) * config_->p[17] * config_->p_rate
                 );
         }
-        result.clear = clear;
         result.fill = float(map.count) / (map.width * (map.height - config_->safe));
         result.hole = float(v.HoleCountSrc) / (map.height - config_->safe);
         result.new_hole = v.HoleCount > v.HoleCountSrc ? float(v.HoleCount - v.HoleCountSrc) / map.height : 0;
@@ -1802,7 +1796,7 @@ namespace ai_zzz
         return result;
     }
 
-    C2::Status C2::get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t depth, Status const &status, TetrisContext::Env const &env) const
+    C2::Status C2::get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, size_t depth, Status const &status, TetrisContext::Env const &env) const
     {
         Status result;
         result.attack = 0;
@@ -1876,16 +1870,16 @@ namespace ai_zzz
             {
                 downstack = std::max<double>(0.2, 1 - hole * 3.3) * std::max<double>(0.2, 1 - fill * 1.2);
             }
-            if (eval_result.clear > 0)
+            if (clear > 0)
             {
                 if (status.combo == 0)
                 {
                     result.attack -= 8000 * upstack;
-                    result.attack += table[status.combo][eval_result.clear] * downstack;
+                    result.attack += table[status.combo][clear] * downstack;
                 }
                 else
                 {
-                    result.attack += table[status.combo][eval_result.clear] * downstack * length_ratio;
+                    result.attack += table[status.combo][clear] * downstack * length_ratio;
                 }
                 result.combo = std::min<size_t>(16, result.combo + 1);
             }

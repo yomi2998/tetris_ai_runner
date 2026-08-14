@@ -146,7 +146,7 @@ namespace ai_farteryhr
         return "farteryhr v1";
     }
 
-    int AI::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map, size_t clear) const
+    int AI::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map) const
     {
         FarteryhrMap fmap(node, &src_map, fhh);
         int pts = 0;

@@ -18,7 +18,6 @@ namespace ai_zzz
             struct Result
             {
                 double land_point, map;
-                size_t clear;
                 int danger;
             };
             struct Status
@@ -32,8 +31,8 @@ namespace ai_zzz
         public:
             void init(m_tetris::TetrisContext const *context, Config const *config);
             std::string ai_name() const;
-            Result eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const;
-            Status get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t depth, Status const &status) const;
+            Result eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
+            Status get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, size_t depth, Status const &status) const;
 
         private:
             uint32_t check_line_1_[32];
@@ -75,7 +74,7 @@ namespace ai_zzz
         };
         void init(m_tetris::TetrisContext const *context, Config const *config);
         std::string ai_name() const;
-        double eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const;
+        double eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
         double get(m_tetris::TetrisNode const *node, double const &eval_result) const;
     private:
         struct MapInDangerData
@@ -102,7 +101,6 @@ namespace ai_zzz
         struct Result
         {
             double value;
-            int clear;
             int roof;
         };
         struct Status
@@ -124,8 +122,8 @@ namespace ai_zzz
         {
             return 0.5;
         }
-        Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const;
-        Status get(TetrisNodeEx &node, Result const &eval_result, size_t depth, Status const & status) const;
+        Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
+        Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const & status) const;
 
     private:
         m_tetris::TetrisContext const *context_;
@@ -146,7 +144,6 @@ namespace ai_zzz
         struct Result
         {
             double value;
-            int clear;
             int count;
             int t2_value;
             int t3_value;
@@ -174,8 +171,8 @@ namespace ai_zzz
         {
             return 1.5;
         }
-        Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const;
-        Status get(TetrisNodeEx &node, Result const &eval_result, size_t depth, Status const & status, m_tetris::TetrisContext::Env const &env) const;
+        Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
+        Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const & status, m_tetris::TetrisContext::Env const &env) const;
     private:
         m_tetris::TetrisContext const *context_;
         Config const *config_;
@@ -235,7 +232,6 @@ namespace ai_zzz
         struct Result
         {
             double value;
-            int8_t clear;
             int8_t top_out;
             int16_t count;
             int16_t t2_value;
@@ -267,8 +263,8 @@ namespace ai_zzz
         {
             return config_->param.ratio;
         }
-        Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const;
-        Status get(TetrisNodeEx &node, Result const &eval_result, size_t depth, Status const & status, m_tetris::TetrisContext::Env const &env) const;
+        Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
+        Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const & status, m_tetris::TetrisContext::Env const &env) const;
     private:
         m_tetris::TetrisContext const *context_;
         Config const *config_;
@@ -306,7 +302,6 @@ namespace ai_zzz
         {
             double attack;
             double map;
-            size_t clear;
             double fill;
             double hole;
             double new_hole;
@@ -315,8 +310,8 @@ namespace ai_zzz
     public:
         void init(m_tetris::TetrisContext const *context, Config const *config);
         std::string ai_name() const;
-        Result eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const;
-        Status get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t depth, Status const &status, m_tetris::TetrisContext::Env const &env) const;
+        Result eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
+        Status get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, size_t depth, Status const &status, m_tetris::TetrisContext::Env const &env) const;
         Status iterate(Status const **status, size_t status_length) const;
 
     private:

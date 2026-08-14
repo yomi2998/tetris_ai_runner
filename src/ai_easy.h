@@ -7,7 +7,7 @@ namespace ai_easy
     class AI
     {
     public:
-        typedef double(*eval_func_t)(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear);
+        typedef double(*eval_func_t)(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map);
         struct Config
         {
             eval_func_t eval_func;
@@ -21,9 +21,9 @@ namespace ai_easy
         {
             return std::string();
         }
-        double eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const
+        double eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const
         {
-            return config_->eval_func(node, map, src_map, clear);
+            return config_->eval_func(node, map, src_map);
         }
         double get(m_tetris::TetrisNode const *node, double const &eval_result) const
         {

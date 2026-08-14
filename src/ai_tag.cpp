@@ -41,11 +41,10 @@ namespace ai_tag
         return "The AI Games (SetoSan) v0.1";
     }
 
-    the_ai_games_old::Result the_ai_games_old::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map, size_t clear) const
+    the_ai_games_old::Result the_ai_games_old::eval(TetrisNode const *node, TetrisMap const &map, TetrisMap const &src_map) const
     {
         double LandHeight = node->row + node->height;
         double Middle = std::abs((int(node->status.x) + 1) * 2 - int(map.width));
-        double EraseCount = clear;
 
         const int width_m1 = map.width - 1;
         int ColTrans = 2 * (map.height - map.roof);
@@ -258,7 +257,6 @@ namespace ai_tag
         result.land_point = (0.
                              - LandHeight * 1750 / map.height
                              + Middle * 2
-                             + EraseCount * 60
                              );
         result.map = (0.
                       - ColTrans * 80
@@ -280,14 +278,13 @@ namespace ai_tag
         result.tilt = tilt;
         result.full = full;
         result.count = map.count;
-        result.clear = clear;
         result.low_y = low_y;
         result.save_map = &map;
         result.node_top = node->row + node->height;
         return result;
     }
 
-    the_ai_games_old::Status the_ai_games_old::get(Result const &eval_result, size_t depth, Status const &status) const
+    the_ai_games_old::Status the_ai_games_old::get(Result const &eval_result, size_t clear, size_t depth, Status const &status) const
     {
         Status result = status;
         double BoardDeadZone = 0;
@@ -301,9 +298,9 @@ namespace ai_tag
         }
         result.land_point -= BoardDeadZone * 50000000;
         bool building = (eval_result.count - eval_result.full * context_->width()) * 3 / 2 < std::max(0, (context_->height() - 6) - (eval_result.full + status.up)) * context_->width();
-        if(eval_result.clear > 0)
+        if(clear > 0)
         {
-            if(eval_result.clear == 4)
+            if(clear == 4)
             {
                 result.land_point += 1000;
             }
@@ -407,7 +404,7 @@ namespace ai_tag
         return "The AI Games (SetoSan) v0.1";
     }
 
-    the_ai_games::Result the_ai_games::eval(TetrisNodeEx const &node, TetrisMap const &map, TetrisMap const &src_map, size_t clear) const
+    the_ai_games::Result the_ai_games::eval(TetrisNodeEx const &node, TetrisMap const &map, TetrisMap const &src_map) const
     {
         Result result;
         const int width_m1 = map.width - 1;
@@ -529,7 +526,6 @@ namespace ai_tag
             }
         }
         result.node_top = node->row + node->height;
-        result.clear = clear;
         result.tbuild = map_for_tspin_(map, attack_x, map.top[attack_x]);
         if(result.map_low == map.top[attack_x])
         {
@@ -539,9 +535,9 @@ namespace ai_tag
         return result;
     }
 
-    the_ai_games::Status the_ai_games::get(TetrisNodeEx &node, Result const &eval_result, size_t depth, Status const &status) const
+    the_ai_games::Status the_ai_games::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const &status) const
     {
-        int tspin = node.is_check && node.is_ready && node.is_last_rotate ? eval_result.clear : 0;
+        int tspin = node.is_check && node.is_ready && node.is_last_rotate ? clear : 0;
         if (tspin > 0)
         {
             node.type = TSpinType::TSpin;
@@ -557,17 +553,17 @@ namespace ai_tag
             BoardDeadZone = map_in_danger_(*eval_result.save_map, status.up[depth]);
         }
         result.attack -= BoardDeadZone * 50000000;
-        result.attack += eval_result.clear * (eval_result.clear + 1) * config_->line_clear_width;
+        result.attack += clear * (clear + 1) * config_->line_clear_width;
         if(tspin > 0)
         {
             result.attack += tspin * config_->tspin_clear_width;
         }
-        if(eval_result.clear == 4)
+        if(clear == 4)
         {
             result.attack += config_->tetris_clear_width;
         }
         result.attack += eval_result.tbuild * config_->tspin_build_width;
-        if(eval_result.clear > 0)
+        if(clear > 0)
         {
             if(result.combo > 0)
             {
@@ -695,27 +691,24 @@ namespace ai_tag
         return "The AI Games (SetoSan) v0.1";
     }
 
-    the_ai_games_enemy::Result the_ai_games_enemy::eval(TetrisNodeEx const &node, TetrisMap const &map, TetrisMap const &src_map, size_t clear) const
+    the_ai_games_enemy::Result the_ai_games_enemy::eval(TetrisNodeEx const &node, TetrisMap const &map, TetrisMap const &src_map) const
     {
-        Result result =
-        {
-            clear, node.is_check && node.is_ready && node.is_last_rotate ? clear : 0
-        };
-        return result;
+        return {};
     }
 
-    the_ai_games_enemy::Status the_ai_games_enemy::get(TetrisNodeEx &node, Result const &eval_result, size_t depth, Status const &status) const
+    the_ai_games_enemy::Status the_ai_games_enemy::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const &status) const
     {
         Status result = status;
-        if(eval_result.clear > 0)
+        int tspin = node.is_check && node.is_ready && node.is_last_rotate ? clear : 0;
+        if(clear > 0)
         {
-            if(eval_result.tspin > 0)
+            if(tspin > 0)
             {
-                result.point += eval_result.tspin * 6;
+                result.point += tspin * 6;
             }
             else
             {
-                switch(eval_result.clear)
+                switch(clear)
                 {
                 case 1: result.point += 1; break;
                 case 2: result.point += 3; break;
