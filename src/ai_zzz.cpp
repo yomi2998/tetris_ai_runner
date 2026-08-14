@@ -298,7 +298,7 @@ namespace ai_zzz
             return result;
         }
 
-        Attack::Status Attack::get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, size_t depth, Status const &status) const
+        Attack::Status Attack::get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status) const
         {
 
             Status result = status;
@@ -489,7 +489,7 @@ namespace ai_zzz
         return value;
     }
 
-    double Dig::get(m_tetris::TetrisNode const *node, double const &eval_result) const
+    double Dig::get(m_tetris::TetrisNode const *node, double const &eval_result, m_tetris::TetrisMap const &map) const
     {
         return eval_result;
     }
@@ -806,11 +806,10 @@ namespace ai_zzz
             );
         result.count = t_map.count;
         result.top_out = node->row >= 20;
-        result.map = &map;
         return result;
     }
 
-    TOJ::Status TOJ::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const &status, TetrisContext::Env const &env) const
+    TOJ::Status TOJ::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, TetrisMap const &map, size_t depth, Status const &status, TetrisContext::Env const &env) const
     {
         if (clear > 0 && node.is_check && node.is_last_rotate)
         {
@@ -841,7 +840,7 @@ namespace ai_zzz
         {
             v > 0 ? like += v : dislike -= v;
         };
-        int safe = node->row >= 20 ? -1 : env.length > 0 ? get_safe(*eval_result.map,  *env.next) : eval_result.map->roof;
+        int safe = node->row >= 20 ? -1 : env.length > 0 ? get_safe(map,  *env.next) : map.roof;
         auto& p = config_->param;
         switch (clear)
         {
@@ -1071,7 +1070,7 @@ namespace ai_zzz
         return result;
     }
 
-    TOJ_PC::Status TOJ_PC::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const & status) const {
+    TOJ_PC::Status TOJ_PC::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const & status) const {
 
         Status result = status;
         if (clear > 0 && node.is_check && node.is_last_rotate)
@@ -1308,7 +1307,6 @@ namespace ai_zzz
         result.count = map.count + v.HoleCount;
         result.t2_value = 0;
         result.t3_value = 0;
-        result.map = &map;
         bool finding2 = true;
         bool finding3 = true;
         for (int y = 0; (finding2 || finding3) && y < map.roof - 2; ++y)
@@ -1431,7 +1429,7 @@ namespace ai_zzz
         return result;
     }
 
-    TOJ_v08::Status TOJ_v08::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const &status, TetrisContext::Env const &env) const
+    TOJ_v08::Status TOJ_v08::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status, TetrisContext::Env const &env) const
     {
         Status result = status;
         if (clear > 0 && node.is_check && node.is_last_rotate)
@@ -1450,7 +1448,7 @@ namespace ai_zzz
             }
         }
         result.value = eval_result.value;
-        int safe = node->row >= 20 ? -1 : env.length > 0 ? get_safe(*eval_result.map, *env.next) : eval_result.map->roof;
+        int safe = node->row >= 20 ? -1 : env.length > 0 ? get_safe(map, *env.next) : map.roof;
         if (safe <= 0)
         {
             result.value -= 99999;
@@ -1796,7 +1794,7 @@ namespace ai_zzz
         return result;
     }
 
-    C2::Status C2::get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, size_t depth, Status const &status, TetrisContext::Env const &env) const
+    C2::Status C2::get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status, TetrisContext::Env const &env) const
     {
         Status result;
         result.attack = 0;

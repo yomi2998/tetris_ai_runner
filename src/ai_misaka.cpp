@@ -143,31 +143,25 @@ namespace ai_misaka
         return "Misakamm v0.1";
     }
 
-    misaka::Result misaka::eval(TetrisNodeEx &node, TetrisMap const &map, TetrisMap const &src_map, size_t clear) const
+    misaka::Result misaka::eval(TetrisNodeEx &node, TetrisMap const &map, TetrisMap const &src_map) const
     {
-        if(clear > 0 && node.is_check && node.is_last_rotate)
-        {
-            if(clear == 1 && node.is_mini_ready)
-            {
-                node.type = TSpinType::TSpinMini;
-            }
-            else if(node.is_ready)
-            {
-                node.type = TSpinType::TSpin;
-            }
-            else
-            {
-                node.type = TSpinType::None;
-            }
-        }
-        return
-        {
-            node, &map, &src_map, clear, node.type
-        };
+        return { node->status.t, node.is_check, node.is_last_rotate, node.is_ready, node.is_mini_ready };
     }
 
-    misaka::Status misaka::get(Result const &eval_result, size_t depth, Status const &status, TetrisContext::Env const &env) const
+    misaka::Status misaka::get(Result const &eval_result, size_t clear, TetrisMap const &map, size_t depth, Status const &status, TetrisContext::Env const &env) const
     {
+        TSpinType t_spin = TSpinType::None;
+        if(clear > 0 && eval_result.is_check && eval_result.is_last_rotate)
+        {
+            if(clear == 1 && eval_result.is_mini_ready)
+            {
+                t_spin = TSpinType::TSpinMini;
+            }
+            else if(eval_result.is_ready)
+            {
+                t_spin = TSpinType::TSpin;
+            }
+        }
 #pragma warning(push)
 #pragma warning(disable:4244 4554)
 #define XP_RELEASE
@@ -192,9 +186,9 @@ namespace ai_misaka
         };
         struct VirtualPool
         {
-            VirtualPool(TetrisContext const *context, Result const &eval_result, size_t depth, char hold, Status const &status)
+            VirtualPool(TetrisContext const *context, Result const &eval_result, TetrisMap const &map, size_t depth, char hold, Status const &status)
                 : context_(context), eval_result_(eval_result), depth_(depth), hold_(hold), status_(status)
-                , row(eval_result.map->row, context->height())
+                , row(map.row, context->height())
                 , m_hold(hold)
                 , m_w_mask(context->full())
                 , combo(status.combo)
@@ -226,7 +220,7 @@ namespace ai_misaka
                 return 6;
             }
 
-        } pool(context_, eval_result, depth, env.hold, status);
+        } pool(context_, eval_result, map, depth, env.hold, status);
         Config const &ai_param = *config_;
         char const GEMTYPE_T = 'T';
         char const GEMTYPE_I = 'I';
@@ -239,44 +233,44 @@ namespace ai_misaka
         const int combo_step_max = 32;
         Status result = status;
         result.att = 0;
-        switch(eval_result.clear)
+        switch(clear)
         {
         case 1:
-            if(eval_result.t_spin == TSpinType::TSpinMini)
+            if(t_spin == TSpinType::TSpinMini)
             {
                 result.att += status.b2b ? 2 : 1;
             }
-            else if(eval_result.t_spin == TSpinType::TSpin)
+            else if(t_spin == TSpinType::TSpin)
             {
                 result.att += status.b2b ? 3 : 2;
             }
             result.att += config_->table[std::min(config_->table_max - 1, ++result.combo)];
-            result.b2b = eval_result.t_spin != TSpinType::None;
+            result.b2b = t_spin != TSpinType::None;
             break;
         case 2:
-            if(eval_result.t_spin != TSpinType::None)
+            if(t_spin != TSpinType::None)
             {
                 result.att += status.b2b ? 5 : 4;
             }
             result.att += config_->table[std::min(config_->table_max - 1, ++result.combo)];
-            result.b2b = eval_result.t_spin != TSpinType::None;
+            result.b2b = t_spin != TSpinType::None;
             break;
         case 3:
-            if(eval_result.t_spin != TSpinType::None)
+            if(t_spin != TSpinType::None)
             {
                 result.att += status.b2b ? 8 : 6;
             }
             result.att += config_->table[std::min(config_->table_max - 1, ++result.combo)] + 2;
-            result.b2b = eval_result.t_spin != TSpinType::None;
+            result.b2b = t_spin != TSpinType::None;
             break;
         case 4:
             result.att += config_->table[std::min(config_->table_max - 1, ++result.combo)] + (status.b2b ? 5 : 4);
             result.b2b = true;
             break;
         }
-        if(eval_result.clear > 0)
+        if(clear > 0)
         {
-            result.combo = status.combo + combo_step_max + 1 - eval_result.clear;
+            result.combo = status.combo + combo_step_max + 1 - clear;
             if(status.upcomeAtt > 0)
                 result.upcomeAtt = std::max(0, status.upcomeAtt - result.att);
         }
@@ -288,18 +282,18 @@ namespace ai_misaka
                 result.upcomeAtt = -status.upcomeAtt;
             }
         }
-        if(eval_result.map->count == 0 && result.upcomeAtt >= 0)
+        if(map.count == 0 && result.upcomeAtt >= 0)
         {
             result.att += m_pc_att;
         }
         result.total_clear_att += result.att;
-        result.total_clears += eval_result.clear;
+        result.total_clears += clear;
         result.max_att = std::max(status.max_att, result.att);
         result.max_combo = std::max(status.max_combo, result.combo);
         result.score = 0;
         result.strategy_4w = config_->strategy_4w;
         int clear_att = result.att;
-        int clears = eval_result.clear;
+        int clears = clear;
         int total_clear_att = result.total_clear_att;
         int total_clears = result.total_clears;
         int lastCombo = status.combo;
@@ -307,8 +301,8 @@ namespace ai_misaka
         int &clearScore = result.clearScore;
         int &score = result.score;
         int curdepth = depth;
-        char cur_num = eval_result.node->status.t;
-        int8_t wallkick_spin = eval_result.t_spin != TSpinType::None ? 2 : 0;
+        char cur_num = eval_result.t;
+        int8_t wallkick_spin = t_spin != TSpinType::None ? 2 : 0;
         int t_dis = [=]()->int
         {
             if(env.hold == GEMTYPE_T)

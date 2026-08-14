@@ -181,7 +181,7 @@ namespace ai_ax
         return result;
     }
 
-    AI::Status AI::get(Result const &eval_result, size_t clear, size_t depth, Status const &status) const
+    AI::Status AI::get(Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status) const
     {
         Status result;
         result.land_point = eval_result.land_point + clear * 60 + status.land_point;

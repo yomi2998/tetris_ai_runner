@@ -38,11 +38,11 @@ namespace ai_misaka
         };
         struct Result
         {
-            m_tetris::TetrisNode const *node;
-            m_tetris::TetrisMap const *map;
-            m_tetris::TetrisMap const *src_map;
-            size_t clear;
-            TSpinType t_spin;
+            char t;
+            bool is_check;
+            bool is_last_rotate;
+            bool is_ready;
+            bool is_mini_ready;
         };
         struct Status
         {
@@ -62,8 +62,8 @@ namespace ai_misaka
     public:
         void init(m_tetris::TetrisContext const *context, Config const *config);
         std::string ai_name() const;
-        Result eval(TetrisNodeEx &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map, size_t clear) const;
-        Status get(Result const &eval_result, size_t depth, Status const &status, m_tetris::TetrisContext::Env const &env) const;
+        Result eval(TetrisNodeEx &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
+        Status get(Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status, m_tetris::TetrisContext::Env const &env) const;
 
     private:
         m_tetris::TetrisContext const *context_;

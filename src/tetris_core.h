@@ -810,7 +810,16 @@ namespace m_tetris
             typedef std::true_type enable_next_c;
             static void get(typename TreeNode::Context *context, TreeNode *node, TreeNode *parent)
             {
-                node->status.set(TetrisCallAI<TetrisAI, LandPoint>::get(*context->ai, node->identity, node->result, node->clear, parent->level, parent->status.get_raw(), parent->template env<EnableEnv>(context, node)));
+                node->status.set(TetrisCallAI<TetrisAI, LandPoint>::get(*context->ai, node->identity, node->result, node->clear, node->map, parent->level, parent->status.get_raw(), parent->template env<EnableEnv>(context, node)));
+            }
+        };
+        template<class TreeNode, bool EnableEnv>
+        struct TetrisSelectGet<TreeNode, EnableEnv, 6>
+        {
+            typedef std::false_type enable_next_c;
+            static void get(typename TreeNode::Context *context, TreeNode *node, TreeNode *parent)
+            {
+                node->status.set(TetrisCallAI<TetrisAI, LandPoint>::get(*context->ai, node->identity, node->result, node->clear, node->map, parent->level, parent->status.get_raw()));
             }
         };
         template<class TreeNode, bool EnableEnv>
@@ -819,7 +828,7 @@ namespace m_tetris
             typedef std::false_type enable_next_c;
             static void get(typename TreeNode::Context *context, TreeNode *node, TreeNode *parent)
             {
-                node->status.set(TetrisCallAI<TetrisAI, LandPoint>::get(*context->ai, node->identity, node->result, node->clear, parent->level, parent->status.get_raw()));
+                node->status.set(TetrisCallAI<TetrisAI, LandPoint>::get(*context->ai, node->identity, node->result, node->clear, node->map, parent->level));
             }
         };
         template<class TreeNode, bool EnableEnv>
@@ -828,7 +837,7 @@ namespace m_tetris
             typedef std::false_type enable_next_c;
             static void get(typename TreeNode::Context *context, TreeNode *node, TreeNode *parent)
             {
-                node->status.set(TetrisCallAI<TetrisAI, LandPoint>::get(*context->ai, node->identity, node->result, node->clear, parent->level));
+                node->status.set(TetrisCallAI<TetrisAI, LandPoint>::get(*context->ai, node->identity, node->result, node->clear, node->map));
             }
         };
         template<class TreeNode, bool EnableEnv>
@@ -837,7 +846,7 @@ namespace m_tetris
             typedef std::false_type enable_next_c;
             static void get(typename TreeNode::Context *context, TreeNode *node, TreeNode *parent)
             {
-                node->status.set(TetrisCallAI<TetrisAI, LandPoint>::get(*context->ai, node->identity, node->result, node->clear));
+                node->status.set(TetrisCallAI<TetrisAI, LandPoint>::get(*context->ai, node->identity, node->result, node->map));
             }
         };
         template<class TreeNode, bool EnableEnv>

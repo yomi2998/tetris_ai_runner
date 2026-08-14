@@ -32,7 +32,7 @@ namespace ai_zzz
             void init(m_tetris::TetrisContext const *context, Config const *config);
             std::string ai_name() const;
             Result eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
-            Status get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, size_t depth, Status const &status) const;
+            Status get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status) const;
 
         private:
             uint32_t check_line_1_[32];
@@ -75,7 +75,7 @@ namespace ai_zzz
         void init(m_tetris::TetrisContext const *context, Config const *config);
         std::string ai_name() const;
         double eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
-        double get(m_tetris::TetrisNode const *node, double const &eval_result) const;
+        double get(m_tetris::TetrisNode const *node, double const &eval_result, m_tetris::TetrisMap const &map) const;
     private:
         struct MapInDangerData
         {
@@ -123,7 +123,7 @@ namespace ai_zzz
             return 0.5;
         }
         Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
-        Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const & status) const;
+        Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const & status) const;
 
     private:
         m_tetris::TetrisContext const *context_;
@@ -147,7 +147,6 @@ namespace ai_zzz
             int count;
             int t2_value;
             int t3_value;
-            m_tetris::TetrisMap const* map;
         };
         struct Status
         {
@@ -172,7 +171,7 @@ namespace ai_zzz
             return 1.5;
         }
         Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
-        Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const & status, m_tetris::TetrisContext::Env const &env) const;
+        Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const & status, m_tetris::TetrisContext::Env const &env) const;
     private:
         m_tetris::TetrisContext const *context_;
         Config const *config_;
@@ -237,7 +236,6 @@ namespace ai_zzz
             int16_t t2_value;
             int16_t t3_value;
             TSpinType t_spin;
-            m_tetris::TetrisMap const* map;
         };
         struct Status
         {
@@ -264,7 +262,7 @@ namespace ai_zzz
             return config_->param.ratio;
         }
         Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
-        Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const & status, m_tetris::TetrisContext::Env const &env) const;
+        Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const & status, m_tetris::TetrisContext::Env const &env) const;
     private:
         m_tetris::TetrisContext const *context_;
         Config const *config_;
@@ -311,7 +309,7 @@ namespace ai_zzz
         void init(m_tetris::TetrisContext const *context, Config const *config);
         std::string ai_name() const;
         Result eval(m_tetris::TetrisNode const *node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
-        Status get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, size_t depth, Status const &status, m_tetris::TetrisContext::Env const &env) const;
+        Status get(m_tetris::TetrisNode const *node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status, m_tetris::TetrisContext::Env const &env) const;
         Status iterate(Status const **status, size_t status_length) const;
 
     private:

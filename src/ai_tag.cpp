@@ -279,22 +279,21 @@ namespace ai_tag
         result.full = full;
         result.count = map.count;
         result.low_y = low_y;
-        result.save_map = &map;
         result.node_top = node->row + node->height;
         return result;
     }
 
-    the_ai_games_old::Status the_ai_games_old::get(Result const &eval_result, size_t clear, size_t depth, Status const &status) const
+    the_ai_games_old::Status the_ai_games_old::get(Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status) const
     {
         Status result = status;
         double BoardDeadZone = 0;
-        if(eval_result.save_map->roof + status.up >= context_->height() || eval_result.node_top >= context_->height())
+        if(map.roof + status.up >= context_->height() || eval_result.node_top >= context_->height())
         {
             BoardDeadZone = context_->type_max();
         }
         else
         {
-            BoardDeadZone = map_in_danger_(*eval_result.save_map, status.up);
+            BoardDeadZone = map_in_danger_(map, status.up);
         }
         result.land_point -= BoardDeadZone * 50000000;
         bool building = (eval_result.count - eval_result.full * context_->width()) * 3 / 2 < std::max(0, (context_->height() - 6) - (eval_result.full + status.up)) * context_->width();
@@ -531,11 +530,10 @@ namespace ai_tag
         {
             result.tbuild *= 8;
         }
-        result.save_map = &map;
         return result;
     }
 
-    the_ai_games::Status the_ai_games::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const &status) const
+    the_ai_games::Status the_ai_games::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status) const
     {
         int tspin = node.is_check && node.is_ready && node.is_last_rotate ? clear : 0;
         if (tspin > 0)
@@ -544,13 +542,13 @@ namespace ai_tag
         }
         Status result = status;
         double BoardDeadZone = 0;
-        if(eval_result.save_map->roof + status.up[depth] >= context_->height() || eval_result.node_top >= context_->height())
+        if(map.roof + status.up[depth] >= context_->height() || eval_result.node_top >= context_->height())
         {
             BoardDeadZone = context_->type_max();
         }
         else
         {
-            BoardDeadZone = map_in_danger_(*eval_result.save_map, status.up[depth]);
+            BoardDeadZone = map_in_danger_(map, status.up[depth]);
         }
         result.attack -= BoardDeadZone * 50000000;
         result.attack += clear * (clear + 1) * config_->line_clear_width;
@@ -696,7 +694,7 @@ namespace ai_tag
         return {};
     }
 
-    the_ai_games_enemy::Status the_ai_games_enemy::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, size_t depth, Status const &status) const
+    the_ai_games_enemy::Status the_ai_games_enemy::get(TetrisNodeEx &node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status) const
     {
         Status result = status;
         int tspin = node.is_check && node.is_ready && node.is_last_rotate ? clear : 0;
