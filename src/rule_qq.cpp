@@ -1,6 +1,4 @@
 
-#pragma once
-
 #include "rule_qq.h"
 
 using namespace m_tetris;

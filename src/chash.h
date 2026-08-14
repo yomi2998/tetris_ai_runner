@@ -126,15 +126,15 @@ protected:
     };
     struct value_t
     {
-        typename std::aligned_storage<sizeof(value_type), std::alignment_of<value_type>::value>::type value_pod;
+        alignas(value_type) unsigned char value_pod[sizeof(value_type)];
 
         value_type *value()
         {
-            return reinterpret_cast<value_type *>(&value_pod);
+            return reinterpret_cast<value_type *>(value_pod);
         }
         value_type const *value() const
         {
-            return reinterpret_cast<value_type const *>(&value_pod);
+            return reinterpret_cast<value_type const *>(value_pod);
         }
     };
 
@@ -1021,7 +1021,7 @@ protected:
         }
         if(root_.capacity != 0)
         {
-            std::memset(root_.index, 0xFFFFFFFF, sizeof(index_t) * root_.capacity);
+            std::memset(static_cast<void *>(root_.index), 0xFFFFFFFF, sizeof(index_t) * root_.capacity);
         }
         root_.size = 0;
         root_.free_count = 0;
@@ -1196,10 +1196,10 @@ protected:
         index_t *new_index = get_index_allocator_().allocate(size);
         value_t *new_value = get_value_allocator_().allocate(size);
 
-        std::memset(new_index + root_.capacity, 0xFFFFFFFF, sizeof(index_t) * (size - root_.capacity));
+        std::memset(static_cast<void *>(new_index + root_.capacity), 0xFFFFFFFF, sizeof(index_t) * (size - root_.capacity));
         if(root_.capacity != 0)
         {
-            std::memcpy(new_index, root_.index, sizeof(index_t) * root_.capacity);
+            std::memcpy(static_cast<void *>(new_index), static_cast<void const *>(root_.index), sizeof(index_t) * root_.capacity);
             move_construct_and_destroy_(root_.value->value(), root_.value->value() + root_.capacity, new_value->value());
             get_index_allocator_().deallocate(root_.index, root_.capacity);
             get_value_allocator_().deallocate(root_.value, root_.capacity);

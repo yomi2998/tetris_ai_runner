@@ -1001,7 +1001,7 @@ int main(int argc, char const *argv[])
         rank_table_lock.lock();
         printf(
             "[-1]name         = %s\n"
-            "[  ]rank         = %d\n"
+            "[  ]rank         = %zu\n"
             "[  ]score        = %f\n"
             "[-2]best         = %f\n"
             "[  ]match        = %d\n"
@@ -1159,7 +1159,7 @@ int main(int argc, char const *argv[])
         for (size_t i = begin; i < end && i < rank_table.size(); ++i)
         {
             auto node = rank_table.at(i);
-            printf("rank = %3d elo = %4.1f best = %4.1f match = %3zd gen = %5zd name = %s\n", i + 1, node->data.score, node->data.best, node->data.match, node->data.gen, node->data.name);
+            printf("rank = %3zu elo = %4.1f best = %4.1f match = %3u gen = %5u name = %s\n", i + 1, node->data.score, node->data.best, node->data.match, node->data.gen, node->data.name);
         }
         rank_table_lock.unlock();
         return true;
@@ -1307,7 +1307,7 @@ int main(int argc, char const *argv[])
         }
         ofs.flush();
         ofs.close();
-        printf("%d node(s) saved\n", rank_table.size());
+        printf("%zu node(s) saved\n", rank_table.size());
         rank_table_lock.unlock();
         return true;
     }));

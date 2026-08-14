@@ -55,19 +55,19 @@ namespace m_tetris
         }
         TetrisMap(int32_t w, int32_t h)
         {
-            std::memset(this, 0, sizeof *this);
+            std::memset(static_cast<void *>(this), 0, sizeof *this);
             width = w;
             height = h;
         }
         TetrisMap(TetrisMap const &other)
         {
-            std::memcpy(this, &other, sizeof *this);
+            std::memcpy(static_cast<void *>(this), static_cast<void const *>(&other), sizeof *this);
         }
         TetrisMap &operator = (TetrisMap const &other)
         {
             if (this != &other)
             {
-                std::memcpy(this, &other, sizeof *this);
+                std::memcpy(static_cast<void *>(this), static_cast<void const *>(&other), sizeof *this);
             }
             return *this;
         }

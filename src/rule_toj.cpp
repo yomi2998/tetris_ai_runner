@@ -1,6 +1,4 @@
 
-#pragma once
-
 #include "rule_toj.h"
 
 using namespace m_tetris;

@@ -1278,7 +1278,7 @@ namespace ai_misaka
                             }
                         }
                         {
-                            int e = ~(pool.row[y] | (1 << x - 2)) & pool.m_w_mask;
+                            int e = ~(pool.row[y] | (1 << (x - 2))) & pool.m_w_mask;
                             e &= (e - 1);
                             if((e & (e - 1)) == 0)
                             { // µ×¶þÖ»Ê£Á½¿Õ

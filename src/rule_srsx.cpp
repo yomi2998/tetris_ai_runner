@@ -1,6 +1,4 @@
 
-#pragma once
-
 #include "rule_srsx.h"
 
 using namespace m_tetris;
