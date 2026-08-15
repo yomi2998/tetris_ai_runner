@@ -14,9 +14,13 @@
 #include <chrono>
 #include <thread>
 #include <condition_variable>
+#include <memory>
+#include <random>
+#include <bit>
 
 #include "chash_map.h"
 #include "chash_set.h"
+#include "integer_utils.h"
 
 namespace m_tetris
 {
@@ -753,6 +757,88 @@ namespace m_tetris
         }
     };
 
+    //转置表,缓存eval的结果
+    template<class Result>
+    class TranspositionTable
+    {
+    public:
+        enum
+        {
+            max_count = 1 << 16
+        };
+        struct Entry
+        {
+            uint64_t hash;
+            Result result;
+            Entry() : hash(0), result()
+            {
+            }
+        };
+        TranspositionTable() : mask_(max_count - 1)
+        {
+            std::memset(entries_, 0, sizeof entries_);
+        }
+        void clear()
+        {
+            std::memset(entries_, 0, sizeof entries_);
+        }
+        Result const *find(uint64_t hash) const
+        {
+            if (hash == 0)
+            {
+                return nullptr;
+            }
+            Entry const &e = entries_[hash & mask_];
+            return e.hash == hash ? &e.result : nullptr;
+        }
+        void store(uint64_t hash, Result const &result)
+        {
+            if (hash == 0)
+            {
+                return;
+            }
+            Entry &e = entries_[hash & mask_];
+            e.hash = hash;
+            e.result = result;
+        }
+    private:
+        Entry entries_[max_count];
+        size_t mask_;
+    };
+
+    //zobrist哈希表
+    inline uint64_t const *zobrist_table()
+    {
+        static uint64_t table[max_height * 32];
+        static bool generated = []()
+        {
+            std::mt19937_64 rng(0x9E3779B97F4A7C15ull);
+            for (auto &v : table)
+            {
+                v = rng();
+            }
+            return true;
+        }();
+        return table;
+    }
+
+    //哈希map.row
+    inline uint64_t map_hash(TetrisMap const &map)
+    {
+        uint64_t h = 0;
+        uint64_t const *table = zobrist_table();
+        for (int y = 0; y < map.height; ++y)
+        {
+            uint32_t row = map.row[y];
+            while (row != 0)
+            {
+                h ^= table[y * 32 + std::countr_zero(row)];
+                row &= row - 1;
+            }
+        }
+        return h;
+    }
+
     template<class TetrisAI, class TetrisSearch>
     struct TetrisCore
     {
@@ -863,13 +949,27 @@ namespace m_tetris
         using EnableNextC = typename TetrisSelectGet<TreeNode, false, TetrisAIInfo<TetrisAI>::arity>::enable_next_c;
 
         template<class TreeNode>
-        static void eval(typename TreeNode::Context *context, TetrisMap &map, LandPoint &node, TreeNode *tree_node)
+        static void eval(typename TreeNode::Context *context, TetrisMap &map, LandPoint &node, TreeNode *tree_node, size_t depth)
         {
             TetrisMap &new_map = tree_node->map;
             new_map = map;
             tree_node->identity = node;
             tree_node->clear = node->attach(context->engine, new_map);
+            auto table = depth < context->tt.size() ? context->tt[depth].get() : nullptr;
+            uint64_t hash = table != nullptr ? map_hash(new_map) : 0;
+            if (table != nullptr)
+            {
+                if (auto const *cached = table->find(hash))
+                {
+                    tree_node->result = *cached;
+                    return;
+                }
+            }
             tree_node->result = TetrisCallAI<TetrisAI, LandPoint>::eval(*context->ai, tree_node->identity, new_map, map);
+            if (table != nullptr)
+            {
+                table->store(hash, tree_node->result);
+            }
         }
         template<class TreeNode>
         static double get_ratio(TetrisAI &ai)
@@ -965,6 +1065,7 @@ namespace m_tetris
             TetrisSearch *search;
             std::vector<value_heap_t> sort;
             std::vector<value_heap_t> wait;
+            std::vector<std::unique_ptr<TranspositionTable<typename Core::Result>>> tt;
             children_map_t old;
             identity_set_t uniq;
             bool is_complete;
@@ -1015,6 +1116,55 @@ namespace m_tetris
                 node->flag = 0;
                 node->parent = free_list;
                 free_list = node;
+            }
+            //确保转置表的大小和分配
+            void ensure_tt()
+            {
+                typedef TranspositionTable<typename Core::Result> Table;
+                size_t n = max_length + 1;
+                if (tt.size() != n)
+                {
+                    tt.resize(n);
+                }
+                for (auto &p : tt)
+                {
+                    if (p == nullptr)
+                    {
+                        p = std::make_unique<Table>();
+                    }
+                }
+            }
+            //树平移,根换成子节点:转置表向下旋转,重置最后一个深度
+            void rotate_tt()
+            {
+                typedef TranspositionTable<typename Core::Result> Table;
+                if (tt.empty())
+                {
+                    return;
+                }
+                for (size_t i = 1; i < tt.size(); ++i)
+                {
+                    tt[i - 1] = std::move(tt[i]);
+                }
+                tt.back() = std::make_unique<Table>();
+                for (auto &p : tt)
+                {
+                    if (p == nullptr)
+                    {
+                        p = std::make_unique<Table>();
+                    }
+                }
+            }
+            //树重建:清空转置表
+            void reset_tt()
+            {
+                for (auto &p : tt)
+                {
+                    if (p != nullptr)
+                    {
+                        p->clear();
+                    }
+                }
             }
         };
         struct TetrisNodeFlag
@@ -1156,11 +1306,13 @@ namespace m_tetris
             }
             if (new_root == nullptr)
             {
+                context->reset_tt();
                 new_root = context->alloc(nullptr);
                 new_root->map = _map;
             }
             else
             {
+                context->rotate_tt();
                 new_root->parent = nullptr;
                 new_root->node_flag.clear();
             }
@@ -1177,6 +1329,7 @@ namespace m_tetris
             context->sort.clear();
             context->wait.resize(context->max_length + 1);
             context->sort.resize(context->max_length + 1);
+            context->ensure_tt();
         }
         static std::vector<next_t> process_next(char const *_next, size_t _next_length, TetrisNode const *_node)
         {
@@ -1270,7 +1423,7 @@ namespace m_tetris
                 for (auto land_point_node : *context->search->search(map, search_node, level))
                 {
                     TetrisTreeNode *child = context->alloc(this);
-                    Core::eval(context, map, land_point_node, child);
+                    Core::eval(context, map, land_point_node, child, level);
                     child->is_hold = is_hold;
                     child->children_next = children;
                     children = child;
@@ -1297,7 +1450,7 @@ namespace m_tetris
                     else
                     {
                         child = context->alloc(this);
-                        Core::eval(context, map, land_point_node, child);
+                        Core::eval(context, map, land_point_node, child, level);
                     }
                     child->is_hold = is_hold;
                     child->children_next = children;
@@ -1325,7 +1478,7 @@ namespace m_tetris
                     for (auto land_point_node : *context->search->search(map, search_node, level))
                     {
                         TetrisTreeNode *child = context->alloc(this);
-                        Core::eval(context, map, land_point_node, child);
+                        Core::eval(context, map, land_point_node, child, level);
                         child->is_hold = false;
                         child->children_next = children;
                         children = child;
@@ -1340,7 +1493,7 @@ namespace m_tetris
                                 continue;
                             }
                             TetrisTreeNode *child = context->alloc(this);
-                            Core::eval(context, map, land_point_node, child);
+                            Core::eval(context, map, land_point_node, child, level);
                             child->is_hold = true;
                             child->children_next = children;
                             children = child;
@@ -1403,7 +1556,7 @@ namespace m_tetris
                             else
                             {
                                 child = context->alloc(this);
-                                Core::eval(context, map, land_point_node, child);
+                                Core::eval(context, map, land_point_node, child, level);
                             }
                             child->is_hold = false;
                             child->children_next = children;
@@ -1428,7 +1581,7 @@ namespace m_tetris
                                 else
                                 {
                                     child = context->alloc(this);
-                                    Core::eval(context, map, land_point_node, child);
+                                    Core::eval(context, map, land_point_node, child, level);
                                 }
                                 child->is_hold = true;
                                 child->children_next = children;
@@ -1452,7 +1605,7 @@ namespace m_tetris
                     for (auto land_point_node : *context->search->search(map, search_node, level))
                     {
                         TetrisTreeNode *child = context->alloc(this);
-                        Core::eval(context, map, land_point_node, child);
+                        Core::eval(context, map, land_point_node, child, level);
                         child->is_hold = false;
                         child->children_next = children;
                         children = child;
@@ -1462,7 +1615,7 @@ namespace m_tetris
                         for (auto land_point_node : *context->search->search(map, hold_node, level))
                         {
                             TetrisTreeNode *child = context->alloc(this);
-                            Core::eval(context, map, land_point_node, child);
+                            Core::eval(context, map, land_point_node, child, level);
                             child->is_hold = true;
                             child->children_next = children;
                             children = child;
@@ -1511,7 +1664,7 @@ namespace m_tetris
                             else
                             {
                                 child = context->alloc(this);
-                                Core::eval(context, map, land_point_node, child);
+                                Core::eval(context, map, land_point_node, child, level);
                             }
                             child->is_hold = false;
                             child->children_next = children;
@@ -1529,7 +1682,7 @@ namespace m_tetris
                             else
                             {
                                 child = context->alloc(this);
-                                Core::eval(context, map, land_point_node, child);
+                                Core::eval(context, map, land_point_node, child, level);
                             }
                             child->is_hold = true;
                             child->children_next = children;
@@ -1555,7 +1708,7 @@ namespace m_tetris
                     for (auto land_point_node : *context->search->search(map, context->engine->generate(i), level))
                     {
                         TetrisTreeNode *child = context->alloc(this);
-                        Core::eval(context, map, land_point_node, child);
+                        Core::eval(context, map, land_point_node, child, level);
                         child->is_hold = false;
                         child->children_next = children;
                         children = child;
@@ -1586,7 +1739,7 @@ namespace m_tetris
                         else
                         {
                             child = context->alloc(this);
-                            Core::eval(context, map, land_point_node, child);
+                            Core::eval(context, map, land_point_node, child, level);
                         }
                         child->is_hold = false;
                         child->children_next = children;
@@ -2056,6 +2209,7 @@ namespace m_tetris
             local_context_.sort.clear();
             local_context_.wait.resize(local_context_.max_length + 1);
             local_context_.sort.resize(local_context_.max_length + 1);
+            local_context_.ensure_tt();
         }
         bool run()
         {
