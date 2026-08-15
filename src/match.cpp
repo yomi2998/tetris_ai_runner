@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <climits>
 #include <string>
 #include <vector>
 #include <deque>
@@ -107,13 +108,19 @@ namespace
 
         bool try_load(std::string const &path)
         {
+            std::string resolved = path;
 #ifdef _WIN32
-            mod = LoadLibraryA(path.c_str());
+            char full[MAX_PATH];
+            DWORD n = GetFullPathNameA(path.c_str(), MAX_PATH, full, nullptr);
+            if (n > 0 && n < MAX_PATH) resolved = full;
+            mod = LoadLibraryA(resolved.c_str());
             if (mod == nullptr) return false;
             ai = reinterpret_cast<TetrisAIFn>(reinterpret_cast<void *>(GetProcAddress(mod, "TetrisAI")));
             ai_name = reinterpret_cast<AINameFn>(reinterpret_cast<void *>(GetProcAddress(mod, "AIName")));
 #else
-            mod = dlopen(path.c_str(), RTLD_NOW);
+            char real[PATH_MAX];
+            if (realpath(path.c_str(), real) != nullptr) resolved = real;
+            mod = dlopen(resolved.c_str(), RTLD_NOW);
             if (mod == nullptr)
             {
                 last_error_ = std::string(dlerror());
@@ -561,12 +568,12 @@ namespace
         for (int v : p1.recv_attack) up1 += v;
         for (int v : p2.recv_attack) up2 += v;
         std::printf(
-            "HOLD=%c NEXT=%s COMBO=%d B2B=%d UP=%d P=%d L=%d A=%d APL=%.2f APP=%.2f %s\n"
-            "HOLD=%c NEXT=%s COMBO=%d B2B=%d UP=%d P=%d L=%d A=%d APL=%.2f APP=%.2f %s\n",
+            "HOLD=%c NEXT=%s COMBO=%d B2B=%d UP=%d P=%d L=%d A=%d APL=%.2f APP=%.2f %s W=%d\n"
+            "HOLD=%c NEXT=%s COMBO=%d B2B=%d UP=%d P=%d L=%d A=%d APL=%.2f APP=%.2f %s W=%d\n",
             p1.hold, std::string(p1.next.begin() + 1, p1.next.begin() + 1 + p1.cfg->max_depth).c_str(),
-            p1.combo, p1.b2b, up1, p1.total_block, p1.total_clear, p1.total_attack, p1.apl(), p1.app(), p1.bot->name.c_str(),
+            p1.combo, p1.b2b, up1, p1.total_block, p1.total_clear, p1.total_attack, p1.apl(), p1.app(), p1.bot->name.c_str(), p1.games_won,
             p2.hold, std::string(p2.next.begin() + 1, p2.next.begin() + 1 + p2.cfg->max_depth).c_str(),
-            p2.combo, p2.b2b, up2, p2.total_block, p2.total_clear, p2.total_attack, p2.apl(), p2.app(), p2.bot->name.c_str());
+            p2.combo, p2.b2b, up2, p2.total_block, p2.total_clear, p2.total_attack, p2.apl(), p2.app(), p2.bot->name.c_str(), p2.games_won);
         for (int y = 21; y >= 0; --y)
         {
             for (int x = 0; x < 10; ++x)
@@ -608,6 +615,9 @@ namespace
             {
                 break;
             }
+            int min_attack = std::min(p1.send_attack, p2.send_attack);
+            p1.send_attack -= min_attack;
+            p2.send_attack -= min_attack;
             p1.under_attack(p2.send_attack);
             p2.under_attack(p1.send_attack);
         }
@@ -711,8 +721,16 @@ int main(int argc, char **argv)
             w == 1 ? "P1 WIN" : (w == 2 ? "P2 WIN" : "draw"),
             p1.total_block, p2.total_block, p1.total_clear, p2.total_clear,
             p1.total_attack, p2.total_attack, p1.apl(), p2.apl(), p1.app(), p2.app());
-        if (w == 1) ++wins1;
-        else if (w == 2) ++wins2;
+        if (w == 1)
+        {
+            ++wins1;
+            ++p1.games_won;
+        }
+        else if (w == 2)
+        {
+            ++wins2;
+            ++p2.games_won;
+        }
         else ++draws;
         if (games >= 10000) break;
     }
