@@ -396,6 +396,13 @@ namespace
         {
             char current = next.front();
 
+            m_tetris::TetrisNode const *spawn = context->get(current, 3, 21, 0);
+            if (spawn == nullptr || !spawn->check(map))
+            {
+                dead = true;
+                return;
+            }
+
             int field[23] = {0};
             for (int r = 0; r < 22; ++r)
             {
