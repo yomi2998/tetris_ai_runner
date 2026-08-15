@@ -1,0 +1,123 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "linux-gcc-debug",
+            "displayName": "GCC Debug",
+            "description": "Using compilers: C = /usr/bin/gcc, CXX = /usr/bin/g++",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Debug"
+            },
+            "generator": "Ninja"
+        },
+        {
+            "name": "linux-gcc-self-release",
+            "displayName": "GCC Self Release",
+            "description": "GCC with every optimization flag (O3 + march=native + LTO)",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_CXX_FLAGS": "-O3 -march=native -flto=2"
+            },
+            "generator": "Ninja"
+        },
+        {
+            "name": "linux-gcc-release",
+            "displayName": "GCC Release",
+            "description": "GCC Release build without custom CXX flags",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Release"
+            },
+            "generator": "Ninja"
+        },
+        {
+            "name": "linux-clang-debug",
+            "displayName": "Clang Debug",
+            "description": "Using compilers: C = /usr/bin/clang, CXX = /usr/bin/clang++",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/clang",
+                "CMAKE_CXX_COMPILER": "/usr/bin/clang++",
+                "CMAKE_BUILD_TYPE": "Debug"
+            },
+            "generator": "Ninja"
+        },
+        {
+            "name": "linux-clang-self-release",
+            "displayName": "Clang Self Release",
+            "description": "Clang with every optimization flag (O3 + march=native + LTO)",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/clang",
+                "CMAKE_CXX_COMPILER": "/usr/bin/clang++",
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_CXX_FLAGS": "-O3 -march=native -flto"
+            },
+            "generator": "Ninja"
+        },
+        {
+            "name": "linux-clang-release",
+            "displayName": "Clang Release",
+            "description": "Clang Release build without custom CXX flags",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/clang",
+                "CMAKE_CXX_COMPILER": "/usr/bin/clang++",
+                "CMAKE_BUILD_TYPE": "Release"
+            },
+            "generator": "Ninja"
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "build-linux-gcc-debug",
+            "configurePreset": "linux-gcc-debug",
+            "description": "Build Debug with GCC",
+            "hidden": false
+        },
+        {
+            "name": "build-linux-gcc-self-release",
+            "configurePreset": "linux-gcc-self-release",
+            "description": "Build Self Release with GCC",
+            "hidden": false
+        },
+        {
+            "name": "build-linux-gcc-release",
+            "configurePreset": "linux-gcc-release",
+            "description": "Build Release with GCC (no extra flags)",
+            "hidden": false
+        },
+        {
+            "name": "build-linux-clang-debug",
+            "configurePreset": "linux-clang-debug",
+            "description": "Build Debug with Clang",
+            "hidden": false
+        },
+        {
+            "name": "build-linux-clang-self-release",
+            "configurePreset": "linux-clang-self-release",
+            "description": "Build Self Release with Clang",
+            "hidden": false
+        },
+        {
+            "name": "build-linux-clang-release",
+            "configurePreset": "linux-clang-release",
+            "description": "Build Release with Clang (no extra flags)",
+            "hidden": false
+        }
+    ]
+}
