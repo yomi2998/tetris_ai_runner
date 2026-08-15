@@ -827,14 +827,9 @@ namespace m_tetris
     {
         uint64_t h = 0;
         uint64_t const *table = zobrist_table();
-        for (int y = 0; y < map.height; ++y)
+        for (int y = 0; y < map.roof; ++y)
         {
-            uint32_t row = map.row[y];
-            while (row != 0)
-            {
-                h ^= table[y * 32 + std::countr_zero(row)];
-                row &= row - 1;
-            }
+            h ^= (uint64_t)map.row[y] * 0x9E3779B97F4A7C15ull ^ table[y * 32];
         }
         return h;
     }
