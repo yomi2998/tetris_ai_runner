@@ -7,6 +7,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 string(TOLOWER "${CMAKE_CXX_COMPILER}" _cxx_compiler_lower)
 
 project(tetris_ai)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-flto)
+    add_link_options(-flto)
+endif()
+
 add_library(${PROJECT_NAME} SHARED
     src/ai.cpp
     src/ai_ax.cpp
@@ -95,3 +101,16 @@ target_include_directories(${PROJECT_NAME} PRIVATE src)
 if (_cxx_compiler_lower MATCHES "mingw")
     target_link_options(${PROJECT_NAME} PRIVATE -static-libgcc -static-libstdc++ -static)
 endif()
+
+
+project(spsa)
+add_executable(${PROJECT_NAME}
+    src/spsa.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/integer_utils.cpp
+    src/random.cpp
+)
+target_include_directories(${PROJECT_NAME} PRIVATE src)
