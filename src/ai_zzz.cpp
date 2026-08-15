@@ -840,7 +840,7 @@ namespace ai_zzz
         {
             v > 0 ? like += v : dislike -= v;
         };
-        int safe = node->row >= 20 ? -1 : env.length > 0 ? get_safe(map,  *env.next) : map.roof;
+        int safe = node->row >= 20 ? -1 : env.length > 0 ? get_safe(map,  *env.next) : (22 - map.roof);
         auto& p = config_->param;
         switch (clear)
         {
