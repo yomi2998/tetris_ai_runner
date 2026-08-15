@@ -1086,16 +1086,13 @@ namespace m_tetris
                 if (free_list != nullptr)
                 {
                     node = free_list;
-                    free_list = free_list->parent;
-
-                    TetrisTreeNode *it = node->children;
-                    node->children = nullptr;
-                    while (it != nullptr)
+                    free_list = node->children_next;
+                    TetrisTreeNode *subtree = node->children;
+                    if (subtree != nullptr)
                     {
-                        TetrisTreeNode *next = it->children_next;
-                        it->parent = free_list;
-                        free_list = it;
-                        it = next;
+                        node->children_tail->children_next = free_list;
+                        free_list = subtree;
+                        node->children = nullptr;
                     }
                     node->node_flag.clear();
                     node->node = ' ';
@@ -1114,7 +1111,7 @@ namespace m_tetris
             }
             void dealloc(TetrisTreeNode *node)
             {
-                node->parent = free_list;
+                node->children_next = free_list;
                 free_list = node;
             }
             //确保转置表的大小和分配
@@ -1285,6 +1282,7 @@ namespace m_tetris
         TetrisTreeNode *parent;
         TetrisTreeNode *children;
         TetrisTreeNode *children_next;
+        TetrisTreeNode *children_tail;
         TetrisNodeFlag node_flag;
         typename std::vector<next_t>::const_iterator next;
 
@@ -1301,6 +1299,10 @@ namespace m_tetris
                 {
                     new_root = it;
                     (last == nullptr ? children : last->children_next) = it->children_next;
+                    if (it->children_next == nullptr)
+                    {
+                        children_tail = last;
+                    }
                     break;
                 }
             }
@@ -1426,6 +1428,7 @@ namespace m_tetris
                     Core::eval(context, map, land_point_node, child, level);
                     child->is_hold = is_hold;
                     child->children_next = children;
+                    if (children == nullptr) children_tail = child;
                     children = child;
                 }
             }
@@ -1454,6 +1457,7 @@ namespace m_tetris
                     }
                     child->is_hold = is_hold;
                     child->children_next = children;
+                    if (children == nullptr) children_tail = child;
                     children = child;
                 }
                 for (auto &pair : old)
@@ -1481,6 +1485,7 @@ namespace m_tetris
                         Core::eval(context, map, land_point_node, child, level);
                         child->is_hold = false;
                         child->children_next = children;
+                        if (children == nullptr) children_tail = child;
                         children = child;
                         uniq.insert(child->identity->status);
                     }
@@ -1496,6 +1501,7 @@ namespace m_tetris
                             Core::eval(context, map, land_point_node, child, level);
                             child->is_hold = true;
                             child->children_next = children;
+                            if (children == nullptr) children_tail = child;
                             children = child;
                         }
                     }
@@ -1520,6 +1526,7 @@ namespace m_tetris
                             old.erase(find);
                             child->is_hold = false;
                             child->children_next = children;
+                            if (children == nullptr) children_tail = child;
                             children = child;
                         }
                         if (children != nullptr)
@@ -1529,6 +1536,7 @@ namespace m_tetris
                                 auto child = pair.second;
                                 child->is_hold = true;
                                 child->children_next = children;
+                                if (children == nullptr) children_tail = child;
                                 children = child;
                             }
                         }
@@ -1560,6 +1568,7 @@ namespace m_tetris
                             }
                             child->is_hold = false;
                             child->children_next = children;
+                            if (children == nullptr) children_tail = child;
                             children = child;
                             uniq.insert(child->identity->status);
                         }
@@ -1585,6 +1594,7 @@ namespace m_tetris
                                 }
                                 child->is_hold = true;
                                 child->children_next = children;
+                                if (children == nullptr) children_tail = child;
                                 children = child;
                             }
                         }
@@ -1608,6 +1618,7 @@ namespace m_tetris
                         Core::eval(context, map, land_point_node, child, level);
                         child->is_hold = false;
                         child->children_next = children;
+                        if (children == nullptr) children_tail = child;
                         children = child;
                     }
                     if (children != nullptr)
@@ -1618,6 +1629,7 @@ namespace m_tetris
                             Core::eval(context, map, land_point_node, child, level);
                             child->is_hold = true;
                             child->children_next = children;
+                            if (children == nullptr) children_tail = child;
                             children = child;
                         }
                     }
@@ -1668,6 +1680,7 @@ namespace m_tetris
                             }
                             child->is_hold = false;
                             child->children_next = children;
+                            if (children == nullptr) children_tail = child;
                             children = child;
                         }
                         for (auto land_point_node : *context->search->search(map, hold_node, level))
@@ -1686,6 +1699,7 @@ namespace m_tetris
                             }
                             child->is_hold = true;
                             child->children_next = children;
+                            if (children == nullptr) children_tail = child;
                             children = child;
                         }
                         for (auto &pair : old)
@@ -1711,6 +1725,7 @@ namespace m_tetris
                         Core::eval(context, map, land_point_node, child, level);
                         child->is_hold = false;
                         child->children_next = children;
+                        if (children == nullptr) children_tail = child;
                         children = child;
                     }
                 }
@@ -1743,6 +1758,7 @@ namespace m_tetris
                         }
                         child->is_hold = false;
                         child->children_next = children;
+                        if (children == nullptr) children_tail = child;
                         children = child;
                     }
                 }
