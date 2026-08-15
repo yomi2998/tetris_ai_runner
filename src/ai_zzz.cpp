@@ -556,6 +556,9 @@ namespace ai_zzz
         memset(row_bit_count_global + map.roof, 0, sizeof(int) * (40 - map.roof));
         t2_value_ref = 0;
         t3_value_ref = 0;
+        uint32_t const mask1 = (map.width >= 3) ? ((1u << (map.width - 2)) - 2) : 0;
+        uint32_t const mask2 = (map.width >= 3) ? ((1u << (map.width - 3)) - 1) : 0;
+        uint32_t const mask3 = (map.width >= 2) ? ((1u << (map.width - 2)) - 1) : 0;
         for (int y = 0, ey = std::min(20, map.roof - 2); y < ey; ++y)
         {
             int new_y = y;
@@ -567,8 +570,13 @@ namespace ai_zzz
             int row5 = map.row[y + 5];
             int row6 = map.row[y + 6];
             int *row_bit_count = row_bit_count_global + y;
-            for (int x = 1, ex = map.width - 2; x < ex; ++x)
+            uint32_t m = ~(uint32_t)row0 & ~((uint32_t)row1 | ((uint32_t)row1 >> 1)) & ~(uint32_t)row2
+                & ~((uint32_t)row3 | ((uint32_t)row3 >> 1) | ((uint32_t)row3 >> 2))
+                & ~(((uint32_t)row4 >> 1) | ((uint32_t)row4 >> 2)) & mask1;
+            while (m != 0)
             {
+                int x = std::countr_zero(m);
+                m &= m - 1;
                 if (((~row0 >> x) & 1) & (((~row1 >> x) & 3) == 3) & ((~row2 >> x) & 1) & !((row3 >> x) & 7) & (((~row4 >> x) & 6) == 6))
                 {
                     int t3_count = 0;
@@ -626,8 +634,13 @@ namespace ai_zzz
                 y = new_y;
                 continue;
             }
-            for (int x = 0, ex = map.width - 3; x < ex; ++x)
+            m = ~((uint32_t)row0 >> 2) & ~(((uint32_t)row1 >> 1) | ((uint32_t)row1 >> 2)) & ~((uint32_t)row2 >> 2)
+                & ~((uint32_t)row3 | ((uint32_t)row3 >> 1) | ((uint32_t)row3 >> 2))
+                & ~((uint32_t)row4 | ((uint32_t)row4 >> 1)) & mask2;
+            while (m != 0)
             {
+                int x = std::countr_zero(m);
+                m &= m - 1;
                 if (((~row0 >> x) & 4) & (((~row1 >> x) & 6) == 6) & ((~row2 >> x) & 4) & !((row3 >> x) & 7) & (((~row4 >> x) & 3) == 3))
                 {
                     int t3_count = 0;
@@ -685,8 +698,12 @@ namespace ai_zzz
                 y = new_y;
                 continue;
             }
-            for (int x = 0, ex = map.width - 2; x < ex; ++x)
+            m = ((uint32_t)row0 & ((uint32_t)row0 >> 2)) & ~((uint32_t)row0 >> 1)
+                & ~((uint32_t)row1 | ((uint32_t)row1 >> 1) | ((uint32_t)row1 >> 2)) & mask3;
+            while (m != 0)
             {
+                int x = std::countr_zero(m);
+                m &= m - 1;
                 if ((((row0 >> x) & 7) == 5) & !((row1 >> x) & 7))
                 {
                     int row01_count = row_bit_count[0] + row_bit_count[1];
@@ -728,7 +745,7 @@ namespace ai_zzz
             }
             y = new_y;
         }
-    };
+    }
 
     TOJ::Result TOJ::eval(TetrisNodeEx const &node, TetrisMap const &map, TetrisMap const &src_map) const
     {
