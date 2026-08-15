@@ -1087,6 +1087,21 @@ namespace m_tetris
                 {
                     node = free_list;
                     free_list = free_list->parent;
+
+                    TetrisTreeNode *it = node->children;
+                    node->children = nullptr;
+                    while (it != nullptr)
+                    {
+                        TetrisTreeNode *next = it->children_next;
+                        it->parent = free_list;
+                        free_list = it;
+                        it = next;
+                    }
+                    node->node_flag.clear();
+                    node->node = ' ';
+                    node->hold = ' ';
+                    node->level = 1;
+                    node->flag = 0;
                     node->version = version - 1;
                 }
                 else
@@ -1099,16 +1114,6 @@ namespace m_tetris
             }
             void dealloc(TetrisTreeNode *node)
             {
-                for (auto it = node->children; it != nullptr; it = it->children_next)
-                {
-                    dealloc(it);
-                }
-                node->children = nullptr;
-                node->node_flag.clear();
-                node->node = ' ';
-                node->hold = ' ';
-                node->level = 1;
-                node->flag = 0;
                 node->parent = free_list;
                 free_list = node;
             }
