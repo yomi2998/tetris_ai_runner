@@ -846,7 +846,7 @@ namespace m_tetris
         uint64_t const *table = zobrist_table();
         for (int y = 0; y < map.roof; ++y)
         {
-            h ^= (uint64_t)map.row[y] * 0x9E3779B97F4A7C15ull ^ table[y * 32];
+            h = std::rotl(h, 13) ^ (uint64_t)map.row[y] * 0x9E3779B97F4A7C15ull ^ table[y * 32];
         }
         return h;
     }
