@@ -103,6 +103,19 @@ if (_cxx_compiler_lower MATCHES "mingw")
 endif()
 
 
+project(tetris_profile)
+add_executable(${PROJECT_NAME}
+    src/tetris_profile.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/integer_utils.cpp
+    src/random.cpp
+)
+target_include_directories(${PROJECT_NAME} PRIVATE src)
+
+
 project(spsa)
 add_executable(${PROJECT_NAME}
     src/spsa.cpp
