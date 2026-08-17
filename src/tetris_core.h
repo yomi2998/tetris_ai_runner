@@ -614,6 +614,23 @@ namespace m_tetris
         typedef decltype(func<Derived>(nullptr)) type;
     };
 
+    template<class TetrisAI>
+    struct TetrisAIHasSpawn
+    {
+        struct Fallback
+        {
+            TetrisBlockStatus spawn(char t, int clear, int spawn_w, int spawn_h, bool is_hold, typename TetrisAIInfo<TetrisAI>::Status const &status);
+        };
+        struct Derived : TetrisAI, Fallback
+        {
+        };
+        template<typename U, U> struct Check;
+        template<typename U> static std::false_type func(Check<decltype(&Fallback::spawn), &U::spawn> *);
+        template<typename U> static std::true_type func(...);
+    public:
+        typedef decltype(func<Derived>(nullptr)) type;
+    };
+
     template<class Type>
     struct TetrisHasConfig
     {
@@ -871,6 +888,22 @@ namespace m_tetris
             }
         };
         template<class TreeNode, class>
+        struct TetrisSelectSpawn
+        {
+            static TetrisBlockStatus spawn(TetrisAI &ai, char t, int clear, int spawn_w, int spawn_h, bool is_hold, Status const &status)
+            {
+                return ai.spawn(t, clear, spawn_w, spawn_h, is_hold, status);
+            }
+        };
+        template<class TreeNode>
+        struct TetrisSelectSpawn<TreeNode, std::false_type>
+        {
+            static TetrisBlockStatus spawn(TetrisAI &ai, char t, int clear, int spawn_w, int spawn_h, bool is_hold, Status const &status)
+            {
+                return TetrisBlockStatus(t, (int8_t)spawn_w, (int8_t)spawn_h, 0);
+            }
+        };
+        template<class TreeNode, class>
         struct TetrisSelectIterate
         {
             static void iterate(TetrisAI &ai, Status const **status, size_t status_length, TreeNode *tree_node)
@@ -970,6 +1003,19 @@ namespace m_tetris
         static double get_ratio(TetrisAI &ai)
         {
             return TetrisGetRatio<TreeNode, typename TetrisAIHasRatio<TetrisAI>::type>::get_ratio(ai);
+        }
+        template<class TreeNode>
+        static TetrisBlockStatus spawn(TetrisAI &ai, char t, int clear, int spawn_w, int spawn_h, bool is_hold, Status const &status)
+        {
+            return TetrisSelectSpawn<TreeNode, typename TetrisAIHasSpawn<TetrisAI>::type>::spawn(ai, t, clear, spawn_w, spawn_h, is_hold, status);
+        }
+        template<class TreeNode>
+        static TetrisNode const *spawn_node(typename TreeNode::Context *context, char t, int clear, bool is_hold, Status const &status)
+        {
+            TetrisNode const *suggest = context->engine->generate(t);
+            TetrisBlockStatus s = spawn<TreeNode>(*context->ai, t, clear, suggest->status.x, suggest->status.y, is_hold, status);
+            TetrisNode const *node = context->engine->get(s);
+            return node != nullptr ? node : suggest;
         }
         template<bool EnableEnv, class TreeNode>
         static void get(typename TreeNode::Context *context, TreeNode *node, TreeNode *parent)
@@ -1719,7 +1765,7 @@ namespace m_tetris
                 size_t max = context->engine->type_max();
                 for (size_t i = 0; i < max; ++i)
                 {
-                    for (auto land_point_node : *context->search->search(map, context->engine->generate(i), level))
+                    for (auto land_point_node : *context->search->search(map, Core::template spawn_node<TetrisTreeNode>(context, context->engine->convert(i), clear, false, status.get_raw()), level))
                     {
                         TetrisTreeNode *child = context->alloc(this);
                         Core::eval(context, map, land_point_node, child, level);
@@ -1742,7 +1788,7 @@ namespace m_tetris
                 size_t max = context->engine->type_max();
                 for (size_t i = 0; i < max; ++i)
                 {
-                    for (auto land_point_node : *context->search->search(map, context->engine->generate(i), level))
+                    for (auto land_point_node : *context->search->search(map, Core::template spawn_node<TetrisTreeNode>(context, context->engine->convert(i), clear, false, status.get_raw()), level))
                     {
                         TetrisTreeNode *child;
                         auto find = old.find(land_point_node->status);
@@ -1861,7 +1907,7 @@ namespace m_tetris
                         }
                         else
                         {
-                            search(context, context->current, context->engine->generate(next->node));
+                            search(context, context->current, Core::template spawn_node<TetrisTreeNode>(context, next->node, clear, true, status.get_raw()));
                         }
                     }
                     else
@@ -1872,7 +1918,7 @@ namespace m_tetris
                         }
                         else
                         {
-                            search(context, context->current, context->engine->generate(hold));
+                            search(context, context->current, Core::template spawn_node<TetrisTreeNode>(context, hold, clear, true, status.get_raw()));
                         }
                     }
                 }
@@ -1909,22 +1955,24 @@ namespace m_tetris
                 {
                     if (next == context->next.end())
                     {
-                        search(context, context->engine->generate(node), false);
+                        search(context, Core::template spawn_node<TetrisTreeNode>(context, node, clear, false, status.get_raw()), false);
                     }
                     else
                     {
-                        search(context, context->engine->generate(node), context->engine->generate(next->node));
+                        search(context, Core::template spawn_node<TetrisTreeNode>(context, node, clear, false, status.get_raw()),
+                               Core::template spawn_node<TetrisTreeNode>(context, next->node, clear, true, status.get_raw()));
                     }
                 }
                 else
                 {
                     if (node == ' ')
                     {
-                        search(context, context->engine->generate(hold), true);
+                        search(context, Core::template spawn_node<TetrisTreeNode>(context, hold, clear, true, status.get_raw()), true);
                     }
                     else
                     {
-                        search(context, context->engine->generate(node), context->engine->generate(hold));
+                        search(context, Core::template spawn_node<TetrisTreeNode>(context, node, clear, false, status.get_raw()),
+                               Core::template spawn_node<TetrisTreeNode>(context, hold, clear, true, status.get_raw()));
                     }
                 }
             }
@@ -1933,7 +1981,7 @@ namespace m_tetris
                 assert(parent->next != context->next.end());
                 node = parent->next->node;
                 next = std::next(parent->next);
-                search(context, context->engine->generate(node), false);
+                search(context, Core::template spawn_node<TetrisTreeNode>(context, node, clear, false, status.get_raw()), false);
             }
         }
         template<bool EnableHold>
@@ -2160,6 +2208,13 @@ namespace m_tetris
         TetrisNode const *get(TetrisBlockStatus const &status) const
         {
             return shared_context_->get(status);
+        }
+        TetrisNode const *spawn_node(char t, int clear, bool is_hold)
+        {
+            TetrisNode const *suggest = shared_context_->generate(t);
+            TetrisBlockStatus s = Core::template spawn<TreeNode>(ai_, t, clear, suggest->status.x, suggest->status.y, is_hold, status_);
+            TetrisNode const *node = shared_context_->get(s);
+            return node != nullptr ? node : suggest;
         }
         //上下文对象...
         std::shared_ptr<TetrisContext> const &context() const
