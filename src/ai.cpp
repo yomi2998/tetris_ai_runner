@@ -7,6 +7,9 @@
 #define __cdecl
 #endif
 
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include "tetris_core.h"
 #include "search_simple.h"
@@ -116,6 +119,73 @@ std::unique_ptr<m_tetris::TetrisThreadEngine<rule_toj::TetrisRule, ai_zzz::TOJ_P
 #endif
 std::mutex srs_ai_lock;
 
+namespace
+{
+    ai_zzz::TOJ::Param default_toj_param()
+    {
+        return {
+            10.507166148, 7.539860726, 13.048099725, 13.388476179, 6.728747539, 9.476881786,
+            0.258534525, -0.108269503, 4.394241496, -4.892359035, 0.049148374, 1.586714505,
+            8.885878229, -0.006001836, -0.004336234, -2.021765056, -0.951446468, -1.145468832,
+            -1.515758227, -0.612910192, -0.476031978, 0.009596827, -0.399212013, -0.855819915,
+            -0.418779377, -0.454784178, -1.417493065, 1.050941751, 0.756272086,
+        };
+    }
+
+    bool read_toj_param(char const *path, ai_zzz::TOJ::Param &out)
+    {
+        double values[29];
+        FILE *file = std::fopen(path, "rb");
+        if (file == nullptr)
+        {
+            return false;
+        }
+        size_t const count = std::fread(values, sizeof(double), 29, file);
+        std::fclose(file);
+        if (count != 29)
+        {
+            return false;
+        }
+        for (double value : values)
+        {
+            if (!std::isfinite(value))
+            {
+                return false;
+            }
+        }
+        out = {
+            values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
+            values[8], values[9], values[10], values[11], values[12], values[13], values[14], values[15],
+            values[16], values[17], values[18], values[19], values[20], values[21], values[22], values[23],
+            values[24], values[25], values[26], values[27], values[28],
+        };
+        return true;
+    }
+
+    ai_zzz::TOJ::Param const &toj_param()
+    {
+        static ai_zzz::TOJ::Param const param = []
+        {
+            ai_zzz::TOJ::Param result = default_toj_param();
+            char const *path = std::getenv("TETRIS_AI_PARAM_FILE");
+            if (path == nullptr || *path == '\0')
+            {
+                path = "best_param.bin";
+            }
+            if (read_toj_param(path, result))
+            {
+                std::fprintf(stderr, "[TetrisAI] loaded TOJ parameters from %s\n", path);
+            }
+            else if (std::getenv("TETRIS_AI_PARAM_FILE") != nullptr)
+            {
+                std::fprintf(stderr, "[TetrisAI] failed to load %s; using built-in TOJ parameters\n", path);
+            }
+            return result;
+        }();
+        return param;
+    }
+}
+
 extern "C" DECLSPEC_EXPORT int __cdecl AIDllVersion()
 {
     return 2;
@@ -218,7 +288,7 @@ extern "C" DECLSPEC_EXPORT char *__cdecl TetrisAI(int overfield[], int field[], 
 #if !USE_V08
     srs_ai.ai_config()->safe = srs_ai.ai()->get_safe(map, active);
     // srs_ai.ai_config()->param = { 36.118271157, 202.203495764, 200.737909778, 170.781301529, 277.040476787, 247.783175303, 3.729165582, -55.949272093, -30.745551429, 11.519702458, 3.400517468, 112.960485307, 171.678755503, -0.004778355, -0.111297405, -22.246305463, -7.869832591, -56.390368723, -70.581632887, -63.004355360, -1.839383519, 1.285416709, -0.143928932, -3.284161895, 5.967192336, 3.808250892, 3.238022919, 83.284536559, 0.309568618 };
-    srs_ai.ai_config()->param = {10.507166148, 7.539860726, 13.048099725, 13.388476179, 6.728747539, 9.476881786, 0.258534525, -0.108269503, 4.394241496, -4.892359035, 0.049148374, 1.586714505, 8.885878229, -0.006001836, -0.004336234, -2.021765056, -0.951446468, -1.145468832, -1.515758227, -0.612910192, -0.476031978, 0.009596827, -0.399212013, -0.855819915, -0.418779377, -0.454784178, -1.417493065, 1.050941751, 0.756272086};
+    srs_ai.ai_config()->param = toj_param();
     // srs_ai.ai_config()->param = { 9.751914367, 6.771584511, 13.984778367, 20.368342456, 6.585961649, 20.332921226, 0.356373036, -0.386894461, -3.709699649, -1.675111576, 0.023687142, 10.297308519, 8.682478710, 0.001170853, 0.001022283, -1.241649334, -0.733500168, -1.611358148, -1.038454063, -0.445952144, -0.207823940, 0.000092385, -0.797795083, -6.153751596, -1.118142645, -0.641180767, -0.193865538, 0.505326328, 3.467200242 };
     srs_ai.status()->death = 0;
     srs_ai.status()->combo = combo;
