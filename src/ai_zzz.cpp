@@ -4,6 +4,8 @@
 #include "tetris_core.h"
 #include "integer_utils.h"
 #include "ai_zzz.h"
+#include <algorithm>
+#include <bit>
 #include <cstdint>
 
 using namespace m_tetris;
@@ -525,6 +527,8 @@ namespace ai_zzz
     {
         context_ = context;
         config_ = config;
+        feature_observer_count_ = 0;
+        transition_observer_count_ = 0;
         col_mask_ = context->full() & ~1;
         row_mask_ = context->full();
         map_danger_data_.resize(context->type_max());
@@ -544,6 +548,122 @@ namespace ai_zzz
     std::string TOJ::ai_name() const
     {
         return "ZZZ TOJ v0.12";
+    }
+
+    TOJ::FeatureSnapshot TOJ::feature_snapshot(TetrisMap const &map)
+    {
+        FeatureSnapshot result;
+        int const width = std::clamp(map.width, 0, 32);
+        int const height = std::clamp(map.height, 0, m_tetris::max_height);
+        if (width == 0 || height == 0)
+        {
+            return result;
+        }
+
+        uint32_t const full_mask = width == 32 ? UINT32_MAX : (uint32_t(1) << width) - 1;
+        uint64_t hole_row_mask = 0;
+        for (int x = 0; x < width; ++x)
+        {
+            uint32_t const bit = uint32_t(1) << x;
+            int occupied_above = 0;
+            int column_height = 0;
+            int column_holes = 0;
+            for (int y = height - 1; y >= 0; --y)
+            {
+                bool const occupied = (map.row[y] & bit) != 0;
+                if (occupied)
+                {
+                    if (column_height == 0)
+                    {
+                        column_height = y + 1;
+                    }
+                    ++occupied_above;
+                }
+                else if (occupied_above != 0)
+                {
+                    ++column_holes;
+                    ++result.hole_count;
+                    result.covered_blocks += occupied_above;
+                    result.max_hole_depth = std::max(result.max_hole_depth, occupied_above);
+                    hole_row_mask |= uint64_t(1) << y;
+                }
+            }
+            result.column_height[x] = static_cast<int16_t>(column_height);
+            result.column_hole_count[x] = static_cast<int16_t>(column_holes);
+            result.aggregate_height += column_height;
+            result.max_height = std::max(result.max_height, column_height);
+            if (x < 3 || x >= width - 3)
+            {
+                result.side_height = std::max(result.side_height, column_height);
+            }
+        }
+        result.hole_rows = std::popcount(hole_row_mask);
+
+        int const center_begin = std::max(0, width / 2 - 2);
+        int const center_end = std::min(width, center_begin + 4);
+        int min_height = width == 0 ? 0 : result.column_height[0];
+        for (int x = 0; x < width; ++x)
+        {
+            int const column_height = result.column_height[x];
+            min_height = std::min(min_height, column_height);
+            if (x >= center_begin && x < center_end)
+            {
+                result.center_sum_height += column_height;
+                result.center_max_height = std::max(result.center_max_height, column_height);
+            }
+            if (x + 1 < width)
+            {
+                int const step = std::abs(column_height - int(result.column_height[x + 1]));
+                result.surface_roughness += step;
+                result.max_surface_step = std::max(result.max_surface_step, step);
+            }
+            if (x > 0 && x + 1 < width)
+            {
+                int const wall_height = std::min(int(result.column_height[x - 1]), int(result.column_height[x + 1]));
+                int const depth = std::max(0, wall_height - column_height);
+                result.well_cells += depth;
+                result.deepest_well = std::max(result.deepest_well, depth);
+            }
+        }
+        result.height_range = result.max_height - min_height;
+
+        for (int y = 0; y < height; ++y)
+        {
+            uint32_t const row = map.row[y] & full_mask;
+            if (row == full_mask)
+            {
+                ++result.full_rows;
+            }
+
+            bool previous = false;
+            for (int x = 0; x < width; ++x)
+            {
+                bool const occupied = (row & (uint32_t(1) << x)) != 0;
+                result.horizontal_transitions += occupied != previous;
+                previous = occupied;
+            }
+            result.horizontal_transitions += previous;
+        }
+
+        for (int x = 0; x < width; ++x)
+        {
+            bool previous = false;
+            uint32_t const bit = uint32_t(1) << x;
+            for (int y = 0; y < height; ++y)
+            {
+                bool const occupied = (map.row[y] & bit) != 0;
+                result.vertical_transitions += occupied != previous;
+                previous = occupied;
+            }
+            result.vertical_transitions += previous;
+        }
+
+        int16_t t2_value = 0;
+        int16_t t3_value = 0;
+        Status::init_t_value(map, t2_value, t3_value);
+        result.t2_slot = t2_value;
+        result.t3_slot = t3_value;
+        return result;
     }
 
     void TOJ::Status::init_t_value(TetrisMap const &map, int16_t &t2_value_ref, int16_t &t3_value_ref, TetrisMap *out_map)
@@ -823,6 +943,16 @@ namespace ai_zzz
             );
         result.count = t_map.count;
         result.top_out = node->row >= 20;
+        if (config_->feature_observer != nullptr)
+        {
+            size_t const observer_index = feature_observer_count_++;
+            size_t const every = config_->feature_observer_every;
+            if (every != 0 && observer_index % every == 0)
+            {
+                FeatureSnapshot const features = feature_snapshot(map);
+                config_->feature_observer(features, result, node, map, src_map, config_->feature_observer_user);
+            }
+        }
         return result;
     }
 
@@ -1024,6 +1154,28 @@ namespace ai_zzz
             + result.like
             + field * p.base
             );
+        if (config_->transition_observer != nullptr)
+        {
+            size_t const observer_index = transition_observer_count_++;
+            size_t const every = config_->transition_observer_every;
+            if (every != 0 && observer_index % every == 0)
+            {
+                TransitionSnapshot snapshot;
+                snapshot.clear = clear;
+                snapshot.depth = depth;
+                snapshot.attack = attack;
+                snapshot.t_attack = t_attack;
+                snapshot.config_safe = config_safe;
+                snapshot.safe = safe;
+                snapshot.map_rise = result.map_rise;
+                snapshot.like = like;
+                snapshot.dislike = dislike;
+                snapshot.t_like = t_like;
+                snapshot.t_dislike = t_dislike;
+                snapshot.field = field;
+                config_->transition_observer(snapshot, result, status, node, map, env, config_->transition_observer_user);
+            }
+        }
         return result;
     }
 

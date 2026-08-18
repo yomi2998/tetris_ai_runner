@@ -10,7 +10,9 @@
 //
 // Usage:
 //   tetris_profile [--moves N] [--level L | --ms T] [--seed S] [--maxdepth D]
-//                  [--no-hold] [--csv file] [--quiet]
+//                  [--no-hold] [--csv file] [--feature-csv file]
+//                  [--feature-every N] [--transition-csv file]
+//                  [--transition-every N] [--param-file file] [--quiet]
 //   --level L : time budget per move = pow(100, L/8) ms, exactly like ai.cpp
 //   --ms T    : fixed time budget per move in ms (overrides --level)
 
@@ -69,6 +71,89 @@ namespace
     };
     size_t ProfiledSearch::searches = 0;
 
+    struct FeatureCsv
+    {
+        FILE *file = nullptr;
+        size_t seen = 0;
+        size_t move = 0;
+
+        static void observe(ai_zzz::TOJ::FeatureSnapshot const &features,
+                            ai_zzz::TOJ::Result const &result,
+                            ai_zzz::TOJ::TetrisNodeEx const &node,
+                            m_tetris::TetrisMap const &map,
+                            m_tetris::TetrisMap const &source_map,
+                            void *opaque)
+        {
+            FeatureCsv *self = static_cast<FeatureCsv *>(opaque);
+            if (self == nullptr || self->file == nullptr)
+            {
+                return;
+            }
+            size_t const index = self->seen++;
+            ai_zzz::TOJ::FeatureSnapshot const source_features = ai_zzz::TOJ::feature_snapshot(source_map);
+            std::fprintf(self->file,
+                "%zu,%zu,%c,%d,%d,%d,%d,%d,%.17g,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+                self->move, index, node->status.t, int(node->status.x), int(node->status.y), int(node->status.r),
+                int(map.roof), int(result.t_spin), result.value, int(result.top_out), int(result.count),
+                int(result.t2_value), int(result.t3_value), int(features.aggregate_height), int(features.max_height),
+                int(features.center_sum_height), int(features.center_max_height), int(features.height_range),
+                int(features.surface_roughness), int(features.max_surface_step), int(features.well_cells),
+                int(features.deepest_well), int(features.hole_count), int(features.hole_rows),
+                int(features.covered_blocks), int(features.max_hole_depth), int(source_features.hole_count),
+                int(features.hole_count - source_features.hole_count), int(source_features.covered_blocks),
+                int(features.covered_blocks - source_features.covered_blocks), int(features.horizontal_transitions),
+                int(features.vertical_transitions), int(features.side_height), int(features.full_rows));
+            for (int x = 0; x < 10; ++x)
+            {
+                std::fprintf(self->file, ",%d", int(features.column_height[x]));
+            }
+            for (int x = 0; x < 10; ++x)
+            {
+                std::fprintf(self->file, ",%d", int(features.column_hole_count[x]));
+            }
+            std::fputc('\n', self->file);
+        }
+    };
+
+    struct TransitionCsv
+    {
+        FILE *file = nullptr;
+        size_t seen = 0;
+        size_t move = 0;
+
+        static void observe(ai_zzz::TOJ::TransitionSnapshot const &snapshot,
+                            ai_zzz::TOJ::Status const &result,
+                            ai_zzz::TOJ::Status const &parent,
+                            ai_zzz::TOJ::TetrisNodeEx const &node,
+                            m_tetris::TetrisMap const &map,
+                            m_tetris::TetrisContext::Env const &env,
+                            void *opaque)
+        {
+            TransitionCsv *self = static_cast<TransitionCsv *>(opaque);
+            if (self == nullptr || self->file == nullptr)
+            {
+                return;
+            }
+            size_t const index = self->seen++;
+            std::fprintf(self->file,
+                "%zu,%zu,%c,%d,%d,%d,%d,%c,%d,%d,%zu,%zu,%d,%d,%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g,"
+                "%d,%d,%d,%d,%d,%d,%d,%.17g,%.17g,%d,%d,%d,%d,%d,%d,%d,%.17g,%.17g",
+                self->move, index, node->status.t, int(node->status.x), int(node->status.y), int(node->status.r),
+                int(node.type), env.hold, int(map.roof), int(map.count), snapshot.clear, snapshot.depth,
+                snapshot.attack, snapshot.t_attack, snapshot.config_safe, snapshot.safe, snapshot.map_rise,
+                snapshot.like, snapshot.dislike, snapshot.t_like, snapshot.t_dislike, snapshot.field,
+                int(result.death), int(result.combo), int(result.under_attack), int(result.map_rise), int(result.b2b),
+                int(result.t2_value), int(result.t3_value), result.acc_value, result.like,
+                int(parent.death), int(parent.combo), int(parent.under_attack), int(parent.map_rise), int(parent.b2b),
+                int(parent.t2_value), int(parent.t3_value), parent.acc_value, parent.like);
+            for (size_t i = 0; i < 7; ++i)
+            {
+                std::fprintf(self->file, ",%c", i < env.length ? env.next[i] : ' ');
+            }
+            std::fprintf(self->file, ",%.17g\n", result.value);
+        }
+    };
+
     typedef m_tetris::TetrisEngine<rule_toj::TetrisRule, ProfiledTOJ, ProfiledSearch> Engine;
 
     ai_zzz::TOJ::Param const default_param = {
@@ -100,6 +185,11 @@ namespace
         size_t maxdepth = 6;
         bool hold = true;
         std::string csv;
+        std::string feature_csv;
+        size_t feature_every = 1000;
+        std::string transition_csv;
+        size_t transition_every = 1000;
+        std::string param_file;
         bool quiet = false;
     };
 
@@ -125,6 +215,11 @@ namespace
             else if (a == "--maxdepth") opt.maxdepth = std::strtoull(next(a).c_str(), nullptr, 10);
             else if (a == "--no-hold") opt.hold = false;
             else if (a == "--csv") opt.csv = next(a);
+            else if (a == "--feature-csv") opt.feature_csv = next(a);
+            else if (a == "--feature-every") opt.feature_every = std::strtoull(next(a).c_str(), nullptr, 10);
+            else if (a == "--transition-csv") opt.transition_csv = next(a);
+            else if (a == "--transition-every") opt.transition_every = std::strtoull(next(a).c_str(), nullptr, 10);
+            else if (a == "--param-file") opt.param_file = next(a);
             else if (a == "--quiet") opt.quiet = true;
             else
             {
@@ -133,6 +228,29 @@ namespace
             }
         }
         return opt;
+    }
+
+    bool read_param_file(std::string const &path, ai_zzz::TOJ::Param &param)
+    {
+        double values[29];
+        FILE *file = std::fopen(path.c_str(), "rb");
+        if (file == nullptr)
+        {
+            return false;
+        }
+        size_t const count = std::fread(values, sizeof(double), 29, file);
+        std::fclose(file);
+        if (count != 29)
+        {
+            return false;
+        }
+        param = {
+            values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
+            values[8], values[9], values[10], values[11], values[12], values[13], values[14], values[15],
+            values[16], values[17], values[18], values[19], values[20], values[21], values[22], values[23],
+            values[24], values[25], values[26], values[27], values[28],
+        };
+        return true;
     }
 }
 
@@ -159,6 +277,55 @@ int main(int argc, char **argv)
     engine.ai_config()->table = combo_table;
     engine.ai_config()->table_max = combo_table_max;
     engine.ai_config()->param = default_param;
+    if (!opt.param_file.empty() && !read_param_file(opt.param_file, engine.ai_config()->param))
+    {
+        std::fprintf(stderr, "failed to read 29-double parameter file: %s\n", opt.param_file.c_str());
+        return 1;
+    }
+
+    FeatureCsv feature_csv;
+    if (!opt.feature_csv.empty())
+    {
+        feature_csv.file = std::fopen(opt.feature_csv.c_str(), "w");
+        if (feature_csv.file == nullptr)
+        {
+            std::fprintf(stderr, "failed to open feature CSV: %s\n", opt.feature_csv.c_str());
+            return 1;
+        }
+        std::fprintf(feature_csv.file,
+                "move,sample_index,piece,x,y,r,roof,t_spin,result_value,top_out,count,t2_value,t3_value,"
+            "aggregate_height,max_height,center_sum_height,center_max_height,height_range,"
+            "surface_roughness,max_surface_step,well_cells,deepest_well,hole_count,hole_rows,"
+            "covered_blocks,max_hole_depth,source_hole_count,hole_count_delta,source_covered_blocks,"
+            "covered_blocks_delta,horizontal_transitions,vertical_transitions,side_height,full_rows");
+        for (int x = 0; x < 10; ++x) std::fprintf(feature_csv.file, ",height_%d", x);
+        for (int x = 0; x < 10; ++x) std::fprintf(feature_csv.file, ",column_holes_%d", x);
+        std::fputc('\n', feature_csv.file);
+        engine.ai_config()->feature_observer = &FeatureCsv::observe;
+        engine.ai_config()->feature_observer_user = &feature_csv;
+        engine.ai_config()->feature_observer_every = opt.feature_every;
+    }
+
+    TransitionCsv transition_csv;
+    if (!opt.transition_csv.empty())
+    {
+        transition_csv.file = std::fopen(opt.transition_csv.c_str(), "w");
+        if (transition_csv.file == nullptr)
+        {
+            std::fprintf(stderr, "failed to open transition CSV: %s\n", opt.transition_csv.c_str());
+            if (feature_csv.file) std::fclose(feature_csv.file);
+            return 1;
+        }
+        std::fprintf(transition_csv.file,
+            "move,sample_index,piece,x,y,r,t_spin,hold,roof,map_count,clear,depth,attack,t_attack,"
+            "config_safe,safe,map_rise,like,dislike,t_like,t_dislike,field,result_death,result_combo,"
+            "result_under_attack,result_map_rise,result_b2b,result_t2_value,result_t3_value,result_acc_value,"
+            "result_like,parent_death,parent_combo,parent_under_attack,parent_map_rise,parent_b2b,parent_t2_value,"
+            "parent_t3_value,parent_acc_value,parent_like,next_0,next_1,next_2,next_3,next_4,next_5,next_6,result_value\n");
+        engine.ai_config()->transition_observer = &TransitionCsv::observe;
+        engine.ai_config()->transition_observer_user = &transition_csv;
+        engine.ai_config()->transition_observer_every = opt.transition_every;
+    }
 
     m_tetris::TetrisMap map(10, 40);
     std::mt19937 rng(opt.seed);
@@ -209,6 +376,8 @@ int main(int argc, char **argv)
 
         char current = next.front();
         size_t mem_before = engine.memory_usage();
+        feature_csv.move = moves_done;
+        transition_csv.move = moves_done;
         ProfiledTOJ::reset();
         ProfiledSearch::reset();
 
@@ -307,6 +476,8 @@ int main(int argc, char **argv)
     }
 
     if (csv) std::fclose(csv);
+    if (feature_csv.file) std::fclose(feature_csv.file);
+    if (transition_csv.file) std::fclose(transition_csv.file);
 
     if (opt.quiet)
     {
