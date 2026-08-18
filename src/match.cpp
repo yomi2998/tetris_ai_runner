@@ -154,6 +154,8 @@ namespace
         bool view = false;       // print board each round
         std::vector<int> combo_table = {0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5};
         int combo_table_max = 13;
+        std::string telemetry_file;
+        int big_attack_threshold = 4;
         std::string bot1, bot2;
     };
 
@@ -180,6 +182,8 @@ namespace
         cfg.max_depth = root.value("max_depth", cfg.max_depth);
         cfg.max_pieces = root.value("pieces", cfg.max_pieces);
         cfg.seed = root.value("seed", cfg.seed);
+        cfg.telemetry_file = root.value("telemetry", cfg.telemetry_file);
+        cfg.big_attack_threshold = root.value("big_attack_threshold", cfg.big_attack_threshold);
         if (root.contains("view"))
         {
             nlohmann::json const &v = root["view"];
@@ -226,6 +230,18 @@ namespace
         int total_clear = 0;
         int total_attack = 0;
         int total_receive = 0;
+        int total_receive_packets = 0;
+        int max_pending_attack = 0;
+        int attack_packets = 0;
+        int big_attack_events = 0;
+        int big_attack_lines = 0;
+        int max_big_attack = 0;
+        size_t current_round = 0;
+        bool recovery_active = false;
+        size_t recovery_start_round = 0;
+        int recovery_completed = 0;
+        size_t total_recovery_rounds = 0;
+        size_t max_recovery_rounds = 0;
         int games_won = 0;
         int level = 8;
         int player = 0;
@@ -254,6 +270,18 @@ namespace
             total_clear = 0;
             total_attack = 0;
             total_receive = 0;
+            total_receive_packets = 0;
+            max_pending_attack = 0;
+            attack_packets = 0;
+            big_attack_events = 0;
+            big_attack_lines = 0;
+            max_big_attack = 0;
+            current_round = 0;
+            recovery_active = false;
+            recovery_start_round = 0;
+            recovery_completed = 0;
+            total_recovery_rounds = 0;
+            max_recovery_rounds = 0;
         }
 
         void prepare()
@@ -272,11 +300,53 @@ namespace
             }
         }
 
+        int pending_attack() const
+        {
+            int total = 0;
+            for (int line : recv_attack)
+            {
+                total += line;
+            }
+            return total;
+        }
+
+        void finish_recovery()
+        {
+            if (recovery_active && recv_attack.empty())
+            {
+                size_t const rounds = current_round >= recovery_start_round
+                    ? current_round - recovery_start_round + 1 : 0;
+                ++recovery_completed;
+                total_recovery_rounds += rounds;
+                max_recovery_rounds = std::max(max_recovery_rounds, rounds);
+                recovery_active = false;
+            }
+        }
+
+        size_t incomplete_recovery_rounds() const
+        {
+            return recovery_active && current_round >= recovery_start_round
+                ? current_round - recovery_start_round + 1 : 0;
+        }
+
         void under_attack(int line)
         {
             if (line > 0)
             {
+                ++attack_packets;
+                if (line >= cfg->big_attack_threshold)
+                {
+                    ++big_attack_events;
+                    big_attack_lines += line;
+                    max_big_attack = std::max(max_big_attack, line);
+                    if (!recovery_active)
+                    {
+                        recovery_active = true;
+                        recovery_start_round = current_round + 1;
+                    }
+                }
                 recv_attack.emplace_back(line);
+                max_pending_attack = std::max(max_pending_attack, pending_attack());
             }
         }
 
@@ -541,6 +611,7 @@ namespace
                 }
                 int line = recv_attack.front();
                 total_receive += line;
+                ++total_receive_packets;
                 recv_attack.pop_front();
                 for (int y = map.height - 1; y >= line; --y)
                 {
@@ -564,8 +635,45 @@ namespace
                     }
                 }
             }
+            finish_recovery();
         }
     };
+
+    enum class WinnerReason
+    {
+        P1Survivor,
+        P2Survivor,
+        P1CapAPL,
+        P2CapAPL,
+        P1BothDeadAPL,
+        P2BothDeadAPL,
+        BothDeadDraw,
+        CapDraw,
+    };
+
+    struct GameResult
+    {
+        int winner = 0;
+        WinnerReason reason = WinnerReason::CapDraw;
+        bool capped = false;
+        size_t rounds = 0;
+    };
+
+    char const *winner_reason_name(WinnerReason reason)
+    {
+        switch (reason)
+        {
+        case WinnerReason::P1Survivor: return "p1_survivor";
+        case WinnerReason::P2Survivor: return "p2_survivor";
+        case WinnerReason::P1CapAPL: return "p1_cap_apl";
+        case WinnerReason::P2CapAPL: return "p2_cap_apl";
+        case WinnerReason::P1BothDeadAPL: return "p1_both_dead_apl";
+        case WinnerReason::P2BothDeadAPL: return "p2_both_dead_apl";
+        case WinnerReason::BothDeadDraw: return "both_dead_draw";
+        case WinnerReason::CapDraw: return "cap_draw";
+        }
+        return "unknown";
+    }
 
     // ---------- display ----------
     void view(Player const &p1, Player const &p2)
@@ -598,12 +706,15 @@ namespace
     }
 
     // ---------- match ----------
-    int run_game(Player &p1, Player &p2, Config const &cfg)
+    GameResult run_game(Player &p1, Player &p2, Config const &cfg)
     {
         size_t round = 0;
+        bool capped = false;
         for (;;)
         {
             ++round;
+            p1.current_round = round;
+            p2.current_round = round;
             p1.prepare();
             p2.prepare();
             if (cfg.view)
@@ -620,6 +731,7 @@ namespace
             }
             if (round >= cfg.max_pieces)
             {
+                capped = true;
                 break;
             }
             int min_attack = std::min(p1.send_attack, p2.send_attack);
@@ -629,12 +741,54 @@ namespace
             p2.under_attack(p1.send_attack);
         }
         // winner: 1 = p1, 2 = p2, 0 = draw
-        if (p1.dead && !p2.dead) return 2;
-        if (p2.dead && !p1.dead) return 1;
+        if (p1.dead && !p2.dead) return {2, WinnerReason::P2Survivor, capped, round};
+        if (p2.dead && !p1.dead) return {1, WinnerReason::P1Survivor, capped, round};
         double a1 = p1.apl(), a2 = p2.apl();
-        if (a1 > a2) return 1;
-        if (a2 > a1) return 2;
-        return 0;
+        if (a1 > a2)
+        {
+            return {1, capped ? WinnerReason::P1CapAPL : WinnerReason::P1BothDeadAPL, capped, round};
+        }
+        if (a2 > a1)
+        {
+            return {2, capped ? WinnerReason::P2CapAPL : WinnerReason::P2BothDeadAPL, capped, round};
+        }
+        return {0, capped ? WinnerReason::CapDraw : WinnerReason::BothDeadDraw, capped, round};
+    }
+
+    void write_telemetry_header(FILE *file)
+    {
+        std::fprintf(file,
+            "game,seed,max_pieces,max_depth,big_attack_threshold,p1_level,p2_level,"
+            "winner,winner_reason,capped,rounds,bot1,bot2,"
+            "p1_dead,p1_blocks,p1_lines,p1_attack,p1_receive,p1_receive_packets,"
+            "p1_attack_packets,p1_big_attack_events,p1_big_attack_lines,p1_max_big_attack,"
+            "p1_max_pending_attack,p1_recovery_completed,p1_recovery_incomplete,"
+            "p1_total_recovery_rounds,p1_max_recovery_rounds,p1_app,p1_apl,"
+            "p2_dead,p2_blocks,p2_lines,p2_attack,p2_receive,p2_receive_packets,"
+            "p2_attack_packets,p2_big_attack_events,p2_big_attack_lines,p2_max_big_attack,"
+            "p2_max_pending_attack,p2_recovery_completed,p2_recovery_incomplete,"
+            "p2_total_recovery_rounds,p2_max_recovery_rounds,p2_app,p2_apl\n");
+    }
+
+    void write_telemetry_row(FILE *file, size_t game, GameResult const &result,
+                             Player const &p1, Player const &p2, Bot const &bot1, Bot const &bot2,
+                             Config const &cfg)
+    {
+        std::fprintf(file,
+            "%zu,%u,%zu,%d,%d,%d,%d,%d,%s,%d,%zu,%s,%s,"
+            "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%zu,%zu,%zu,%.17g,%.17g,"
+            "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%zu,%zu,%zu,%.17g,%.17g\n",
+            game, cfg.seed, cfg.max_pieces, cfg.max_depth, cfg.big_attack_threshold,
+            p1.level, p2.level, result.winner, winner_reason_name(result.reason), result.capped ? 1 : 0, result.rounds,
+            bot1.name.c_str(), bot2.name.c_str(),
+            p1.dead ? 1 : 0, p1.total_block, p1.total_clear, p1.total_attack, p1.total_receive,
+            p1.total_receive_packets, p1.attack_packets, p1.big_attack_events, p1.big_attack_lines,
+            p1.max_big_attack, p1.max_pending_attack, p1.recovery_completed, p1.incomplete_recovery_rounds(),
+            p1.total_recovery_rounds, p1.max_recovery_rounds, p1.app(), p1.apl(),
+            p2.dead ? 1 : 0, p2.total_block, p2.total_clear, p2.total_attack, p2.total_receive,
+            p2.total_receive_packets, p2.attack_packets, p2.big_attack_events, p2.big_attack_lines,
+            p2.max_big_attack, p2.max_pending_attack, p2.recovery_completed, p2.incomplete_recovery_rounds(),
+            p2.total_recovery_rounds, p2.max_recovery_rounds, p2.app(), p2.apl());
     }
 }
 
@@ -645,7 +799,7 @@ int main(int argc, char **argv)
         "  match <config>        - bots from player1/player2.dllplugin in config\n"
         "  match <bot1> <bot2>   - bots from args, config = match.cfg\n"
         "  match <bot1> <bot2> <config>\n"
-        "config (json): ft, delay, max_depth, pieces, seed, view, combo_table\n"
+        "config (json): ft, delay, max_depth, pieces, seed, view, combo_table, telemetry, big_attack_threshold\n"
         "per-player (json): player1/player2 { dllplugin, level }\n");
 
     Config cfg;
@@ -669,6 +823,7 @@ int main(int argc, char **argv)
     g_config_dir = dir_of(config_path.c_str());
     parse_config(cfg, config_path.c_str());
     if (cfg.ft < 1) cfg.ft = 1;
+    if (cfg.big_attack_threshold < 1) cfg.big_attack_threshold = 1;
 
     // CLI bot args override config plugins
     if (!cfg.bot1.empty()) cfg.p1.plugin = cfg.bot1;
@@ -704,6 +859,18 @@ int main(int argc, char **argv)
         cfg.p2.plugin.c_str(), cfg.p2.level,
         cfg.ft, cfg.delay, cfg.max_depth, cfg.max_pieces, cfg.seed, (int)cfg.view);
 
+    FILE *telemetry = nullptr;
+    if (!cfg.telemetry_file.empty())
+    {
+        telemetry = std::fopen(cfg.telemetry_file.c_str(), "w");
+        if (telemetry == nullptr)
+        {
+            std::printf("failed to open telemetry file: %s\n", cfg.telemetry_file.c_str());
+            return 1;
+        }
+            write_telemetry_header(telemetry);
+    }
+
     m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_easy::AI, search_simple::Search> global_ai;
     if (!global_ai.prepare(10, 40))
     {
@@ -721,25 +888,35 @@ int main(int argc, char **argv)
         ++games;
         p1.init();
         p2.init();
-        int w = run_game(p1, p2, cfg);
+        GameResult const game_result = run_game(p1, p2, cfg);
+        if (telemetry != nullptr)
+        {
+            write_telemetry_row(telemetry, games, game_result, p1, p2, bot1, bot2, cfg);
+            std::fflush(telemetry);
+        }
         std::printf(
             "game %d: %s vs %s -> %s  (pieces %d/%d lines %d/%d attack %d/%d apl %.2f/%.2f app %.2f/%.2f)\n",
             games, bot1.name.c_str(), bot2.name.c_str(),
-            w == 1 ? "P1 WIN" : (w == 2 ? "P2 WIN" : "draw"),
+            game_result.winner == 1 ? "P1 WIN" : (game_result.winner == 2 ? "P2 WIN" : "draw"),
             p1.total_block, p2.total_block, p1.total_clear, p2.total_clear,
             p1.total_attack, p2.total_attack, p1.apl(), p2.apl(), p1.app(), p2.app());
-        if (w == 1)
+        if (game_result.winner == 1)
         {
             ++wins1;
             ++p1.games_won;
         }
-        else if (w == 2)
+        else if (game_result.winner == 2)
         {
             ++wins2;
             ++p2.games_won;
         }
         else ++draws;
         if (games >= 10000) break;
+    }
+
+    if (telemetry != nullptr)
+    {
+        std::fclose(telemetry);
     }
 
     std::printf(
