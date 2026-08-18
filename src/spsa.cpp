@@ -1,5 +1,6 @@
 // Usage:
-//   spsa [num_iters] [eval_matches] [search_ms] [seed] [threads] [algo]
+//   spsa [num_iters] [eval_matches] [search_ms] [seed] [threads] [algo] [max_rounds]
+//   spsa probe [batches] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [step]
 
 #include <ctime>
 #include <cstring>
@@ -454,9 +455,22 @@ static void render_view(BotInstance &b1, BotInstance &b2, char const *name1, cha
 
 struct MatchResult
 {
+    enum WinnerReason
+    {
+        P1_SURVIVOR = 1,
+        P2_SURVIVOR = 2,
+        P1_CAP_APL = 3,
+        P2_CAP_APL = 4,
+        P1_BOTH_DEAD_APL = 5,
+        P2_BOTH_DEAD_APL = 6,
+        BOTH_DEAD_DRAW = 7,
+        CAP_DRAW = 8,
+    };
     int winner;      // +1 = seat1, -1 = seat2, 0 = draw
     bool dead1;
     bool dead2;
+    bool capped;
+    int winner_reason;
     int rounds;
     double app1, app2;  // attack / piece
     double apl1, apl2;  // attack / cleared line
@@ -490,6 +504,7 @@ static MatchResult play_match(BotInstance &b1, BotInstance &b2, int max_rounds =
     MatchResult r;
     r.dead1 = b1.dead;
     r.dead2 = b2.dead;
+    r.capped = !b1.dead && !b2.dead;
     r.rounds = std::max(b1.total_block, b2.total_block);
     r.app1 = b1.total_block > 0 ? (double)b1.total_attack / b1.total_block : 0.0;
     r.app2 = b2.total_block > 0 ? (double)b2.total_attack / b2.total_block : 0.0;
@@ -498,22 +513,27 @@ static MatchResult play_match(BotInstance &b1, BotInstance &b2, int max_rounds =
     if (b1.dead && !b2.dead)
     {
         r.winner = -1;
+        r.winner_reason = MatchResult::P2_SURVIVOR;
     }
     else if (b2.dead && !b1.dead)
     {
         r.winner = +1;
+        r.winner_reason = MatchResult::P1_SURVIVOR;
     }
     else if (r.apl1 > r.apl2)
     {
         r.winner = +1;
+        r.winner_reason = r.capped ? MatchResult::P1_CAP_APL : MatchResult::P1_BOTH_DEAD_APL;
     }
     else if (r.apl2 > r.apl1)
     {
         r.winner = -1;
+        r.winner_reason = r.capped ? MatchResult::P2_CAP_APL : MatchResult::P2_BOTH_DEAD_APL;
     }
     else
     {
         r.winner = 0;
+        r.winner_reason = r.capped ? MatchResult::CAP_DRAW : MatchResult::BOTH_DEAD_DRAW;
     }
     return r;
 }
@@ -532,12 +552,16 @@ struct MatchOutcome
     int winner;   // +1 = p1, -1 = p2, 0 = draw
     bool dead1;
     bool dead2;
+    bool capped;
+    int winner_reason;
     int rounds;
+    double app1, app2;
+    double apl1, apl2;
 };
 
 // Runs every job to completion (no early cancellation); outcome.winner is
 // from p1's perspective.
-static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, int threads, int search_ms,
+static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, int threads, int search_ms, int max_rounds,
                                            SpsaEngine &global_ai, std::atomic<bool> &view,
                                            std::atomic<uint32_t> &view_index)
 {
@@ -581,11 +605,17 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
                     render_view(b1, b2, "PLUS", "MINUS");
                 }
             };
-            MatchResult r = play_match(b1, b2, 1000, view_cb);
+            MatchResult r = play_match(b1, b2, max_rounds, view_cb);
             out[idx].winner = r.winner;
             out[idx].dead1 = r.dead1;
             out[idx].dead2 = r.dead2;
+            out[idx].capped = r.capped;
+            out[idx].winner_reason = r.winner_reason;
             out[idx].rounds = r.rounds;
+            out[idx].app1 = r.app1;
+            out[idx].app2 = r.app2;
+            out[idx].apl1 = r.apl1;
+            out[idx].apl2 = r.apl2;
         }
     };
     size_t nthreads = std::min<size_t>(std::max(1, threads), jobs.size());
@@ -603,8 +633,15 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
 }
 
 static bool load_state(std::string const &data_file, int &algo, int &resume_k, double *theta,
-                       double &es_sigma, double *es_m1, double *es_m2)
+                       double &es_sigma, double *es_m1, double *es_m2,
+                       int &saved_max_rounds, int &saved_eval_matches, int &saved_search_ms,
+                       unsigned &saved_seed, bool &has_run_config)
 {
+    saved_max_rounds = 0;
+    saved_eval_matches = 0;
+    saved_search_ms = 0;
+    saved_seed = 0;
+    has_run_config = false;
     std::ifstream ifs(data_file, std::ios::binary);
     if (!ifs.good())
     {
@@ -612,12 +649,20 @@ static bool load_state(std::string const &data_file, int &algo, int &resume_k, d
     }
     char magic[8] = { 0 };
     ifs.read(magic, 8);
-    if (std::memcmp(magic, "TETOPT2", 8) == 0)
+    if (std::memcmp(magic, "TETOPT3", 8) == 0 || std::memcmp(magic, "TETOPT2", 8) == 0)
     {
         int ver = 0;
         ifs.read(reinterpret_cast<char *>(&ver), sizeof(ver));
         ifs.read(reinterpret_cast<char *>(&algo), sizeof(algo));
         ifs.read(reinterpret_cast<char *>(&resume_k), sizeof(resume_k));
+        if (std::memcmp(magic, "TETOPT3", 8) == 0 && ver >= 3)
+        {
+            ifs.read(reinterpret_cast<char *>(&saved_max_rounds), sizeof(saved_max_rounds));
+            ifs.read(reinterpret_cast<char *>(&saved_eval_matches), sizeof(saved_eval_matches));
+            ifs.read(reinterpret_cast<char *>(&saved_search_ms), sizeof(saved_search_ms));
+            ifs.read(reinterpret_cast<char *>(&saved_seed), sizeof(saved_seed));
+            has_run_config = true;
+        }
         ifs.read(reinterpret_cast<char *>(theta), NUM_PARAMS * sizeof(double));
         if (ver >= 2)
         {
@@ -636,16 +681,21 @@ static bool load_state(std::string const &data_file, int &algo, int &resume_k, d
 }
 
 static void save_state(std::string const &data_file, int algo, int k, double const *theta,
-                       double es_sigma, double const *es_m1, double const *es_m2)
+                       double es_sigma, double const *es_m1, double const *es_m2,
+                       int max_rounds, int eval_matches, int search_ms, unsigned seed)
 {
     std::string tmp = data_file + ".tmp";
     {
         std::ofstream ofs(tmp, std::ios::binary);
-        ofs.write("TETOPT2", 8);
-        int ver = 2;
+        ofs.write("TETOPT3", 8);
+        int ver = 3;
         ofs.write(reinterpret_cast<char const *>(&ver), sizeof(ver));
         ofs.write(reinterpret_cast<char const *>(&algo), sizeof(algo));
         ofs.write(reinterpret_cast<char const *>(&k), sizeof(k));
+        ofs.write(reinterpret_cast<char const *>(&max_rounds), sizeof(max_rounds));
+        ofs.write(reinterpret_cast<char const *>(&eval_matches), sizeof(eval_matches));
+        ofs.write(reinterpret_cast<char const *>(&search_ms), sizeof(search_ms));
+        ofs.write(reinterpret_cast<char const *>(&seed), sizeof(seed));
         ofs.write(reinterpret_cast<char const *>(theta), NUM_PARAMS * sizeof(double));
         ofs.write(reinterpret_cast<char const *>(&es_sigma), sizeof(es_sigma));
         ofs.write(reinterpret_cast<char const *>(es_m1), NUM_PARAMS * sizeof(double));
@@ -654,10 +704,143 @@ static void save_state(std::string const &data_file, int algo, int k, double con
     std::rename(tmp.c_str(), data_file.c_str());
 }
 
+static int run_probe(int argc, char *argv[])
+{
+    int batches = 8;
+    int eval_matches = 14;
+    int search_ms = 20;
+    unsigned seed = 555;
+    int threads = 14;
+    int max_rounds = 3600;
+    double step = 0.30;
+    if (argc > 2) batches = std::stoi(argv[2]);
+    if (argc > 3) eval_matches = std::stoi(argv[3]);
+    if (argc > 4) search_ms = std::stoi(argv[4]);
+    if (argc > 5) seed = (unsigned)std::stoul(argv[5]);
+    if (argc > 6) threads = std::stoi(argv[6]);
+    if (argc > 7) max_rounds = std::stoi(argv[7]);
+    if (argc > 8) step = std::stod(argv[8]);
+    if (batches <= 0 || search_ms <= 0 || max_rounds <= 0 || step <= 0 || !std::isfinite(step))
+    {
+        std::fprintf(stderr, "[PROBE] invalid arguments\n");
+        return 1;
+    }
+    if (seed == 0) seed = (unsigned)std::time(nullptr);
+    if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
+
+    int games = eval_matches;
+    if (games % 2 != 0) --games;
+    int q = std::max(1, games / 2);
+
+    SpsaEngine global_ai;
+    global_ai.prepare(10, 40);
+    double theta[NUM_PARAMS];
+    load_params(theta);
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        theta[i] = std::isfinite(theta[i]) ? theta[i] : 0.0;
+    }
+    double x[NUM_PARAMS];
+    for (size_t i = 0; i < NUM_PARAMS; ++i) x[i] = theta[i] / param_scale[i];
+
+    double gradient_sum[NUM_PARAMS] = { 0 };
+    double gradient_square_sum[NUM_PARAMS] = { 0 };
+    int gradient_sign_sum[NUM_PARAMS] = { 0 };
+    std::atomic<bool> view{ false };
+    std::atomic<uint32_t> view_index{ 0 };
+
+    std::printf("[PROBE] fixed theta: %d batches, %d games/batch (%d directions), %d rounds/match, %dms search, step=%.4f\n",
+                batches, 2 * q, q, max_rounds, search_ms, step);
+    std::fflush(stdout);
+
+    for (int k = 0; k < batches; ++k)
+    {
+        std::vector<MatchJob> jobs;
+        jobs.reserve(2 * q);
+        for (int j = 0; j < q; ++j)
+        {
+            uint64_t scenario_seed = splitmix64(seed
+                ^ splitmix64((uint64_t)k * 0x94D049BB133111EBULL + (uint64_t)j));
+            MatchJob a{}, b{};
+            for (size_t i = 0; i < NUM_PARAMS; ++i)
+            {
+                int eps = rademacher(seed, k, j, (int)i);
+                double xp = x[i] + step * eps;
+                double xm = x[i] - step * eps;
+                a.p1[i] = xp * param_scale[i];
+                a.p2[i] = xm * param_scale[i];
+                b.p1[i] = xm * param_scale[i];
+                b.p2[i] = xp * param_scale[i];
+            }
+            a.scenario_seed = b.scenario_seed = scenario_seed;
+            a.job_id = (size_t)2 * j;
+            b.job_id = (size_t)2 * j + 1;
+            a.swapped = false;
+            b.swapped = true;
+            jobs.push_back(a);
+            jobs.push_back(b);
+        }
+
+        auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_index);
+        double score = 0;
+        double grad[NUM_PARAMS] = { 0 };
+        int capped = 0;
+        int cap_apl = 0;
+        double avg_rounds = 0;
+        for (int j = 0; j < q; ++j)
+        {
+            int wA = out[2 * j].winner;
+            int wB = out[2 * j + 1].winner;
+            double rj = 0.5 * (wA - wB);
+            score += rj;
+            for (size_t i = 0; i < NUM_PARAMS; ++i)
+            {
+                grad[i] += rj * rademacher(seed, k, j, (int)i);
+            }
+            for (int g = 0; g < 2; ++g)
+            {
+                MatchOutcome const &outcome = out[2 * j + g];
+                capped += outcome.capped;
+                cap_apl += outcome.winner_reason == MatchResult::P1_CAP_APL
+                    || outcome.winner_reason == MatchResult::P2_CAP_APL;
+                avg_rounds += outcome.rounds;
+            }
+        }
+        score /= q;
+        avg_rounds /= 2 * q;
+        for (size_t i = 0; i < NUM_PARAMS; ++i)
+        {
+            double const g = grad[i] / (2.0 * step * q);
+            gradient_sum[i] += g;
+            gradient_square_sum[i] += g * g;
+            gradient_sign_sum[i] += g > 0 ? 1 : g < 0 ? -1 : 0;
+        }
+        std::printf("[PROBE] batch %3d | score=%+.3f | R=%.0f C=%d CA=%d\n",
+                    k, score, avg_rounds, capped, cap_apl);
+    }
+
+    std::printf("[PROBE] parameter gradient summary (normalized coordinates):\n");
+    std::printf("  %-14s %12s %12s %12s\n", "parameter", "mean", "stddev", "sign_agree");
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        double const mean = gradient_sum[i] / batches;
+        double variance = gradient_square_sum[i] / batches - mean * mean;
+        variance = std::max(0.0, variance);
+        double const sign_agreement = std::abs((double)gradient_sign_sum[i]) / batches;
+        std::printf("  %-14s %+.6e %+.6e %+.3f\n", param_names[i], mean, std::sqrt(variance), sign_agreement);
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     std::setbuf(stdout, nullptr);
     std::setbuf(stderr, nullptr);
+
+    if (argc > 1 && std::strcmp(argv[1], "probe") == 0)
+    {
+        return run_probe(argc, argv);
+    }
 
     int num_iters = 10000;
     int eval_matches = 14;
@@ -665,6 +848,7 @@ int main(int argc, char *argv[])
     unsigned seed = 0;
     int threads = 1; // 0 = auto (hardware concurrency)
     int algo = 0;    // 0 = SPSA, 1 = paired mirrored ES
+    int max_rounds = 1000;
 
     if (argc > 1) num_iters = std::stoi(argv[1]);
     if (argc > 2) eval_matches = std::stoi(argv[2]);
@@ -672,11 +856,13 @@ int main(int argc, char *argv[])
     if (argc > 4) seed = (unsigned)std::stoul(argv[4]);
     if (argc > 5) threads = std::stoi(argv[5]);
     if (argc > 6) algo = std::stoi(argv[6]);
+    if (argc > 7) max_rounds = std::stoi(argv[7]);
     if (seed == 0) seed = (unsigned)std::time(nullptr);
     if (threads == 0)
     {
         threads = std::max(1u, std::thread::hardware_concurrency());
     }
+    max_rounds = std::max(1, max_rounds);
 
     int games = eval_matches;
     if (games % 2 != 0)
@@ -702,13 +888,33 @@ int main(int argc, char *argv[])
     double es_m1[NUM_PARAMS] = { 0 };
     double es_m2[NUM_PARAMS] = { 0 };
     int resume_k = 0, saved_algo = -1;
-    if (load_state(data_file, saved_algo, resume_k, theta, es_sigma, es_m1, es_m2))
+    int saved_max_rounds = 0, saved_eval_matches = 0, saved_search_ms = 0;
+    unsigned saved_seed = 0;
+    bool has_saved_config = false;
+    if (load_state(data_file, saved_algo, resume_k, theta, es_sigma, es_m1, es_m2,
+                   saved_max_rounds, saved_eval_matches, saved_search_ms, saved_seed, has_saved_config))
     {
         if (saved_algo != algo)
         {
             std::printf("[SPSA] Checkpoint is for algo %d but algo %d was requested.\n"
                         "       Delete %s for a fresh start.\n", saved_algo, algo, data_file.c_str());
             return 1;
+        }
+        if (has_saved_config && (saved_max_rounds != max_rounds || saved_eval_matches != games
+            || saved_search_ms != search_ms || saved_seed != seed))
+        {
+            std::printf("[SPSA] Checkpoint configuration mismatch:\n"
+                        "       saved: rounds=%d games=%d search_ms=%d seed=%u\n"
+                        "       requested: rounds=%d games=%d search_ms=%d seed=%u\n"
+                        "       Delete %s for a fresh run.\n",
+                        saved_max_rounds, saved_eval_matches, saved_search_ms, saved_seed,
+                        max_rounds, games, search_ms, seed, data_file.c_str());
+            return 1;
+        }
+        if (!has_saved_config)
+        {
+            std::printf("[SPSA] Warning: legacy checkpoint has no run configuration; verify rounds=%d, games=%d, search_ms=%d, seed=%u.\n",
+                        max_rounds, games, search_ms, seed);
         }
         if (resume_k >= num_iters)
         {
@@ -729,8 +935,8 @@ int main(int argc, char *argv[])
         x[i] = theta[i] / param_scale[i];
     }
 
-    std::printf("[SPSA] %s: %d iters, %d games/batch (%d directions), 1000 rounds/match, %dms search, seed %u, threads=%d\n",
-                algo == 1 ? "paired mirrored ES" : "corrected SPSA", num_iters, 2 * q, q, search_ms, seed, threads);
+    std::printf("[SPSA] %s: %d iters, %d games/batch (%d directions), %d rounds/match, %dms search, seed %u, threads=%d\n",
+                algo == 1 ? "paired mirrored ES" : "corrected SPSA", num_iters, 2 * q, q, max_rounds, search_ms, seed, threads);
     std::fflush(stdout);
 
     std::atomic<bool> view{ false };
@@ -790,13 +996,15 @@ int main(int argc, char *argv[])
             jobs.push_back(b);
         }
 
-        auto out = run_batch(jobs, threads, search_ms, global_ai, view, view_index);
+        auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_index);
 
         // ---- rewards: r_j = (wA - wB)/2, both from the x+eps perspective ----
         double score = 0;
         double grad[NUM_PARAMS] = { 0 };
         double avg_rounds = 0;
         int deaths = 0;
+        int capped_games = 0;
+        int capped_apl_games = 0;
         for (int j = 0; j < q; ++j)
         {
             int wA = out[2 * j].winner;     // x+eps in seat 1
@@ -811,6 +1019,9 @@ int main(int argc, char *argv[])
             {
                 avg_rounds += out[2 * j + g].rounds;
                 deaths += out[2 * j + g].dead1 + out[2 * j + g].dead2;
+                capped_games += out[2 * j + g].capped;
+                capped_apl_games += out[2 * j + g].winner_reason == MatchResult::P1_CAP_APL
+                    || out[2 * j + g].winner_reason == MatchResult::P2_CAP_APL;
             }
         }
         score /= q;
@@ -874,7 +1085,8 @@ int main(int argc, char *argv[])
             theta[i] = x[i] * param_scale[i];
         }
 
-        save_state(data_file, algo, k + 1, theta, es_sigma, es_m1, es_m2);
+        save_state(data_file, algo, k + 1, theta, es_sigma, es_m1, es_m2,
+                   max_rounds, games, search_ms, seed);
         param::write(theta, NUM_PARAMS, "");
         if ((k + 1) % 10 == 0 || k == resume_k)
         {
@@ -882,22 +1094,23 @@ int main(int argc, char *argv[])
             double sec = std::chrono::duration<double>(now - start_time).count();
             if (algo == 1)
             {
-                std::printf("[ES]   iter %5d | score=%+.3f | sigma=%.4f | R=%.0f D=%d | %.1fs\n",
-                            k, score, es_sigma, avg_rounds, deaths, sec);
+                std::printf("[ES]   iter %5d | score=%+.3f | sigma=%.4f | R=%.0f D=%d C=%d CA=%d | %.1fs\n",
+                            k, score, es_sigma, avg_rounds, deaths, capped_games, capped_apl_games, sec);
             }
             else
             {
                 double ck = step;
                 double ak = SPSA_A / std::pow(k + 1.0 + SPSA_A, SPSA_ALPHA);
-                std::printf("[SPSA] iter %5d | score=%+.3f | ak=%.4f ck=%.4f | R=%.0f D=%d | %.1fs\n",
-                            k, score, ak, ck, avg_rounds, deaths, sec);
+                std::printf("[SPSA] iter %5d | score=%+.3f | ak=%.4f ck=%.4f | R=%.0f D=%d C=%d CA=%d | %.1fs\n",
+                            k, score, ak, ck, avg_rounds, deaths, capped_games, capped_apl_games, sec);
             }
         }
         std::fflush(stdout);
     }
 
     param::write(theta, NUM_PARAMS, "");
-    save_state(data_file, algo, num_iters, theta, es_sigma, es_m1, es_m2);
+    save_state(data_file, algo, num_iters, theta, es_sigma, es_m1, es_m2,
+               max_rounds, games, search_ms, seed);
 
     std::printf("\n[SPSA] Done. %d iterations completed\n", num_iters);
     std::printf("[SPSA] Params saved to %s\n", param::filename("").c_str());
