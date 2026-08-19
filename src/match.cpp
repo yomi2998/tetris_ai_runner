@@ -20,6 +20,7 @@
 #include "tetris_core.h"
 #include "rule_toj.h"
 #include "search_simple.h"
+#include "search_tspin.h"
 #include "ai_easy.h"
 
 namespace
@@ -217,6 +218,7 @@ namespace
         m_tetris::TetrisContext const *context = nullptr;
         Config const *cfg = nullptr;
         m_tetris::TetrisMap map;
+        search_tspin::Search tspin_search;
         std::mt19937 r_next;
         std::mt19937 r_garbage;
         std::vector<char> next;
@@ -254,6 +256,14 @@ namespace
             , level(pc.level)
             , player(player_)
         {
+            search_tspin::Search::Config tconfig;
+            tconfig.allow_180 = true;
+            tconfig.allow_d = true;
+            tconfig.allow_LR = true;
+            tconfig.is_20g = false;
+            tconfig.last_rotate = false;
+            tconfig.allow_rotate_move = false;
+            tspin_search.init(context, &tconfig);
         }
 
         void init()
@@ -457,8 +467,25 @@ namespace
             {
                 return false;
             }
+            m_tetris::TetrisMap pre_map = map;
             clear_out = (int)node->attach(context, map);
-            spin_out = (current == 'T' && last_rotate) ? Spin::Full : Spin::None;
+            spin_out = Spin::None;
+            if (current == 'T' && last_rotate)
+            {
+                switch (tspin_search.classify(pre_map, node, last_rotate, (size_t)clear_out))
+                {
+                case search_tspin::Search::TSpinType::TSpinMini:
+                    spin_out = Spin::Mini;
+                    break;
+                case search_tspin::Search::TSpinType::TSpin:
+                    spin_out = Spin::Full;
+                    break;
+                case search_tspin::Search::TSpinType::None:
+                default:
+                    spin_out = Spin::None;
+                    break;
+                }
+            }
             return true;
         }
 

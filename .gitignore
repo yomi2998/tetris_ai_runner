@@ -58,3 +58,5 @@ Icon
 /build
 /.vscode
 /out
+/tools
+/docs

@@ -94,6 +94,7 @@ add_executable(${PROJECT_NAME}
     src/tetris_core.cpp
     src/rule_toj.cpp
     src/search_simple.cpp
+    src/search_tspin.cpp
     src/integer_utils.cpp
     src/random.cpp
 )

@@ -1122,4 +1122,27 @@ namespace search_tspin
     {
         return node.is_ready && !(node->rotate_opposite && node->rotate_opposite->check(snap) || node->rotate_counterclockwise && node->rotate_counterclockwise->check(snap) || node->rotate_clockwise && node->rotate_clockwise->check(snap));
     }
+
+    Search::TSpinType Search::classify(TetrisMap const &map, TetrisNode const *node, bool last_rotate, size_t clear)
+    {
+        if (clear > 0 && last_rotate)
+        {
+            TetrisMapSnap snap;
+            node->build_snap(map, context_, snap);
+            TetrisNodeWithTSpinType node_ex(node);
+            node_ex.is_check = true;
+            node_ex.is_last_rotate = true;
+            node_ex.is_ready = check_ready(map, node);
+            node_ex.is_mini_ready = check_mini_ready(snap, node_ex);
+            if (clear == 1 && node_ex.is_mini_ready)
+            {
+                return TSpinType::TSpinMini;
+            }
+            else if (node_ex.is_ready)
+            {
+                return TSpinType::TSpin;
+            }
+        }
+        return TSpinType::None;
+    }
 }
