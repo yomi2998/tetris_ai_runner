@@ -603,8 +603,8 @@ int main(int argc, char const *argv[])
     }
 
     std::vector<std::thread> threads;
-    int combo_table[] = { 0,0,0,1,1,2,2,3,3,4,4,4,5 };
-    int combo_table_max = 13;
+    int combo_table[] = { 0,0,0,1,1,2,2,3,3,4 };
+    int combo_table_max = 10;
     m_tetris::TetrisEngine<rule_srs::TetrisRule, ai_zzz::TOJ, search_tspin::Search> global_ai;
     global_ai.prepare(10, 40);
 

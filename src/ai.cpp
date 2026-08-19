@@ -276,7 +276,7 @@ extern "C" DECLSPEC_EXPORT char *__cdecl TetrisAI(int overfield[], int field[], 
             table.table[max] = comboTable[max];
             ++max;
         }
-        table.table_max = max - 1;
+        table.table_max = max;
     }
     srs_ai.ai_config()->table = table.table;
     srs_ai.ai_config()->table_max = table.table_max;

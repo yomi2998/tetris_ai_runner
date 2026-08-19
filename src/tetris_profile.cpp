@@ -164,8 +164,8 @@ namespace
         -0.418779377, -0.454784178, -1.417493065, 1.050941751, 0.756272086,
     };
 
-    int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5 };
-    int const combo_table_max = 13;
+    int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
+    int const combo_table_max = 10;
 
     double pct(std::vector<double> const &v, double p)
     {

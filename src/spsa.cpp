@@ -23,8 +23,8 @@
 #include "rule_toj.h"
 #include "param.h"
 
-static int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5 };
-static int const combo_table_max = 13;
+static int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
+static int const combo_table_max = 10;
 
 size_t const NUM_PARAMS = 29;
 

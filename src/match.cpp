@@ -152,8 +152,8 @@ namespace
         size_t max_pieces = 3600;// pieces per game before cap
         unsigned seed = 0;       // 0 = random
         bool view = false;       // print board each round
-        std::vector<int> combo_table = {0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5};
-        int combo_table_max = 13;
+        std::vector<int> combo_table = {0, 0, 0, 1, 1, 2, 2, 3, 3, 4};
+        int combo_table_max = 10;
         std::string telemetry_file;
         int big_attack_threshold = 4;
         std::string bot1, bot2;

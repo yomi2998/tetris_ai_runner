@@ -981,7 +981,7 @@ namespace ai_zzz
         double dislike = 0;
         auto get_combo_attack = [&](int c)
         {
-            return config_->table[std::min<int>(config_->table_max - 1, c + 1)];
+            return config_->table[std::min<int>(config_->table_max - 1, c)];
         };
         auto update_like = [&](double v)
         {
