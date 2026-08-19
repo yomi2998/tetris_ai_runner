@@ -174,7 +174,7 @@ struct BotInstance
     m_tetris::TetrisMap map;
     Scenario *scenario = nullptr;
 
-    int next_length = 5;
+    int next_length = 6;
     int search_ms = 20;
     int last_clear = 0;
     std::vector<char> next;
