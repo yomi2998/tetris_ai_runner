@@ -221,7 +221,7 @@ struct test_ai
 
         char current = next.front();
         auto result = ai.run_hold(map, ai.context()->generate(current), hold, true, next.data() + 1, next_length, run_ms);
-        if(result.target == nullptr || result.target->low >= 20)
+        if(result.target == nullptr || result.target->row >= 20)
         {
             dead = true;
             return;

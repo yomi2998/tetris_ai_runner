@@ -247,7 +247,7 @@ struct test_ai
         auto node = ai.context()->generate(current);
         auto result = ai.run_hold(map, node, hold, true, next.data() + 1, next_length, 20);
 
-        if (result.target == nullptr || result.target->low >= 20)
+        if (result.target == nullptr || result.target->row >= 20)
         {
             dead = true;
             return;

@@ -394,7 +394,7 @@ int main(int argc, char **argv)
 
         bool dead = false;
         size_t clear = 0;
-        if (result.target == nullptr || result.target->low >= 20)
+        if (result.target == nullptr || result.target->row >= 20)
         {
             dead = true;
         }

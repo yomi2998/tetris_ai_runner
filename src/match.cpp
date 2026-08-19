@@ -463,7 +463,7 @@ namespace
             {
                 return false;
             }
-            if (node->low >= 20) // top out
+            if (node->row >= 20) // top out
             {
                 return false;
             }
