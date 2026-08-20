@@ -1,6 +1,6 @@
 // Usage:
-//   spsa [num_iters] [eval_matches] [search_ms] [seed] [threads] [algo] [max_rounds]
-//   spsa probe [batches] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [step]
+//   spsa [num_iters] [eval_matches] [search_ms] [seed] [threads] [algo] [max_rounds] [iters_per_move]
+//   spsa probe [batches] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [step] [iters_per_move]
 
 #include <ctime>
 #include <cstring>
@@ -27,6 +27,7 @@ static int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
 static int const combo_table_max = 10;
 
 size_t const NUM_PARAMS = 29;
+static int iters_per_move = 0;
 
 static double const param_scale[NUM_PARAMS] = {
     2.0, 1.5, 2.5, 2.5, 1.5, 2.0, 0.05, 0.05, 1.0, 1.0,
@@ -175,7 +176,7 @@ struct BotInstance
     Scenario *scenario = nullptr;
 
     int next_length = 6;
-    int search_ms = 20;
+    m_tetris::SearchBudget search_budget{ 20 };
     int last_clear = 0;
     std::vector<char> next;
     std::deque<int> recv_attack;
@@ -255,7 +256,7 @@ struct BotInstance
         char current = next.front();
         bool is_hold_piece = hold != ' ' && current == hold;
         auto result = ai.run_hold(map, ai.spawn_node(current, last_clear, is_hold_piece), hold, true,
-                                  next.data() + 1, next_length, search_ms);
+                                  next.data() + 1, next_length, search_budget);
         if (result.target == nullptr)
         {
             dead = true;
@@ -579,7 +580,14 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
             Scenario scenario = make_scenario(jobs[idx].scenario_seed);
             BotInstance b1(global_ai), b2(global_ai);
             b1.scenario = b2.scenario = &scenario;
-            b1.search_ms = b2.search_ms = search_ms;
+            if (iters_per_move > 0)
+            {
+                b1.search_budget = b2.search_budget = m_tetris::SearchBudget::by_iterations((size_t)iters_per_move);
+            }
+            else
+            {
+                b1.search_budget = b2.search_budget = m_tetris::SearchBudget{ (time_t)search_ms };
+            }
             b1.init(jobs[idx].p1);
             b2.init(jobs[idx].p2);
             std::function<void()> view_cb = [&, idx]()
@@ -720,6 +728,7 @@ static int run_probe(int argc, char *argv[])
     if (argc > 6) threads = std::stoi(argv[6]);
     if (argc > 7) max_rounds = std::stoi(argv[7]);
     if (argc > 8) step = std::stod(argv[8]);
+    if (argc > 9) iters_per_move = std::stoi(argv[9]);
     if (batches <= 0 || search_ms <= 0 || max_rounds <= 0 || step <= 0 || !std::isfinite(step))
     {
         std::fprintf(stderr, "[PROBE] invalid arguments\n");
@@ -749,8 +758,8 @@ static int run_probe(int argc, char *argv[])
     std::atomic<bool> view{ false };
     std::atomic<uint32_t> view_index{ 0 };
 
-    std::printf("[PROBE] fixed theta: %d batches, %d games/batch (%d directions), %d rounds/match, %dms search, step=%.4f\n",
-                batches, 2 * q, q, max_rounds, search_ms, step);
+    std::printf("[PROBE] fixed theta: %d batches, %d games/batch (%d directions), %d rounds/match, %s search, step=%.4f\n",
+                batches, 2 * q, q, max_rounds, iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters").c_str() : (std::to_string(search_ms) + "ms").c_str(), step);
     std::fflush(stdout);
 
     for (int k = 0; k < batches; ++k)
@@ -857,6 +866,7 @@ int main(int argc, char *argv[])
     if (argc > 5) threads = std::stoi(argv[5]);
     if (argc > 6) algo = std::stoi(argv[6]);
     if (argc > 7) max_rounds = std::stoi(argv[7]);
+    if (argc > 8) iters_per_move = std::stoi(argv[8]);
     if (seed == 0) seed = (unsigned)std::time(nullptr);
     if (threads == 0)
     {
@@ -935,8 +945,9 @@ int main(int argc, char *argv[])
         x[i] = theta[i] / param_scale[i];
     }
 
-    std::printf("[SPSA] %s: %d iters, %d games/batch (%d directions), %d rounds/match, %dms search, seed %u, threads=%d\n",
-                algo == 1 ? "paired mirrored ES" : "corrected SPSA", num_iters, 2 * q, q, max_rounds, search_ms, seed, threads);
+    std::printf("[SPSA] %s: %d iters, %d games/batch (%d directions), %d rounds/match, %s search, seed %u, threads=%d\n",
+                algo == 1 ? "paired mirrored ES" : "corrected SPSA", num_iters, 2 * q, q, max_rounds,
+                iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters").c_str() : (std::to_string(search_ms) + "ms").c_str(), seed, threads);
     std::fflush(stdout);
 
     std::atomic<bool> view{ false };
