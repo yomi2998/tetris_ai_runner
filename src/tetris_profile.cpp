@@ -191,6 +191,7 @@ namespace
         size_t transition_every = 1000;
         std::string param_file;
         bool quiet = false;
+        size_t iters = 0;   // >0 => iteration-based deterministic search
     };
 
     Options parse_args(int argc, char **argv)
@@ -220,6 +221,7 @@ namespace
             else if (a == "--transition-csv") opt.transition_csv = next(a);
             else if (a == "--transition-every") opt.transition_every = std::strtoull(next(a).c_str(), nullptr, 10);
             else if (a == "--param-file") opt.param_file = next(a);
+            else if (a == "--iters") opt.iters = std::strtoull(next(a).c_str(), nullptr, 10);
             else if (a == "--quiet") opt.quiet = true;
             else
             {
@@ -382,7 +384,9 @@ int main(int argc, char **argv)
         ProfiledSearch::reset();
 
         steady_clock::time_point t0 = steady_clock::now();
-        auto result = engine.run_hold(map, engine.context()->generate(current), hold, true, next.data() + 1, opt.maxdepth, budget_ms);
+        auto result = opt.iters > 0
+            ? engine.run_hold(map, engine.context()->generate(current), hold, true, next.data() + 1, opt.maxdepth, m_tetris::SearchBudget::by_iterations(opt.iters))
+            : engine.run_hold(map, engine.context()->generate(current), hold, true, next.data() + 1, opt.maxdepth, budget_ms);
         steady_clock::time_point t1 = steady_clock::now();
         double elapsed_ms = duration<double, std::milli>(t1 - t0).count();
         size_t nodes_alloc = engine.memory_usage() - mem_before;
@@ -492,8 +496,9 @@ int main(int argc, char **argv)
     }
 
     std::printf("=== TetrisEngine profile (rule_toj + ai_zzz::TOJ + search_tspin) ===\n");
-    std::printf("board 10x40, budget %lld ms/move, maxdepth %zu, hold %s, seed %u\n",
-        (long long)budget_ms, opt.maxdepth, opt.hold ? "on" : "off", opt.seed);
+    std::printf("board 10x40, budget %s, maxdepth %zu, hold %s, seed %u\n",
+        opt.iters > 0 ? (std::to_string(opt.iters) + " iters [DETERMINISTIC]").c_str() : (std::to_string(budget_ms) + " ms/move").c_str(),
+        opt.maxdepth, opt.hold ? "on" : "off", opt.seed);
     std::printf("moves: %zu (games completed: %zu, dead-moves: %zu)\n", move_ms.size(), games, dead_moves);
     std::printf("total wall time: %.3f s\n", total_sec);
     std::printf("per-move wall time [ms]: min %.3f | median %.3f | p95 %.3f | p99 %.3f | max %.3f | avg %.3f\n",

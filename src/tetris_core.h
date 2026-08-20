@@ -2098,6 +2098,30 @@ namespace m_tetris
         }
     };
 
+    struct SearchBudget
+    {
+        enum class Kind : uint8_t
+        {
+            Time,
+            Iterations
+        };
+        Kind kind = Kind::Time;
+        time_t ms = 100;
+        size_t iterations = 0;
+
+        SearchBudget() = default;
+        SearchBudget(time_t _ms) : kind(Kind::Time), ms(_ms)
+        {
+        }
+        static SearchBudget by_iterations(size_t n)
+        {
+            SearchBudget b;
+            b.kind = Kind::Iterations;
+            b.iterations = n;
+            return b;
+        }
+    };
+
     template<class TetrisRule, class TetrisAI, class TetrisSearch>
     class TetrisEngine
     {
@@ -2286,14 +2310,16 @@ namespace m_tetris
             return true;
         }
         //run!
-        RunResult run(TetrisMap const &map, TetrisNode const *node, char const *next, size_t next_length, time_t limit = 100)
+        RunResult run(TetrisMap const &map, TetrisNode const *node, char const *next, size_t next_length, SearchBudget budget = {})
         {
             using namespace std::chrono;
             if (shared_context_ == nullptr || node == nullptr || !node->check(map))
             {
                 return RunResult();
             }
-            auto now = high_resolution_clock::now(), end = now + std::chrono::milliseconds(limit);
+            auto now = high_resolution_clock::now();
+            auto end = budget.kind == SearchBudget::Kind::Time ? now + std::chrono::milliseconds(budget.ms) : now;
+            size_t iter = 0;
             root_ = root_->update(&local_context_, map, status_, node, next, next_length);
             do
             {
@@ -2301,19 +2327,22 @@ namespace m_tetris
                 {
                     break;
                 }
-            } while ((now = high_resolution_clock::now()) < end);
+                ++iter;
+            } while (budget.kind == SearchBudget::Kind::Time ? (now = high_resolution_clock::now()) < end : iter < budget.iterations);
             auto best = root_->get_best(&local_context_);
             return best.first != nullptr ? RunResult(root_->get_best(&local_context_)) : RunResult(false);
         }
         //带hold的run!
-        RunResult run_hold(TetrisMap const &map, TetrisNode const *node, char hold, bool hold_free, char const *next, size_t next_length, time_t limit = 100)
+        RunResult run_hold(TetrisMap const &map, TetrisNode const *node, char hold, bool hold_free, char const *next, size_t next_length, SearchBudget budget = {})
         {
             using namespace std::chrono;
             if (shared_context_ == nullptr || node == nullptr || !node->check(map))
             {
                 return RunResult();
             }
-            auto now = high_resolution_clock::now(), end = now + std::chrono::milliseconds(limit);
+            auto now = high_resolution_clock::now();
+            auto end = budget.kind == SearchBudget::Kind::Time ? now + std::chrono::milliseconds(budget.ms) : now;
+            size_t iter = 0;
             root_ = root_->update(&local_context_, map, status_, node, hold, !hold_free, next, next_length);
             do
             {
@@ -2321,7 +2350,8 @@ namespace m_tetris
                 {
                     break;
                 }
-            } while ((now = high_resolution_clock::now()) < end);
+                ++iter;
+            } while (budget.kind == SearchBudget::Kind::Time ? (now = high_resolution_clock::now()) < end : iter < budget.iterations);
             if (root_->hold == ' ' && local_context_.next.size() == 1 && !root_->is_hold_lock)
             {
                 return RunResult(true);
@@ -2533,24 +2563,24 @@ namespace m_tetris
             engine_.update();
         }
         //run!
-        RunResult run(TetrisMap const &map, TetrisNode const *node, char const *next, size_t next_length, time_t limit = 100)
+        RunResult run(TetrisMap const &map, TetrisNode const *node, char const *next, size_t next_length, SearchBudget budget = {})
         {
             PauseBackground pause(this);
             ai_config_.assign(engine_.ai_config());
             search_config_.assign(engine_.search_config());
             *engine_.status() = status_;
-            auto run_result = engine_.run(map, node, next, next_length, limit);
+            auto run_result = engine_.run(map, node, next, next_length, budget);
             start_work(false);
             return run_result;
         }
         //带hold的run!
-        RunResult run_hold(TetrisMap const &map, TetrisNode const *node, char hold, bool hold_free, char const *next, size_t next_length, time_t limit = 100)
+        RunResult run_hold(TetrisMap const &map, TetrisNode const *node, char hold, bool hold_free, char const *next, size_t next_length, SearchBudget budget = {})
         {
             PauseBackground pause(this);
             ai_config_.assign(engine_.ai_config());
             search_config_.assign(engine_.search_config());
             *engine_.status() = status_;
-            auto run_result = engine_.run_hold(map, node, hold, hold_free, next, next_length, limit);
+            auto run_result = engine_.run_hold(map, node, hold, hold_free, next, next_length, budget);
             start_work(true);
             return run_result;
         }
