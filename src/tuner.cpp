@@ -152,13 +152,7 @@ static void load_params(double *out, std::string const &tag = "")
         std::printf("[TUNER] Loaded best parameters from %s\n", param::filename(tag).c_str());
         return;
     }
-    double const dflt[NUM_PARAMS] = {
-        10.507166148, 7.539860726, 13.048099725, 13.388476179, 6.728747539, 9.476881786,
-        0.258534525, -0.108269503, 4.394241496, -4.892359035, 0.049148374, 1.586714505,
-        8.885878229, -0.006001836, -0.004336234, -2.021765056, -0.951446468, -1.145468832,
-        -1.515758227, -0.612910192, -0.476031978, 0.009596827, -0.399212013, -0.855819915,
-        -0.418779377, -0.454784178, -1.417493065, 1.050941751, 0.756272086,
-    };
+    double const dflt[NUM_PARAMS] = {};
     std::memcpy(out, dflt, sizeof(dflt[0]) * NUM_PARAMS);
 }
 
