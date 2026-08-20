@@ -129,9 +129,9 @@ add_executable(heuristic_features_test
 target_include_directories(heuristic_features_test PRIVATE src)
 
 
-project(spsa)
+project(tuner)
 add_executable(${PROJECT_NAME}
-    src/spsa.cpp
+    src/tuner.cpp
     src/tetris_core.cpp
     src/rule_toj.cpp
     src/search_tspin.cpp

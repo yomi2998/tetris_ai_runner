@@ -1,6 +1,6 @@
 // Usage:
-//   spsa [num_iters] [eval_matches] [search_ms] [seed] [threads] [algo] [max_rounds] [iters_per_move]
-//   spsa probe [batches] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [step] [iters_per_move]
+//   tuner [num_iters] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [iters_per_move]
+//   tuner probe [batches] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [step] [iters_per_move]
 
 #include <ctime>
 #include <cstring>
@@ -82,12 +82,6 @@ static Scenario make_scenario(uint64_t seed, size_t max_rounds, size_t next_leng
     return s;
 }
 
-static double const param_rates[NUM_PARAMS] = {
-    0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
-    0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
-    0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
-};
-
 static char const *const param_names[NUM_PARAMS] = {
     "base", "roof", "col_trans", "row_trans", "hole_count", "hole_line",
     "clear_width", "wide_2", "wide_3", "wide_4", "safe", "b2b", "attack",
@@ -97,13 +91,6 @@ static char const *const param_names[NUM_PARAMS] = {
 };
 
 // ---- optimizer configuration (normalized coordinates) ----
-static double const SPSA_A = 35.0;
-static double const SPSA_ALPHA = 0.602;
-static double const SPSA_C = 0.30;
-static double const SPSA_GAMMA = 0.101;
-static double const SPSA_CK_FLOOR = 0.08;
-static double const SPSA_RATE = 0.10;
-
 // Paired mirrored ES (OpenAI-ES style with antithetic seat-swapped pairs):
 static double const ES_SIGMA0 = 0.30;
 static double const ES_SIGMA_FLOOR = 0.08;
@@ -117,7 +104,7 @@ static double const ES_EPS = 1e-8;
 static double const ES_DX_MAX = 0.04;    // per-coordinate update clip
 static double const ES_DX_L2_MAX = 0.10; // update L2 clip
 
-using SpsaEngine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_zzz::TOJ, search_tspin::Search>;
+using TunerEngine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_zzz::TOJ, search_tspin::Search>;
 
 static void param_to_array(ai_zzz::TOJ::Param const &p, double *out)
 {
@@ -161,7 +148,7 @@ static void load_params(double *out, std::string const &tag = "")
 {
     if (param::read(out, NUM_PARAMS, tag))
     {
-        std::printf("[SPSA] Loaded best parameters from %s\n", param::filename(tag).c_str());
+        std::printf("[TUNER] Loaded best parameters from %s\n", param::filename(tag).c_str());
         return;
     }
     double const dflt[NUM_PARAMS] = {
@@ -176,7 +163,7 @@ static void load_params(double *out, std::string const &tag = "")
 
 struct BotInstance
 {
-    SpsaEngine ai;
+    TunerEngine ai;
     m_tetris::TetrisMap map;
     Scenario *scenario = nullptr;
 
@@ -195,7 +182,7 @@ struct BotInstance
     int total_attack = 0;
     int total_receive = 0;
 
-    explicit BotInstance(SpsaEngine &global_ai) : ai(global_ai.context())
+    explicit BotInstance(TunerEngine &global_ai) : ai(global_ai.context())
     {
         ai.prepare(10, 40);
         ai.memory_limit(256ull << 20);
@@ -568,7 +555,7 @@ struct MatchOutcome
 // Runs every job to completion (no early cancellation); outcome.winner is
 // from p1's perspective.
 static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, int threads, int search_ms, int max_rounds,
-                                           SpsaEngine &global_ai, std::atomic<bool> &view,
+                                           TunerEngine &global_ai, std::atomic<bool> &view,
                                            std::atomic<uint32_t> &view_index)
 {
     std::vector<MatchOutcome> out(jobs.size());
@@ -645,7 +632,7 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
     return out;
 }
 
-static bool load_state(std::string const &data_file, int &algo, int &resume_k, double *theta,
+static bool load_state(std::string const &data_file, int &resume_k, double *theta,
                        double &es_sigma, double *es_m1, double *es_m2,
                        int &saved_max_rounds, int &saved_eval_matches, int &saved_search_ms,
                        unsigned &saved_seed, bool &has_run_config)
@@ -666,7 +653,6 @@ static bool load_state(std::string const &data_file, int &algo, int &resume_k, d
     {
         int ver = 0;
         ifs.read(reinterpret_cast<char *>(&ver), sizeof(ver));
-        ifs.read(reinterpret_cast<char *>(&algo), sizeof(algo));
         ifs.read(reinterpret_cast<char *>(&resume_k), sizeof(resume_k));
         if (std::memcmp(magic, "TETOPT3", 8) == 0 && ver >= 3)
         {
@@ -689,11 +675,10 @@ static bool load_state(std::string const &data_file, int &algo, int &resume_k, d
     ifs.seekg(0);
     ifs.read(reinterpret_cast<char *>(&resume_k), sizeof(resume_k));
     ifs.read(reinterpret_cast<char *>(theta), NUM_PARAMS * sizeof(double));
-    algo = 0;
     return true;
 }
 
-static void save_state(std::string const &data_file, int algo, int k, double const *theta,
+static void save_state(std::string const &data_file, int k, double const *theta,
                        double es_sigma, double const *es_m1, double const *es_m2,
                        int max_rounds, int eval_matches, int search_ms, unsigned seed)
 {
@@ -702,6 +687,7 @@ static void save_state(std::string const &data_file, int algo, int k, double con
         std::ofstream ofs(tmp, std::ios::binary);
         ofs.write("TETOPT3", 8);
         int ver = 3;
+        int algo = 1;  // paired mirrored ES (legacy field, kept for format compat)
         ofs.write(reinterpret_cast<char const *>(&ver), sizeof(ver));
         ofs.write(reinterpret_cast<char const *>(&algo), sizeof(algo));
         ofs.write(reinterpret_cast<char const *>(&k), sizeof(k));
@@ -746,7 +732,7 @@ static int run_probe(int argc, char *argv[])
     if (games % 2 != 0) --games;
     int q = std::max(1, games / 2);
 
-    SpsaEngine global_ai;
+    TunerEngine global_ai;
     global_ai.prepare(10, 40);
     double theta[NUM_PARAMS];
     load_params(theta);
@@ -861,7 +847,6 @@ int main(int argc, char *argv[])
     int search_ms = 20;
     unsigned seed = 0;
     int threads = 1; // 0 = auto (hardware concurrency)
-    int algo = 0;    // 0 = SPSA, 1 = paired mirrored ES
     int max_rounds = 1000;
 
     if (argc > 1) num_iters = std::stoi(argv[1]);
@@ -869,9 +854,8 @@ int main(int argc, char *argv[])
     if (argc > 3) search_ms = std::stoi(argv[3]);
     if (argc > 4) seed = (unsigned)std::stoul(argv[4]);
     if (argc > 5) threads = std::stoi(argv[5]);
-    if (argc > 6) algo = std::stoi(argv[6]);
-    if (argc > 7) max_rounds = std::stoi(argv[7]);
-    if (argc > 8) iters_per_move = std::stoi(argv[8]);
+    if (argc > 6) max_rounds = std::stoi(argv[6]);
+    if (argc > 7) iters_per_move = std::stoi(argv[7]);
     if (seed == 0) seed = (unsigned)std::time(nullptr);
     if (threads == 0)
     {
@@ -883,13 +867,13 @@ int main(int argc, char *argv[])
     if (games % 2 != 0)
     {
         --games;
-        std::printf("[SPSA] eval_matches %d is odd; using %d (even seat-swapped pairs)\n", eval_matches, games);
+        std::printf("[TUNER] eval_matches %d is odd; using %d (even seat-swapped pairs)\n", eval_matches, games);
     }
     int q = std::max(1, games / 2); // directions per batch
 
-    std::string data_file = param::tag_filename("spsa_data.bin", "");
+    std::string data_file = param::tag_filename("tuner_data.bin", "");
 
-    SpsaEngine global_ai;
+    TunerEngine global_ai;
     global_ai.prepare(10, 40);
 
     double theta[NUM_PARAMS];
@@ -902,23 +886,17 @@ int main(int argc, char *argv[])
     double es_sigma = ES_SIGMA0;
     double es_m1[NUM_PARAMS] = { 0 };
     double es_m2[NUM_PARAMS] = { 0 };
-    int resume_k = 0, saved_algo = -1;
+    int resume_k = 0;
     int saved_max_rounds = 0, saved_eval_matches = 0, saved_search_ms = 0;
     unsigned saved_seed = 0;
     bool has_saved_config = false;
-    if (load_state(data_file, saved_algo, resume_k, theta, es_sigma, es_m1, es_m2,
+    if (load_state(data_file, resume_k, theta, es_sigma, es_m1, es_m2,
                    saved_max_rounds, saved_eval_matches, saved_search_ms, saved_seed, has_saved_config))
     {
-        if (saved_algo != algo)
-        {
-            std::printf("[SPSA] Checkpoint is for algo %d but algo %d was requested.\n"
-                        "       Delete %s for a fresh start.\n", saved_algo, algo, data_file.c_str());
-            return 1;
-        }
         if (has_saved_config && (saved_max_rounds != max_rounds || saved_eval_matches != games
             || saved_search_ms != search_ms || saved_seed != seed))
         {
-            std::printf("[SPSA] Checkpoint configuration mismatch:\n"
+            std::printf("[TUNER] Checkpoint configuration mismatch:\n"
                         "       saved: rounds=%d games=%d search_ms=%d seed=%u\n"
                         "       requested: rounds=%d games=%d search_ms=%d seed=%u\n"
                         "       Delete %s for a fresh run.\n",
@@ -928,20 +906,20 @@ int main(int argc, char *argv[])
         }
         if (!has_saved_config)
         {
-            std::printf("[SPSA] Warning: legacy checkpoint has no run configuration; verify rounds=%d, games=%d, search_ms=%d, seed=%u.\n",
+            std::printf("[TUNER] Warning: legacy checkpoint has no run configuration; verify rounds=%d, games=%d, search_ms=%d, seed=%u.\n",
                         max_rounds, games, search_ms, seed);
         }
         if (resume_k >= num_iters)
         {
-            std::printf("[SPSA] Warning: resume point %d >= num_iters %d; nothing to do.\n"
+            std::printf("[TUNER] Warning: resume point %d >= num_iters %d; nothing to do.\n"
                         "       Delete %s for a fresh start.\n", resume_k, num_iters, data_file.c_str());
             return 0;
         }
-        std::printf("[SPSA] Resumed from iteration %d (overrides best_io_param)\n", resume_k);
+        std::printf("[TUNER] Resumed from iteration %d (overrides best_io_param)\n", resume_k);
     }
     else
     {
-        std::printf("[SPSA] Starting fresh\n");
+        std::printf("[TUNER] Starting fresh\n");
     }
 
     double x[NUM_PARAMS];
@@ -950,8 +928,8 @@ int main(int argc, char *argv[])
         x[i] = theta[i] / param_scale[i];
     }
 
-    std::printf("[SPSA] %s: %d iters, %d games/batch (%d directions), %d rounds/match, %s search, seed %u, threads=%d\n",
-                algo == 1 ? "paired mirrored ES" : "corrected SPSA", num_iters, 2 * q, q, max_rounds,
+    std::printf("[TUNER] paired mirrored ES: %d iters, %d games/batch (%d directions), %d rounds/match, %s search, seed %u, threads=%d\n",
+                num_iters, 2 * q, q, max_rounds,
                 iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters").c_str() : (std::to_string(search_ms) + "ms").c_str(), seed, threads);
     std::fflush(stdout);
 
@@ -983,9 +961,7 @@ int main(int argc, char *argv[])
     for (int k = resume_k; k < num_iters; ++k)
     {
         // ---- build the batch: q directions, 2 seat-swapped games each ----
-        double step = algo == 1
-            ? es_sigma
-            : std::max(SPSA_CK_FLOOR, SPSA_C / std::pow(k + 1.0, SPSA_GAMMA));
+        double step = es_sigma;
         std::vector<MatchJob> jobs;
         jobs.reserve(2 * q);
         for (int j = 0; j < q; ++j)
@@ -1044,7 +1020,6 @@ int main(int argc, char *argv[])
         avg_rounds /= 2 * q;
 
         double dx[NUM_PARAMS] = { 0 };
-        if (algo == 1)
         {
             // ---- paired mirrored ES + Adam (normalized space) ----
             double g[NUM_PARAMS];
@@ -1080,16 +1055,6 @@ int main(int argc, char *argv[])
             }
             es_sigma = std::max(ES_SIGMA_FLOOR, ES_SIGMA0 * std::exp(-(double)k / ES_SIGMA_TAU));
         }
-        else
-        {
-            // ---- corrected multi-direction SPSA (normalized space) ----
-            double ck = step;
-            double ak = SPSA_A / std::pow(k + 1.0 + SPSA_A, SPSA_ALPHA);
-            for (size_t i = 0; i < NUM_PARAMS; ++i)
-            {
-                dx[i] = SPSA_RATE * ak * param_rates[i] * grad[i] / (2.0 * ck * q);
-            }
-        }
 
         for (size_t i = 0; i < NUM_PARAMS; ++i)
         {
@@ -1101,36 +1066,26 @@ int main(int argc, char *argv[])
             theta[i] = x[i] * param_scale[i];
         }
 
-        save_state(data_file, algo, k + 1, theta, es_sigma, es_m1, es_m2,
+        save_state(data_file, k + 1, theta, es_sigma, es_m1, es_m2,
                    max_rounds, games, search_ms, seed);
         param::write(theta, NUM_PARAMS, "");
         if ((k + 1) % 10 == 0 || k == resume_k)
         {
             auto now = std::chrono::steady_clock::now();
             double sec = std::chrono::duration<double>(now - start_time).count();
-            if (algo == 1)
-            {
-                std::printf("[ES]   iter %5d | score=%+.3f | sigma=%.4f | R=%.0f D=%d C=%d CA=%d | %.1fs\n",
-                            k, score, es_sigma, avg_rounds, deaths, capped_games, capped_apl_games, sec);
-            }
-            else
-            {
-                double ck = step;
-                double ak = SPSA_A / std::pow(k + 1.0 + SPSA_A, SPSA_ALPHA);
-                std::printf("[SPSA] iter %5d | score=%+.3f | ak=%.4f ck=%.4f | R=%.0f D=%d C=%d CA=%d | %.1fs\n",
-                            k, score, ak, ck, avg_rounds, deaths, capped_games, capped_apl_games, sec);
-            }
+            std::printf("[ES]   iter %5d | score=%+.3f | sigma=%.4f | R=%.0f D=%d C=%d CA=%d | %.1fs\n",
+                        k, score, es_sigma, avg_rounds, deaths, capped_games, capped_apl_games, sec);
         }
         std::fflush(stdout);
     }
 
     param::write(theta, NUM_PARAMS, "");
-    save_state(data_file, algo, num_iters, theta, es_sigma, es_m1, es_m2,
+    save_state(data_file, num_iters, theta, es_sigma, es_m1, es_m2,
                max_rounds, games, search_ms, seed);
 
-    std::printf("\n[SPSA] Done. %d iterations completed\n", num_iters);
-    std::printf("[SPSA] Params saved to %s\n", param::filename("").c_str());
-    std::printf("[SPSA] theta:\n");
+    std::printf("\n[TUNER] Done. %d iterations completed\n", num_iters);
+    std::printf("[TUNER] Params saved to %s\n", param::filename("").c_str());
+    std::printf("[TUNER] theta:\n");
     for (size_t i = 0; i < NUM_PARAMS; ++i)
     {
         std::printf("  %-14s %+.6f\n", param_names[i], theta[i]);
