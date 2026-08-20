@@ -28,6 +28,7 @@ static int const combo_table_max = 10;
 
 size_t const NUM_PARAMS = 29;
 static int iters_per_move = 0;
+static int const next_length = 6;
 
 static double const param_scale[NUM_PARAMS] = {
     2.0, 1.5, 2.5, 2.5, 1.5, 2.0, 0.05, 0.05, 1.0, 1.0,
@@ -57,12 +58,14 @@ struct Scenario
     std::deque<int> holes;
 };
 
-static Scenario make_scenario(uint64_t seed)
+static Scenario make_scenario(uint64_t seed, size_t max_rounds, size_t next_length)
 {
     std::mt19937 rng((unsigned)splitmix64(seed));
     std::string bag = "IJLOSTZ";
     Scenario s;
-    while (s.pieces.size() < 4096)
+
+    size_t pieces_needed = max_rounds * 2 + next_length * 2 + 4;
+    while (s.pieces.size() < pieces_needed)
     {
         std::shuffle(bag.begin(), bag.end(), rng);
         for (char c : bag)
@@ -70,7 +73,9 @@ static Scenario make_scenario(uint64_t seed)
             s.pieces.push_back(c);
         }
     }
-    while (s.holes.size() < 1024)
+
+    size_t holes_needed = max_rounds * 2 + 8;
+    while (s.holes.size() < holes_needed)
     {
         s.holes.push_back((int)(rng() % 10));
     }
@@ -175,7 +180,6 @@ struct BotInstance
     m_tetris::TetrisMap map;
     Scenario *scenario = nullptr;
 
-    int next_length = 6;
     m_tetris::SearchBudget search_budget{ 20 };
     int last_clear = 0;
     std::vector<char> next;
@@ -244,6 +248,7 @@ struct BotInstance
         }
         while (next.size() <= (size_t)next_length)
         {
+            assert(!scenario->pieces.empty());
             next.push_back(scenario->pieces.front());
             scenario->pieces.pop_front();
         }
@@ -430,11 +435,11 @@ static void render_view(BotInstance &b1, BotInstance &b2, char const *name1, cha
     std::printf(
         "HOLD=%c NEXT=%s COMBO=%d B2B=%d UP=%d P=%d L=%d A=%d APL=%.2f APP=%.2f %s\n"
         "HOLD=%c NEXT=%s COMBO=%d B2B=%d UP=%d P=%d L=%d A=%d APL=%.2f APP=%.2f %s\n",
-        b1.hold, std::string(b1.next.begin() + 1, b1.next.begin() + 1 + b1.next_length).c_str(),
+        b1.hold, std::string(b1.next.begin() + 1, b1.next.begin() + 1 + next_length).c_str(),
         b1.combo, b1.b2b, up1, b1.total_block, b1.total_clear, b1.total_attack,
         b1.total_clear ? (double)b1.total_attack / b1.total_clear : 0.0,
         b1.total_block ? (double)b1.total_attack / b1.total_block : 0.0, name1,
-        b2.hold, std::string(b2.next.begin() + 1, b2.next.begin() + 1 + b2.next_length).c_str(),
+        b2.hold, std::string(b2.next.begin() + 1, b2.next.begin() + 1 + next_length).c_str(),
         b2.combo, b2.b2b, up2, b2.total_block, b2.total_clear, b2.total_attack,
         b2.total_clear ? (double)b2.total_attack / b2.total_clear : 0.0,
         b2.total_block ? (double)b2.total_attack / b2.total_block : 0.0, name2);
@@ -577,7 +582,7 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
             {
                 return;
             }
-            Scenario scenario = make_scenario(jobs[idx].scenario_seed);
+            Scenario scenario = make_scenario(jobs[idx].scenario_seed, (size_t)max_rounds, (size_t)next_length);
             BotInstance b1(global_ai), b2(global_ai);
             b1.scenario = b2.scenario = &scenario;
             if (iters_per_move > 0)
