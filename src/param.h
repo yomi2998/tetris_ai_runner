@@ -27,9 +27,9 @@ namespace param
         return name.substr(0, dot) + "_" + tag + name.substr(dot);
     }
 
-    inline bool read(double *out, size_t n, std::string const &tag)
+    inline bool read_path(double *out, size_t n, std::string const &path)
     {
-        FILE *f = std::fopen(filename(tag).c_str(), "rb");
+        FILE *f = std::fopen(path.c_str(), "rb");
         if (f == nullptr)
         {
             return false;
@@ -39,14 +39,51 @@ namespace param
         return got == n;
     }
 
-    inline void write(double const *in, size_t n, std::string const &tag)
+    inline bool write_path(double const *in, size_t n, std::string const &path)
     {
-        FILE *f = std::fopen(filename(tag).c_str(), "wb");
+        std::string const tmp = path + ".tmp";
+        FILE *f = std::fopen(tmp.c_str(), "wb");
         if (f == nullptr)
         {
-            return;
+            return false;
         }
-        std::fwrite(in, sizeof(double), n, f);
-        std::fclose(f);
+        bool ok = std::fwrite(in, sizeof(double), n, f) == n;
+        ok = std::fclose(f) == 0 && ok;
+        if (ok)
+        {
+            ok = std::rename(tmp.c_str(), path.c_str()) == 0;
+        }
+        if (!ok)
+        {
+            std::remove(tmp.c_str());
+        }
+        return ok;
+    }
+
+    inline bool read(double *out, size_t n, std::string const &tag)
+    {
+        return read_path(out, n, filename(tag));
+    }
+
+    inline bool write(double const *in, size_t n, std::string const &tag)
+    {
+        std::string const dst = filename(tag);
+        std::string const tmp = dst + ".tmp";
+        FILE *f = std::fopen(tmp.c_str(), "wb");
+        if (f == nullptr)
+        {
+            return false;
+        }
+        bool ok = std::fwrite(in, sizeof(double), n, f) == n;
+        ok = std::fclose(f) == 0 && ok;
+        if (ok)
+        {
+            ok = std::rename(tmp.c_str(), dst.c_str()) == 0;
+        }
+        if (!ok)
+        {
+            std::remove(tmp.c_str());
+        }
+        return ok;
     }
 }

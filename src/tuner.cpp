@@ -104,6 +104,9 @@ static double const ES_BETA2 = 0.999;
 static double const ES_EPS = 1e-8;
 static double const ES_DX_MAX = 0.04;    // per-coordinate update clip
 static double const ES_DX_L2_MAX = 0.10; // update L2 clip
+static uint64_t const CHALLENGE_SEED_BASE = 0x123456789ABCDEF0ULL;
+static int const CHALLENGE_EVERY = 50;
+static int const CHALLENGE_PAIRS = 4;
 
 using TunerEngine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_zzz::TOJ, search_tspin::Search>;
 
@@ -145,15 +148,16 @@ static void array_to_param(double const *in, ai_zzz::TOJ::Param &p)
     p.ratio = in[28];
 }
 
-static void load_params(double *out, std::string const &tag = "")
+static bool load_params(double *out, std::string const &tag = "")
 {
     if (param::read(out, NUM_PARAMS, tag))
     {
         std::printf("[TUNER] Loaded best parameters from %s\n", param::filename(tag).c_str());
-        return;
+        return true;
     }
     double const dflt[NUM_PARAMS] = {};
     std::memcpy(out, dflt, sizeof(dflt[0]) * NUM_PARAMS);
+    return false;
 }
 
 struct BotInstance
@@ -244,7 +248,7 @@ struct BotInstance
         bool is_hold_piece = hold != ' ' && current == hold;
         auto result = ai.run_hold(map, ai.spawn_node(current, last_clear, is_hold_piece), hold, true,
                                   next.data() + 1, next_length, search_budget);
-        if (result.target == nullptr)
+        if (result.target == nullptr || result.target->row >= 20)
         {
             dead = true;
             return;
@@ -530,7 +534,8 @@ struct MatchJob
 {
     double p1[NUM_PARAMS];
     double p2[NUM_PARAMS];
-    uint64_t scenario_seed;
+    uint64_t scenario_seed_p1;
+    uint64_t scenario_seed_p2;
     size_t job_id;
     bool swapped;
 };
@@ -549,23 +554,19 @@ struct MatchOutcome
 
 static double paired_reward(MatchOutcome const &a, MatchOutcome const &b, double reward_k)
 {
-    int wA = a.winner;
-    int wB = b.winner;
-    if (wA != wB)
+    int y1 = a.winner;
+    int y2 = -b.winner;
+    if (y1 != y2)
     {
-        return 0.5 * (wA - wB);
+        return 0.5 * (y1 - y2);
     }
     if (reward_k <= 0.0)
     {
         return 0.0;
     }
-    double dA = a.app1 - a.app2;
-    double dB = b.app2 - b.app1;
-    double d = 0.5 * (dA + dB);
-    if (wA != 0)
-    {
-        d = std::copysign(std::fabs(d), (double)wA);
-    }
+    double d1 = a.app1 - a.app2;
+    double d2 = b.app2 - b.app1;
+    double d = 0.5 * (d1 + d2);
     return 0.5 * std::tanh(reward_k * d);
 }
 
@@ -586,8 +587,8 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
             {
                 return;
             }
-            Scenario scenario_p1 = make_scenario(jobs[idx].scenario_seed, (size_t)max_rounds, (size_t)next_length);
-            Scenario scenario_p2 = make_scenario(jobs[idx].scenario_seed, (size_t)max_rounds, (size_t)next_length);
+            Scenario scenario_p1 = make_scenario(jobs[idx].scenario_seed_p1, (size_t)max_rounds, (size_t)next_length);
+            Scenario scenario_p2 = make_scenario(jobs[idx].scenario_seed_p2, (size_t)max_rounds, (size_t)next_length);
             BotInstance b1(global_ai), b2(global_ai);
             b1.scenario = &scenario_p1;
             b2.scenario = &scenario_p2;
@@ -651,52 +652,267 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
     return out;
 }
 
-static bool load_state(std::string const &data_file, int &resume_k, double *theta,
-                       double &es_sigma, double *es_m1, double *es_m2,
-                       int &saved_max_rounds, int &saved_eval_matches, int &saved_search_ms,
-                       unsigned &saved_seed, bool &has_run_config)
+static void adam_update(double const *grad, int q, double es_sigma, int k,
+                        double *es_m1, double *es_m2, double *dx, double &grad_norm)
 {
-    saved_max_rounds = 0;
-    saved_eval_matches = 0;
-    saved_search_ms = 0;
-    saved_seed = 0;
-    has_run_config = false;
-    std::ifstream ifs(data_file, std::ios::binary);
-    if (!ifs.good())
+    double g[NUM_PARAMS];
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        g[i] = grad[i] / (2.0 * q * es_sigma);
+        grad_norm += g[i] * g[i];
+    }
+    grad_norm = std::sqrt(grad_norm);
+    double lr = ES_LR1 + 0.5 * (ES_LR0 - ES_LR1)
+        * (1.0 + std::cos(std::numbers::pi * std::min<double>(k, ES_LR_HORIZON) / ES_LR_HORIZON));
+    double beta1t = std::pow(ES_BETA1, k + 1);
+    double beta2t = std::pow(ES_BETA2, k + 1);
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        es_m1[i] = ES_BETA1 * es_m1[i] + (1 - ES_BETA1) * g[i];
+        es_m2[i] = ES_BETA2 * es_m2[i] + (1 - ES_BETA2) * g[i] * g[i];
+        double mh = es_m1[i] / (1 - beta1t);
+        double vh = es_m2[i] / (1 - beta2t);
+        dx[i] = lr * mh / (std::sqrt(vh) + ES_EPS);
+        dx[i] = std::max(-ES_DX_MAX, std::min(ES_DX_MAX, dx[i]));
+    }
+    double l2 = 0;
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        l2 += dx[i] * dx[i];
+    }
+    l2 = std::sqrt(l2);
+    if (l2 > ES_DX_L2_MAX)
+    {
+        for (size_t i = 0; i < NUM_PARAMS; ++i)
+        {
+            dx[i] *= ES_DX_L2_MAX / l2;
+        }
+    }
+}
+
+static double run_challenge(double const *candidate, double const *incumbent, int threads,
+                           int search_ms, int max_rounds, TunerEngine &global_ai,
+                           std::atomic<bool> &view, std::atomic<uint32_t> &view_index,
+                           uint64_t challenge_seed, int pairs)
+{
+    std::vector<MatchJob> jobs;
+    jobs.reserve(2 * pairs);
+    for (int j = 0; j < pairs; ++j)
+    {
+        uint64_t s = splitmix64(challenge_seed
+            ^ splitmix64((uint64_t)j * 0x94D049BB133111EBULL));
+        uint64_t sa = splitmix64(s);
+        uint64_t sb = splitmix64(s ^ 0x9E3779B97F4A7C15ULL);
+        MatchJob a{}, b{};
+        std::memcpy(a.p1, candidate, NUM_PARAMS * sizeof(double));
+        std::memcpy(a.p2, incumbent, NUM_PARAMS * sizeof(double));
+        std::memcpy(b.p1, incumbent, NUM_PARAMS * sizeof(double));
+        std::memcpy(b.p2, candidate, NUM_PARAMS * sizeof(double));
+        a.scenario_seed_p1 = sa;
+        a.scenario_seed_p2 = sb;
+        b.scenario_seed_p1 = sb;
+        b.scenario_seed_p2 = sa;
+        a.job_id = (size_t)2 * j;
+        b.job_id = (size_t)2 * j + 1;
+        a.swapped = false;
+        b.swapped = true;
+        jobs.push_back(a);
+        jobs.push_back(b);
+    }
+    auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_index);
+    double score = 0;
+    for (int j = 0; j < pairs; ++j)
+    {
+        score += paired_reward(out[2 * j], out[2 * j + 1], 0.0);
+    }
+    return score / pairs;
+}
+
+static uint64_t checkpoint_checksum(void const *data, size_t bytes)
+{
+    uint64_t h = 0xCBF29CE484222325ULL;
+    char const *p = static_cast<char const *>(data);
+    for (size_t i = 0; i < bytes; ++i)
+    {
+        h ^= (unsigned char)p[i];
+        h *= 0x100000001B3ULL;
+    }
+    return h;
+}
+
+struct CheckpointConfig
+{
+    int max_rounds;
+    int eval_matches;
+    int search_ms;
+    unsigned seed;
+    int iters_per_move;
+    double reward_k;
+    double param_scale[NUM_PARAMS];
+    int combo_table[combo_table_max];
+    int next_length;
+};
+
+static bool checkpoint_config_equal(CheckpointConfig const &a, CheckpointConfig const &b)
+{
+    if (a.max_rounds != b.max_rounds || a.eval_matches != b.eval_matches
+        || a.search_ms != b.search_ms || a.seed != b.seed
+        || a.iters_per_move != b.iters_per_move || a.reward_k != b.reward_k
+        || a.next_length != b.next_length)
     {
         return false;
     }
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        if (a.param_scale[i] != b.param_scale[i])
+        {
+            return false;
+        }
+    }
+    for (size_t i = 0; i < (size_t)combo_table_max; ++i)
+    {
+        if (a.combo_table[i] != b.combo_table[i])
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+enum CheckpointLoadResult
+{
+    CHECKPOINT_OK = 1,
+    CHECKPOINT_MISSING = 0,
+    CHECKPOINT_CORRUPT = -1,
+};
+
+static int load_state(std::string const &data_file, int &resume_k, double *theta,
+                      double &es_sigma, double *es_m1, double *es_m2,
+                      CheckpointConfig &saved_cfg)
+{
+    std::ifstream ifs(data_file, std::ios::binary);
+    if (!ifs.good())
+    {
+        return CHECKPOINT_MISSING;
+    }
+
+    int ver = 0;
+    ifs.read(reinterpret_cast<char *>(&ver), sizeof(ver));
+    if (ver != 1)
+    {
+        return CHECKPOINT_CORRUPT;
+    }
     ifs.read(reinterpret_cast<char *>(&resume_k), sizeof(resume_k));
-    ifs.read(reinterpret_cast<char *>(&saved_max_rounds), sizeof(saved_max_rounds));
-    ifs.read(reinterpret_cast<char *>(&saved_eval_matches), sizeof(saved_eval_matches));
-    ifs.read(reinterpret_cast<char *>(&saved_search_ms), sizeof(saved_search_ms));
-    ifs.read(reinterpret_cast<char *>(&saved_seed), sizeof(saved_seed));
-    has_run_config = true;
+    ifs.read(reinterpret_cast<char *>(&saved_cfg.max_rounds), sizeof(saved_cfg.max_rounds));
+    ifs.read(reinterpret_cast<char *>(&saved_cfg.eval_matches), sizeof(saved_cfg.eval_matches));
+    ifs.read(reinterpret_cast<char *>(&saved_cfg.search_ms), sizeof(saved_cfg.search_ms));
+    ifs.read(reinterpret_cast<char *>(&saved_cfg.seed), sizeof(saved_cfg.seed));
+    ifs.read(reinterpret_cast<char *>(&saved_cfg.iters_per_move), sizeof(saved_cfg.iters_per_move));
+    ifs.read(reinterpret_cast<char *>(&saved_cfg.reward_k), sizeof(saved_cfg.reward_k));
+    ifs.read(reinterpret_cast<char *>(saved_cfg.param_scale), sizeof(saved_cfg.param_scale));
+    ifs.read(reinterpret_cast<char *>(saved_cfg.combo_table), sizeof(saved_cfg.combo_table));
+    ifs.read(reinterpret_cast<char *>(&saved_cfg.next_length), sizeof(saved_cfg.next_length));
     ifs.read(reinterpret_cast<char *>(theta), NUM_PARAMS * sizeof(double));
     ifs.read(reinterpret_cast<char *>(&es_sigma), sizeof(es_sigma));
     ifs.read(reinterpret_cast<char *>(es_m1), NUM_PARAMS * sizeof(double));
     ifs.read(reinterpret_cast<char *>(es_m2), NUM_PARAMS * sizeof(double));
-    return true;
+    uint64_t stored_checksum = 0;
+    ifs.read(reinterpret_cast<char *>(&stored_checksum), sizeof(stored_checksum));
+    if (!ifs.good())
+    {
+        return CHECKPOINT_CORRUPT;
+    }
+    char extra = 0;
+    ifs.read(&extra, 1);
+    if (ifs.gcount() != 0)
+    {
+        return CHECKPOINT_CORRUPT;
+    }
+    size_t const payload_bytes = sizeof(resume_k) + sizeof(saved_cfg.max_rounds)
+        + sizeof(saved_cfg.eval_matches) + sizeof(saved_cfg.search_ms) + sizeof(saved_cfg.seed)
+        + sizeof(saved_cfg.iters_per_move) + sizeof(saved_cfg.reward_k)
+        + sizeof(saved_cfg.param_scale) + sizeof(saved_cfg.combo_table)
+        + sizeof(saved_cfg.next_length) + NUM_PARAMS * sizeof(double) * 3 + sizeof(es_sigma);
+    std::vector<char> payload(payload_bytes);
+    char *p = payload.data();
+    std::memcpy(p, &resume_k, sizeof(resume_k)); p += sizeof(resume_k);
+    std::memcpy(p, &saved_cfg.max_rounds, sizeof(saved_cfg.max_rounds)); p += sizeof(saved_cfg.max_rounds);
+    std::memcpy(p, &saved_cfg.eval_matches, sizeof(saved_cfg.eval_matches)); p += sizeof(saved_cfg.eval_matches);
+    std::memcpy(p, &saved_cfg.search_ms, sizeof(saved_cfg.search_ms)); p += sizeof(saved_cfg.search_ms);
+    std::memcpy(p, &saved_cfg.seed, sizeof(saved_cfg.seed)); p += sizeof(saved_cfg.seed);
+    std::memcpy(p, &saved_cfg.iters_per_move, sizeof(saved_cfg.iters_per_move)); p += sizeof(saved_cfg.iters_per_move);
+    std::memcpy(p, &saved_cfg.reward_k, sizeof(saved_cfg.reward_k)); p += sizeof(saved_cfg.reward_k);
+    std::memcpy(p, saved_cfg.param_scale, sizeof(saved_cfg.param_scale)); p += sizeof(saved_cfg.param_scale);
+    std::memcpy(p, saved_cfg.combo_table, sizeof(saved_cfg.combo_table)); p += sizeof(saved_cfg.combo_table);
+    std::memcpy(p, &saved_cfg.next_length, sizeof(saved_cfg.next_length)); p += sizeof(saved_cfg.next_length);
+    std::memcpy(p, theta, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
+    std::memcpy(p, &es_sigma, sizeof(es_sigma)); p += sizeof(es_sigma);
+    std::memcpy(p, es_m1, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
+    std::memcpy(p, es_m2, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
+    uint64_t computed = checkpoint_checksum(payload.data(), payload.size());
+    if (computed != stored_checksum)
+    {
+        return CHECKPOINT_CORRUPT;
+    }
+    if (resume_k < 0 || es_sigma <= 0.0 || !std::isfinite(es_sigma))
+    {
+        return CHECKPOINT_CORRUPT;
+    }
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        if (!std::isfinite(theta[i]) || !std::isfinite(es_m1[i]) || !std::isfinite(es_m2[i]))
+        {
+            return CHECKPOINT_CORRUPT;
+        }
+    }
+    return CHECKPOINT_OK;
 }
 
-static void save_state(std::string const &data_file, int k, double const *theta,
+static bool save_state(std::string const &data_file, int k, double const *theta,
                        double es_sigma, double const *es_m1, double const *es_m2,
-                       int max_rounds, int eval_matches, int search_ms, unsigned seed)
+                       CheckpointConfig const &cfg)
 {
+    size_t const payload_bytes = sizeof(k) + sizeof(cfg.max_rounds) + sizeof(cfg.eval_matches)
+        + sizeof(cfg.search_ms) + sizeof(cfg.seed) + sizeof(cfg.iters_per_move)
+        + sizeof(cfg.reward_k) + sizeof(cfg.param_scale) + sizeof(cfg.combo_table)
+        + sizeof(cfg.next_length) + NUM_PARAMS * sizeof(double) * 3 + sizeof(es_sigma);
+    std::vector<char> payload(payload_bytes);
+    char *p = payload.data();
+    std::memcpy(p, &k, sizeof(k)); p += sizeof(k);
+    std::memcpy(p, &cfg.max_rounds, sizeof(cfg.max_rounds)); p += sizeof(cfg.max_rounds);
+    std::memcpy(p, &cfg.eval_matches, sizeof(cfg.eval_matches)); p += sizeof(cfg.eval_matches);
+    std::memcpy(p, &cfg.search_ms, sizeof(cfg.search_ms)); p += sizeof(cfg.search_ms);
+    std::memcpy(p, &cfg.seed, sizeof(cfg.seed)); p += sizeof(cfg.seed);
+    std::memcpy(p, &cfg.iters_per_move, sizeof(cfg.iters_per_move)); p += sizeof(cfg.iters_per_move);
+    std::memcpy(p, &cfg.reward_k, sizeof(cfg.reward_k)); p += sizeof(cfg.reward_k);
+    std::memcpy(p, cfg.param_scale, sizeof(cfg.param_scale)); p += sizeof(cfg.param_scale);
+    std::memcpy(p, cfg.combo_table, sizeof(cfg.combo_table)); p += sizeof(cfg.combo_table);
+    std::memcpy(p, &cfg.next_length, sizeof(cfg.next_length)); p += sizeof(cfg.next_length);
+    std::memcpy(p, theta, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
+    std::memcpy(p, &es_sigma, sizeof(es_sigma)); p += sizeof(es_sigma);
+    std::memcpy(p, es_m1, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
+    std::memcpy(p, es_m2, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
+    uint64_t checksum = checkpoint_checksum(payload.data(), payload.size());
+
     std::string tmp = data_file + ".tmp";
     {
         std::ofstream ofs(tmp, std::ios::binary);
-        ofs.write(reinterpret_cast<char const *>(&k), sizeof(k));
-        ofs.write(reinterpret_cast<char const *>(&max_rounds), sizeof(max_rounds));
-        ofs.write(reinterpret_cast<char const *>(&eval_matches), sizeof(eval_matches));
-        ofs.write(reinterpret_cast<char const *>(&search_ms), sizeof(search_ms));
-        ofs.write(reinterpret_cast<char const *>(&seed), sizeof(seed));
-        ofs.write(reinterpret_cast<char const *>(theta), NUM_PARAMS * sizeof(double));
-        ofs.write(reinterpret_cast<char const *>(&es_sigma), sizeof(es_sigma));
-        ofs.write(reinterpret_cast<char const *>(es_m1), NUM_PARAMS * sizeof(double));
-        ofs.write(reinterpret_cast<char const *>(es_m2), NUM_PARAMS * sizeof(double));
+        int ver = 1;
+        ofs.write(reinterpret_cast<char const *>(&ver), sizeof(ver));
+        ofs.write(payload.data(), (std::streamsize)payload.size());
+        ofs.write(reinterpret_cast<char const *>(&checksum), sizeof(checksum));
+        ofs.flush();
+        if (!ofs.good())
+        {
+            return false;
+        }
     }
-    std::rename(tmp.c_str(), data_file.c_str());
+    if (std::rename(tmp.c_str(), data_file.c_str()) != 0)
+    {
+        std::remove(tmp.c_str());
+        return false;
+    }
+    return true;
 }
 
 static int run_probe(int argc, char *argv[])
@@ -732,7 +948,10 @@ static int run_probe(int argc, char *argv[])
     TunerEngine global_ai;
     global_ai.prepare(10, 40);
     double theta[NUM_PARAMS];
-    load_params(theta);
+    if (!load_params(theta))
+    {
+        std::fprintf(stderr, "[PROBE] warning: %s missing or invalid; using zero theta\n", param::filename("").c_str());
+    }
     for (size_t i = 0; i < NUM_PARAMS; ++i)
     {
         theta[i] = std::isfinite(theta[i]) ? theta[i] : 0.0;
@@ -759,6 +978,8 @@ static int run_probe(int argc, char *argv[])
         {
             uint64_t scenario_seed = splitmix64(seed
                 ^ splitmix64((uint64_t)k * 0x94D049BB133111EBULL + (uint64_t)j));
+            uint64_t scenario_seed_a = splitmix64(scenario_seed);
+            uint64_t scenario_seed_b = splitmix64(scenario_seed ^ 0x9E3779B97F4A7C15ULL);
             MatchJob a{}, b{};
             for (size_t i = 0; i < NUM_PARAMS; ++i)
             {
@@ -770,7 +991,10 @@ static int run_probe(int argc, char *argv[])
                 b.p1[i] = xm * param_scale[i];
                 b.p2[i] = xp * param_scale[i];
             }
-            a.scenario_seed = b.scenario_seed = scenario_seed;
+            a.scenario_seed_p1 = scenario_seed_a;
+            a.scenario_seed_p2 = scenario_seed_b;
+            b.scenario_seed_p1 = scenario_seed_b;
+            b.scenario_seed_p2 = scenario_seed_a;
             a.job_id = (size_t)2 * j;
             b.job_id = (size_t)2 * j + 1;
             a.swapped = false;
@@ -853,6 +1077,17 @@ int main(int argc, char *argv[])
     if (argc > 6) max_rounds = std::stoi(argv[6]);
     if (argc > 7) iters_per_move = std::stoi(argv[7]);
     if (argc > 8) reward_k = std::stod(argv[8]);
+    if (num_iters <= 0 || eval_matches <= 0 || eval_matches == 1 || threads < 0
+        || iters_per_move < 0 || !std::isfinite(reward_k) || reward_k < 0.0)
+    {
+        std::fprintf(stderr, "[TUNER] invalid arguments\n");
+        return 1;
+    }
+    if (iters_per_move <= 0 && search_ms <= 0)
+    {
+        std::fprintf(stderr, "[TUNER] search_ms must be > 0 when using time-based search\n");
+        return 1;
+    }
     if (seed == 0) seed = (unsigned)std::time(nullptr);
     if (threads == 0)
     {
@@ -873,38 +1108,38 @@ int main(int argc, char *argv[])
     TunerEngine global_ai;
     global_ai.prepare(10, 40);
 
-    double theta[NUM_PARAMS];
-    load_params(theta);
-    for (size_t i = 0; i < NUM_PARAMS; ++i)
-    {
-        theta[i] = std::isfinite(theta[i]) ? theta[i] : 0.0;
-    }
+    CheckpointConfig cfg;
+    cfg.max_rounds = max_rounds;
+    cfg.eval_matches = games;
+    cfg.search_ms = search_ms;
+    cfg.seed = seed;
+    cfg.iters_per_move = iters_per_move;
+    cfg.reward_k = reward_k;
+    std::memcpy(cfg.param_scale, param_scale, sizeof(param_scale));
+    std::memcpy(cfg.combo_table, combo_table, sizeof(combo_table));
+    cfg.next_length = next_length;
 
+    double theta[NUM_PARAMS];
     double es_sigma = ES_SIGMA0;
     double es_m1[NUM_PARAMS] = { 0 };
     double es_m2[NUM_PARAMS] = { 0 };
     int resume_k = 0;
-    int saved_max_rounds = 0, saved_eval_matches = 0, saved_search_ms = 0;
-    unsigned saved_seed = 0;
-    bool has_saved_config = false;
-    if (load_state(data_file, resume_k, theta, es_sigma, es_m1, es_m2,
-                   saved_max_rounds, saved_eval_matches, saved_search_ms, saved_seed, has_saved_config))
+    CheckpointConfig saved_cfg;
+    int load_result = load_state(data_file, resume_k, theta, es_sigma, es_m1, es_m2,
+                                 saved_cfg);
+    if (load_result == CHECKPOINT_OK)
     {
-        if (has_saved_config && (saved_max_rounds != max_rounds || saved_eval_matches != games
-            || saved_search_ms != search_ms || saved_seed != seed))
+        if (!checkpoint_config_equal(saved_cfg, cfg))
         {
             std::printf("[TUNER] Checkpoint configuration mismatch:\n"
-                        "       saved: rounds=%d games=%d search_ms=%d seed=%u\n"
-                        "       requested: rounds=%d games=%d search_ms=%d seed=%u\n"
+                        "       saved: rounds=%d games=%d search_ms=%d seed=%u iters=%d reward_k=%.4f\n"
+                        "       requested: rounds=%d games=%d search_ms=%d seed=%u iters=%d reward_k=%.4f\n"
                         "       Delete %s for a fresh run.\n",
-                        saved_max_rounds, saved_eval_matches, saved_search_ms, saved_seed,
-                        max_rounds, games, search_ms, seed, data_file.c_str());
+                        saved_cfg.max_rounds, saved_cfg.eval_matches, saved_cfg.search_ms, saved_cfg.seed,
+                        saved_cfg.iters_per_move, saved_cfg.reward_k,
+                        cfg.max_rounds, cfg.eval_matches, cfg.search_ms, cfg.seed,
+                        cfg.iters_per_move, cfg.reward_k, data_file.c_str());
             return 1;
-        }
-        if (!has_saved_config)
-        {
-            std::printf("[TUNER] Warning: legacy checkpoint has no run configuration; verify rounds=%d, games=%d, search_ms=%d, seed=%u.\n",
-                        max_rounds, games, search_ms, seed);
         }
         if (resume_k >= num_iters)
         {
@@ -916,7 +1151,42 @@ int main(int argc, char *argv[])
     }
     else
     {
+        if (load_result == CHECKPOINT_CORRUPT)
+        {
+            std::fprintf(stderr, "[TUNER] warning: %s exists but is corrupt or an unsupported format; starting from zero weights.\n", data_file.c_str());
+            std::fprintf(stderr, "[TUNER] press Enter to continue, or Ctrl-C to abort.\n");
+            std::fflush(stderr);
+            std::string line;
+            std::getline(std::cin, line);
+        }
         std::printf("[TUNER] Starting fresh\n");
+    }
+
+    if (load_result != CHECKPOINT_OK)
+    {
+        if (!load_params(theta))
+        {
+            std::fprintf(stderr, "[TUNER] warning: %s missing or invalid; starting from zero weights.\n", param::filename("").c_str());
+            std::fprintf(stderr, "[TUNER] press Enter to continue with zero weights, or Ctrl-C to abort.\n");
+            std::fflush(stderr);
+            std::string line;
+            std::getline(std::cin, line);
+        }
+    }
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        theta[i] = std::isfinite(theta[i]) ? theta[i] : 0.0;
+    }
+
+    double best_theta[NUM_PARAMS];
+    if (param::read(best_theta, NUM_PARAMS, ""))
+    {
+        std::printf("[TUNER] Incumbent (validated best) loaded from %s\n", param::filename("").c_str());
+    }
+    else
+    {
+        std::memcpy(best_theta, theta, sizeof(best_theta));
+        std::printf("[TUNER] No incumbent; best_param.bin will be written after the first successful challenge\n");
     }
 
     double x[NUM_PARAMS];
@@ -966,6 +1236,8 @@ int main(int argc, char *argv[])
         {
             uint64_t scenario_seed = splitmix64(seed
                 ^ splitmix64((uint64_t)k * 0x94D049BB133111EBULL + (uint64_t)j));
+            uint64_t scenario_seed_a = splitmix64(scenario_seed);
+            uint64_t scenario_seed_b = splitmix64(scenario_seed ^ 0x9E3779B97F4A7C15ULL);
             MatchJob a{}, b{};
             for (size_t i = 0; i < NUM_PARAMS; ++i)
             {
@@ -977,7 +1249,10 @@ int main(int argc, char *argv[])
                 b.p1[i] = xm * param_scale[i];
                 b.p2[i] = xp * param_scale[i];
             }
-            a.scenario_seed = b.scenario_seed = scenario_seed;
+            a.scenario_seed_p1 = scenario_seed_a;
+            a.scenario_seed_p2 = scenario_seed_b;
+            b.scenario_seed_p1 = scenario_seed_b;
+            b.scenario_seed_p2 = scenario_seed_a;
             a.job_id = (size_t)2 * j;
             b.job_id = (size_t)2 * j + 1;
             a.swapped = false;
@@ -1066,43 +1341,12 @@ int main(int argc, char *argv[])
 
         double dx[NUM_PARAMS] = { 0 };
         double grad_norm = 0;
+        bool have_signal = nonzero_rewards > 0;
+        if (have_signal)
         {
-            // ---- paired mirrored ES + Adam (normalized space) ----
-            double g[NUM_PARAMS];
-            for (size_t i = 0; i < NUM_PARAMS; ++i)
-            {
-                g[i] = grad[i] / (2.0 * q * es_sigma);
-                grad_norm += g[i] * g[i];
-            }
-            grad_norm = std::sqrt(grad_norm);
-            double lr = ES_LR1 + 0.5 * (ES_LR0 - ES_LR1)
-                * (1.0 + std::cos(std::numbers::pi * std::min<double>(k, ES_LR_HORIZON) / ES_LR_HORIZON));
-            double beta1t = std::pow(ES_BETA1, k + 1);
-            double beta2t = std::pow(ES_BETA2, k + 1);
-            for (size_t i = 0; i < NUM_PARAMS; ++i)
-            {
-                es_m1[i] = ES_BETA1 * es_m1[i] + (1 - ES_BETA1) * g[i];
-                es_m2[i] = ES_BETA2 * es_m2[i] + (1 - ES_BETA2) * g[i] * g[i];
-                double mh = es_m1[i] / (1 - beta1t);
-                double vh = es_m2[i] / (1 - beta2t);
-                dx[i] = lr * mh / (std::sqrt(vh) + ES_EPS);
-                dx[i] = std::max(-ES_DX_MAX, std::min(ES_DX_MAX, dx[i]));
-            }
-            double l2 = 0;
-            for (size_t i = 0; i < NUM_PARAMS; ++i)
-            {
-                l2 += dx[i] * dx[i];
-            }
-            l2 = std::sqrt(l2);
-            if (l2 > ES_DX_L2_MAX)
-            {
-                for (size_t i = 0; i < NUM_PARAMS; ++i)
-                {
-                    dx[i] *= ES_DX_L2_MAX / l2;
-                }
-            }
-            es_sigma = std::max(ES_SIGMA_FLOOR, ES_SIGMA0 * std::exp(-(double)k / ES_SIGMA_TAU));
+            adam_update(grad, q, es_sigma, k, es_m1, es_m2, dx, grad_norm);
         }
+        es_sigma = std::max(ES_SIGMA_FLOOR, ES_SIGMA0 * std::exp(-(double)k / ES_SIGMA_TAU));
 
         // ---- update statistics (weak-signal diagnosis) ----
         double dx_norm = 0, dx_max = 0;
@@ -1123,9 +1367,27 @@ int main(int argc, char *argv[])
             theta[i] = x[i] * param_scale[i];
         }
 
-        save_state(data_file, k + 1, theta, es_sigma, es_m1, es_m2,
-                   max_rounds, games, search_ms, seed);
-        param::write(theta, NUM_PARAMS, "");
+        if (!save_state(data_file, k + 1, theta, es_sigma, es_m1, es_m2, cfg))
+        {
+            std::fprintf(stderr, "[TUNER] warning: failed to write checkpoint %s\n", data_file.c_str());
+        }
+        param::write_path(theta, NUM_PARAMS, "current_param.bin");
+
+        if ((k + 1) % CHALLENGE_EVERY == 0)
+        {
+            double challenge_score = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
+                                                   global_ai, view, view_index,
+                                                   CHALLENGE_SEED_BASE + (uint64_t)(k + 1), CHALLENGE_PAIRS);
+            std::printf("[ES]   challenge @ iter %d: score=%+.3f (candidate vs incumbent)\n",
+                        k + 1, challenge_score);
+            if (challenge_score > 0.0)
+            {
+                std::memcpy(best_theta, theta, sizeof(best_theta));
+                param::write_path(best_theta, NUM_PARAMS, "best_param.bin");
+                std::printf("[ES]   promoted candidate to best_param.bin\n");
+            }
+        }
+
         if ((k + 1) % 10 == 0 || k == resume_k)
         {
             auto now = std::chrono::steady_clock::now();
@@ -1142,12 +1404,15 @@ int main(int argc, char *argv[])
         std::fflush(stdout);
     }
 
-    param::write(theta, NUM_PARAMS, "");
-    save_state(data_file, num_iters, theta, es_sigma, es_m1, es_m2,
-               max_rounds, games, search_ms, seed);
+    param::write_path(theta, NUM_PARAMS, "current_param.bin");
+    if (!save_state(data_file, num_iters, theta, es_sigma, es_m1, es_m2, cfg))
+    {
+        std::fprintf(stderr, "[TUNER] warning: failed to write checkpoint %s\n", data_file.c_str());
+    }
 
     std::printf("\n[TUNER] Done. %d iterations completed\n", num_iters);
-    std::printf("[TUNER] Params saved to %s\n", param::filename("").c_str());
+    std::printf("[TUNER] Current params saved to %s\n", "current_param.bin");
+    std::printf("[TUNER] Validated best saved to %s\n", param::filename("").c_str());
     std::printf("[TUNER] theta:\n");
     for (size_t i = 0; i < NUM_PARAMS; ++i)
     {
