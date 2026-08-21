@@ -9,7 +9,7 @@ namespace param
 {
     inline std::string filename(std::string const &tag)
     {
-        return "best_io_param" + (tag.empty() ? "" : "_" + tag) + ".bin";
+        return "best_param" + (tag.empty() ? "" : "_" + tag) + ".bin";
     }
 
     inline std::string tag_filename(char const *base, std::string const &tag)

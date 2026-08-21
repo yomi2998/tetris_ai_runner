@@ -666,34 +666,16 @@ static bool load_state(std::string const &data_file, int &resume_k, double *thet
     {
         return false;
     }
-    char magic[8] = { 0 };
-    ifs.read(magic, 8);
-    if (std::memcmp(magic, "TETOPT3", 8) == 0 || std::memcmp(magic, "TETOPT2", 8) == 0)
-    {
-        int ver = 0;
-        ifs.read(reinterpret_cast<char *>(&ver), sizeof(ver));
-        ifs.read(reinterpret_cast<char *>(&resume_k), sizeof(resume_k));
-        if (std::memcmp(magic, "TETOPT3", 8) == 0 && ver >= 3)
-        {
-            ifs.read(reinterpret_cast<char *>(&saved_max_rounds), sizeof(saved_max_rounds));
-            ifs.read(reinterpret_cast<char *>(&saved_eval_matches), sizeof(saved_eval_matches));
-            ifs.read(reinterpret_cast<char *>(&saved_search_ms), sizeof(saved_search_ms));
-            ifs.read(reinterpret_cast<char *>(&saved_seed), sizeof(saved_seed));
-            has_run_config = true;
-        }
-        ifs.read(reinterpret_cast<char *>(theta), NUM_PARAMS * sizeof(double));
-        if (ver >= 2)
-        {
-            ifs.read(reinterpret_cast<char *>(&es_sigma), sizeof(es_sigma));
-            ifs.read(reinterpret_cast<char *>(es_m1), NUM_PARAMS * sizeof(double));
-            ifs.read(reinterpret_cast<char *>(es_m2), NUM_PARAMS * sizeof(double));
-        }
-        return true;
-    }
-    ifs.clear();
-    ifs.seekg(0);
     ifs.read(reinterpret_cast<char *>(&resume_k), sizeof(resume_k));
+    ifs.read(reinterpret_cast<char *>(&saved_max_rounds), sizeof(saved_max_rounds));
+    ifs.read(reinterpret_cast<char *>(&saved_eval_matches), sizeof(saved_eval_matches));
+    ifs.read(reinterpret_cast<char *>(&saved_search_ms), sizeof(saved_search_ms));
+    ifs.read(reinterpret_cast<char *>(&saved_seed), sizeof(saved_seed));
+    has_run_config = true;
     ifs.read(reinterpret_cast<char *>(theta), NUM_PARAMS * sizeof(double));
+    ifs.read(reinterpret_cast<char *>(&es_sigma), sizeof(es_sigma));
+    ifs.read(reinterpret_cast<char *>(es_m1), NUM_PARAMS * sizeof(double));
+    ifs.read(reinterpret_cast<char *>(es_m2), NUM_PARAMS * sizeof(double));
     return true;
 }
 
@@ -704,11 +686,6 @@ static void save_state(std::string const &data_file, int k, double const *theta,
     std::string tmp = data_file + ".tmp";
     {
         std::ofstream ofs(tmp, std::ios::binary);
-        ofs.write("TETOPT3", 8);
-        int ver = 3;
-        int algo = 1;  // paired mirrored ES (legacy field, kept for format compat)
-        ofs.write(reinterpret_cast<char const *>(&ver), sizeof(ver));
-        ofs.write(reinterpret_cast<char const *>(&algo), sizeof(algo));
         ofs.write(reinterpret_cast<char const *>(&k), sizeof(k));
         ofs.write(reinterpret_cast<char const *>(&max_rounds), sizeof(max_rounds));
         ofs.write(reinterpret_cast<char const *>(&eval_matches), sizeof(eval_matches));
@@ -935,7 +912,7 @@ int main(int argc, char *argv[])
                         "       Delete %s for a fresh start.\n", resume_k, num_iters, data_file.c_str());
             return 0;
         }
-        std::printf("[TUNER] Resumed from iteration %d (overrides best_io_param)\n", resume_k);
+        std::printf("[TUNER] Resumed from iteration %d (overrides best_param)\n", resume_k);
     }
     else
     {
