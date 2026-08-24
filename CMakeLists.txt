@@ -117,18 +117,6 @@ add_executable(${PROJECT_NAME}
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 
 
-add_executable(heuristic_features_test
-    src/heuristic_features_test.cpp
-    src/tetris_core.cpp
-    src/rule_toj.cpp
-    src/search_tspin.cpp
-    src/ai_zzz.cpp
-    src/integer_utils.cpp
-    src/random.cpp
-)
-target_include_directories(heuristic_features_test PRIVATE src)
-
-
 project(tuner)
 add_executable(${PROJECT_NAME}
     src/tuner.cpp
