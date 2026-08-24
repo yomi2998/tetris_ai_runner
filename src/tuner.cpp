@@ -602,17 +602,17 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
             }
             b1.init(jobs[idx].p1);
             b2.init(jobs[idx].p2);
-            std::function<void()> view_cb = [&, idx]()
+            uint32_t claim = (uint32_t)idx + 1;
+            std::function<void()> view_cb = [&, idx, claim]() mutable
             {
                 if (!view.load(std::memory_order_relaxed))
                 {
-                    uint32_t mine = (uint32_t)idx;
-                    view_index.compare_exchange_strong(mine, 0);
+                    view_index.compare_exchange_strong(claim, 0);
                     return;
                 }
                 uint32_t zero = 0;
-                view_index.compare_exchange_strong(zero, (uint32_t)idx);
-                if (view_index.load(std::memory_order_relaxed) != (uint32_t)idx)
+                view_index.compare_exchange_strong(zero, claim);
+                if (view_index.load(std::memory_order_relaxed) != claim)
                 {
                     return;
                 }
@@ -626,6 +626,7 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
                 }
             };
             MatchResult r = play_match(b1, b2, max_rounds, view_cb);
+            view_index.compare_exchange_strong(claim, 0);
             out[idx].winner = r.winner;
             out[idx].dead1 = r.dead1;
             out[idx].dead2 = r.dead2;
