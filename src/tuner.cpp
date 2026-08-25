@@ -1,6 +1,6 @@
 // Usage:
-//   tuner [num_iters] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [iters_per_move] [reward_k]
-//   tuner probe [batches] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [step] [iters_per_move] [reward_k]
+//   tuner [num_iters] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [iters_per_move]
+//   tuner probe [batches] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [step] [iters_per_move]
 
 #include <ctime>
 #include <cstring>
@@ -30,12 +30,11 @@ static int const combo_table_max = 10;
 size_t const NUM_PARAMS = 29;
 static int iters_per_move = 0;
 static int const next_length = 6;
-static double reward_k = 0.0;
 
 static double const param_scale[NUM_PARAMS] = {
-    2.0, 1.5, 2.5, 2.5, 1.5, 2.0, 0.05, 0.05, 1.0, 1.0,
-    0.01, 0.3, 2.0, 0.001, 0.001, 0.4, 0.2, 0.2, 0.3, 0.1,
-    0.1, 0.002, 0.08, 0.2, 0.1, 0.1, 0.3, 0.2, 0.15,
+    0.17, 2.8, 0.31, 0.97, 6.3, 6.8, 0.43, 0.18, 7.3, 8.15,
+    0.037, 2.64, 1.8, 0.00085, 0.0012, 1.4, 0.31, 0.24, 0.99, 0.48,
+    0.70, 0.0092, 0.058, 1.3, 0.22, 0.26, 0.59, 0.94, 0.68,
 };
 
 static uint64_t splitmix64(uint64_t x)
@@ -553,22 +552,9 @@ struct MatchOutcome
     double apl1, apl2;
 };
 
-static double paired_reward(MatchOutcome const &a, MatchOutcome const &b, double reward_k)
+static double paired_reward(MatchOutcome const &a, MatchOutcome const &b)
 {
-    int y1 = a.winner;
-    int y2 = -b.winner;
-    if (y1 != y2)
-    {
-        return 0.5 * (y1 - y2);
-    }
-    if (reward_k <= 0.0)
-    {
-        return 0.0;
-    }
-    double d1 = a.app1 - a.app2;
-    double d2 = b.app2 - b.app1;
-    double d = 0.5 * (d1 + d2);
-    return 0.5 * std::tanh(reward_k * d);
+    return 0.5 * (a.winner - b.winner);
 }
 
 // Runs every job to completion (no early cancellation); outcome.winner is
@@ -725,7 +711,7 @@ static double run_challenge(double const *candidate, double const *incumbent, in
     double score = 0;
     for (int j = 0; j < pairs; ++j)
     {
-        score += paired_reward(out[2 * j], out[2 * j + 1], 0.0);
+        score += paired_reward(out[2 * j], out[2 * j + 1]);
     }
     return score / pairs;
 }
@@ -749,7 +735,6 @@ struct CheckpointConfig
     int search_ms;
     unsigned seed;
     int iters_per_move;
-    double reward_k;
     double param_scale[NUM_PARAMS];
     int combo_table[combo_table_max];
     int next_length;
@@ -759,7 +744,7 @@ static bool checkpoint_config_equal(CheckpointConfig const &a, CheckpointConfig 
 {
     if (a.max_rounds != b.max_rounds || a.eval_matches != b.eval_matches
         || a.search_ms != b.search_ms || a.seed != b.seed
-        || a.iters_per_move != b.iters_per_move || a.reward_k != b.reward_k
+        || a.iters_per_move != b.iters_per_move
         || a.next_length != b.next_length)
     {
         return false;
@@ -810,7 +795,6 @@ static int load_state(std::string const &data_file, int &resume_k, double *theta
     ifs.read(reinterpret_cast<char *>(&saved_cfg.search_ms), sizeof(saved_cfg.search_ms));
     ifs.read(reinterpret_cast<char *>(&saved_cfg.seed), sizeof(saved_cfg.seed));
     ifs.read(reinterpret_cast<char *>(&saved_cfg.iters_per_move), sizeof(saved_cfg.iters_per_move));
-    ifs.read(reinterpret_cast<char *>(&saved_cfg.reward_k), sizeof(saved_cfg.reward_k));
     ifs.read(reinterpret_cast<char *>(saved_cfg.param_scale), sizeof(saved_cfg.param_scale));
     ifs.read(reinterpret_cast<char *>(saved_cfg.combo_table), sizeof(saved_cfg.combo_table));
     ifs.read(reinterpret_cast<char *>(&saved_cfg.next_length), sizeof(saved_cfg.next_length));
@@ -832,7 +816,7 @@ static int load_state(std::string const &data_file, int &resume_k, double *theta
     }
     size_t const payload_bytes = sizeof(resume_k) + sizeof(saved_cfg.max_rounds)
         + sizeof(saved_cfg.eval_matches) + sizeof(saved_cfg.search_ms) + sizeof(saved_cfg.seed)
-        + sizeof(saved_cfg.iters_per_move) + sizeof(saved_cfg.reward_k)
+        + sizeof(saved_cfg.iters_per_move)
         + sizeof(saved_cfg.param_scale) + sizeof(saved_cfg.combo_table)
         + sizeof(saved_cfg.next_length) + NUM_PARAMS * sizeof(double) * 3 + sizeof(es_sigma);
     std::vector<char> payload(payload_bytes);
@@ -843,7 +827,6 @@ static int load_state(std::string const &data_file, int &resume_k, double *theta
     std::memcpy(p, &saved_cfg.search_ms, sizeof(saved_cfg.search_ms)); p += sizeof(saved_cfg.search_ms);
     std::memcpy(p, &saved_cfg.seed, sizeof(saved_cfg.seed)); p += sizeof(saved_cfg.seed);
     std::memcpy(p, &saved_cfg.iters_per_move, sizeof(saved_cfg.iters_per_move)); p += sizeof(saved_cfg.iters_per_move);
-    std::memcpy(p, &saved_cfg.reward_k, sizeof(saved_cfg.reward_k)); p += sizeof(saved_cfg.reward_k);
     std::memcpy(p, saved_cfg.param_scale, sizeof(saved_cfg.param_scale)); p += sizeof(saved_cfg.param_scale);
     std::memcpy(p, saved_cfg.combo_table, sizeof(saved_cfg.combo_table)); p += sizeof(saved_cfg.combo_table);
     std::memcpy(p, &saved_cfg.next_length, sizeof(saved_cfg.next_length)); p += sizeof(saved_cfg.next_length);
@@ -876,7 +859,7 @@ static bool save_state(std::string const &data_file, int k, double const *theta,
 {
     size_t const payload_bytes = sizeof(k) + sizeof(cfg.max_rounds) + sizeof(cfg.eval_matches)
         + sizeof(cfg.search_ms) + sizeof(cfg.seed) + sizeof(cfg.iters_per_move)
-        + sizeof(cfg.reward_k) + sizeof(cfg.param_scale) + sizeof(cfg.combo_table)
+        + sizeof(cfg.param_scale) + sizeof(cfg.combo_table)
         + sizeof(cfg.next_length) + NUM_PARAMS * sizeof(double) * 3 + sizeof(es_sigma);
     std::vector<char> payload(payload_bytes);
     char *p = payload.data();
@@ -886,7 +869,6 @@ static bool save_state(std::string const &data_file, int k, double const *theta,
     std::memcpy(p, &cfg.search_ms, sizeof(cfg.search_ms)); p += sizeof(cfg.search_ms);
     std::memcpy(p, &cfg.seed, sizeof(cfg.seed)); p += sizeof(cfg.seed);
     std::memcpy(p, &cfg.iters_per_move, sizeof(cfg.iters_per_move)); p += sizeof(cfg.iters_per_move);
-    std::memcpy(p, &cfg.reward_k, sizeof(cfg.reward_k)); p += sizeof(cfg.reward_k);
     std::memcpy(p, cfg.param_scale, sizeof(cfg.param_scale)); p += sizeof(cfg.param_scale);
     std::memcpy(p, cfg.combo_table, sizeof(cfg.combo_table)); p += sizeof(cfg.combo_table);
     std::memcpy(p, &cfg.next_length, sizeof(cfg.next_length)); p += sizeof(cfg.next_length);
@@ -934,7 +916,6 @@ static int run_probe(int argc, char *argv[])
     if (argc > 7) max_rounds = std::stoi(argv[7]);
     if (argc > 8) step = std::stod(argv[8]);
     if (argc > 9) iters_per_move = std::stoi(argv[9]);
-    if (argc > 10) reward_k = std::stod(argv[10]);
     if (batches <= 0 || search_ms <= 0 || max_rounds <= 0 || step <= 0 || !std::isfinite(step))
     {
         std::println(stderr, "[PROBE] invalid arguments");
@@ -967,9 +948,8 @@ static int run_probe(int argc, char *argv[])
     std::atomic<bool> view{ false };
     std::atomic<uint32_t> view_index{ 0 };
 
-    std::println("[PROBE] fixed theta: {} batches, {} games/batch ({} directions), {} rounds/match, {} search, step={:.4f}, reward_k={}",
-                batches, 2 * q, q, max_rounds, iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), step,
-                reward_k > 0.0 ? std::to_string(reward_k) : "off(pure +-1)");
+    std::println("[PROBE] fixed theta: {} batches, {} games/batch ({} directions), {} rounds/match, {} search, step={:.4f}",
+                batches, 2 * q, q, max_rounds, iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), step);
     std::fflush(stdout);
 
     for (int k = 0; k < batches; ++k)
@@ -1013,7 +993,7 @@ static int run_probe(int argc, char *argv[])
         double avg_rounds = 0;
         for (int j = 0; j < q; ++j)
         {
-            double rj = paired_reward(out[2 * j], out[2 * j + 1], reward_k);
+            double rj = paired_reward(out[2 * j], out[2 * j + 1]);
             score += rj;
             for (size_t i = 0; i < NUM_PARAMS; ++i)
             {
@@ -1078,9 +1058,8 @@ int main(int argc, char *argv[])
     if (argc > 5) threads = std::stoi(argv[5]);
     if (argc > 6) max_rounds = std::stoi(argv[6]);
     if (argc > 7) iters_per_move = std::stoi(argv[7]);
-    if (argc > 8) reward_k = std::stod(argv[8]);
     if (num_iters <= 0 || eval_matches <= 0 || eval_matches == 1 || threads < 0
-        || iters_per_move < 0 || !std::isfinite(reward_k) || reward_k < 0.0)
+        || iters_per_move < 0)
     {
         std::println(stderr, "[TUNER] invalid arguments");
         return 1;
@@ -1116,7 +1095,6 @@ int main(int argc, char *argv[])
     cfg.search_ms = search_ms;
     cfg.seed = seed;
     cfg.iters_per_move = iters_per_move;
-    cfg.reward_k = reward_k;
     std::memcpy(cfg.param_scale, param_scale, sizeof(param_scale));
     std::memcpy(cfg.combo_table, combo_table, sizeof(combo_table));
     cfg.next_length = next_length;
@@ -1134,13 +1112,13 @@ int main(int argc, char *argv[])
         if (!checkpoint_config_equal(saved_cfg, cfg))
         {
             std::println("[TUNER] Checkpoint configuration mismatch:\n"
-                        "       saved: rounds={} games={} search_ms={} seed={} iters={} reward_k={:.4f}\n"
-                        "       requested: rounds={} games={} search_ms={} seed={} iters={} reward_k={:.4f}\n"
+                        "       saved: rounds={} games={} search_ms={} seed={} iters={}\n"
+                        "       requested: rounds={} games={} search_ms={} seed={} iters={}\n"
                         "       Delete {} for a fresh run.",
                         saved_cfg.max_rounds, saved_cfg.eval_matches, saved_cfg.search_ms, saved_cfg.seed,
-                        saved_cfg.iters_per_move, saved_cfg.reward_k,
+                        saved_cfg.iters_per_move,
                         cfg.max_rounds, cfg.eval_matches, cfg.search_ms, cfg.seed,
-                        cfg.iters_per_move, cfg.reward_k, data_file);
+                        cfg.iters_per_move, data_file);
             return 1;
         }
         if (resume_k >= num_iters)
@@ -1197,10 +1175,9 @@ int main(int argc, char *argv[])
         x[i] = theta[i] / param_scale[i];
     }
 
-    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, reward_k={}",
+    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}",
                 num_iters, 2 * q, q, max_rounds,
-                iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), seed, threads,
-                reward_k > 0.0 ? std::to_string(reward_k) : "off(pure +-1)");
+                iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), seed, threads);
     std::fflush(stdout);
 
     std::atomic<bool> view{ false };
@@ -1268,17 +1245,14 @@ int main(int argc, char *argv[])
         // ---- rewards: r_j = (wA - wB)/2, both from the x+eps perspective ----
         double score = 0;
         double grad[NUM_PARAMS] = { 0 };
-        std::vector<double> rewards;
-        rewards.reserve(q);
         double avg_rounds = 0;
         int deaths = 0;
         int capped_games = 0;
         int capped_apl_games = 0;
         for (int j = 0; j < q; ++j)
         {
-            double rj = paired_reward(out[2 * j], out[2 * j + 1], reward_k);
+            double rj = paired_reward(out[2 * j], out[2 * j + 1]);
             score += rj;
-            rewards.push_back(rj);
             for (size_t i = 0; i < NUM_PARAMS; ++i)
             {
                 grad[i] += rj * rademacher(seed, k, j, static_cast<int>(i));
@@ -1295,69 +1269,10 @@ int main(int argc, char *argv[])
         score /= q;
         avg_rounds /= 2 * q;
 
-        // ---- per-direction reward statistics (weak-signal diagnosis) ----
-        double reward_sum = 0, reward_sq = 0;
-        int nonzero_rewards = 0;
-        int draw_pairs = 0, draw_pairs_nonzero_app = 0;
-        int same_winner_pairs = 0, same_winner_p1 = 0, same_winner_p2 = 0, split_pairs = 0;
-        double max_app_diff = 0.0, max_apl_diff = 0.0;
-        for (int j = 0; j < q; ++j)
-        {
-            double rj = rewards[j];
-            reward_sum += rj;
-            reward_sq += rj * rj;
-            if (rj != 0.0)
-            {
-                ++nonzero_rewards;
-            }
-            MatchOutcome const &a = out[2 * j];
-            MatchOutcome const &b = out[2 * j + 1];
-            if (a.winner == 0 && b.winner == 0)
-            {
-                ++draw_pairs;
-                double dA = a.app1 - a.app2;
-                double dB = b.app2 - b.app1;
-                if (dA != 0.0 || dB != 0.0)
-                {
-                    ++draw_pairs_nonzero_app;
-                }
-                max_app_diff = std::max(max_app_diff, std::fabs(dA + dB));
-                max_apl_diff = std::max(max_apl_diff, std::fabs((a.apl1 - a.apl2) + (b.apl2 - b.apl1)));
-            }
-            else if (a.winner == b.winner)
-            {
-                ++same_winner_pairs;
-                if (a.winner == +1) ++same_winner_p1;
-                else if (a.winner == -1) ++same_winner_p2;
-            }
-            else
-            {
-                ++split_pairs;
-            }
-        }
-        double reward_mean = reward_sum / q;
-        double reward_var = std::max(0.0, reward_sq / q - reward_mean * reward_mean);
-        double reward_std = std::sqrt(reward_var);
-        double reward_sem = reward_std / std::sqrt(static_cast<double>(q));
-        double reward_snr = reward_std > 0 ? std::fabs(reward_mean) / reward_std : 0.0;
-
         double dx[NUM_PARAMS] = { 0 };
         double grad_norm = 0;
-        bool have_signal = nonzero_rewards > 0;
-        if (have_signal)
-        {
-            adam_update(grad, q, es_sigma, k, es_m1, es_m2, dx, grad_norm);
-        }
+        adam_update(grad, q, es_sigma, k, es_m1, es_m2, dx, grad_norm);
         es_sigma = std::max(ES_SIGMA_FLOOR, ES_SIGMA0 * std::exp(-static_cast<double>(k) / ES_SIGMA_TAU));
-
-        // ---- update statistics (weak-signal diagnosis) ----
-        double dx_norm = 0, dx_max = 0;
-        for (size_t i = 0; i < NUM_PARAMS; ++i)
-        {
-            dx_norm += dx[i] * dx[i];
-            dx_max = std::max(dx_max, std::fabs(dx[i]));
-        }
-        dx_norm = std::sqrt(dx_norm);
 
         for (size_t i = 0; i < NUM_PARAMS; ++i)
         {
@@ -1396,12 +1311,6 @@ int main(int argc, char *argv[])
             double sec = std::chrono::duration<double>(now - start_time).count();
             std::println("[ES]   iter {:5d} | score={:+.3f} | sigma={:.4f} | R={:.0f} D={} C={} CA={} | {:.1f}s",
                         k, score, es_sigma, avg_rounds, deaths, capped_games, capped_apl_games, sec);
-            std::println("[ES]        rewards: mean={:+.4f} std={:.4f} sem={:.4f} snr={:.3f} nz={}/{} | grad={:.4f} dx={:.4f} dxmax={:.4f}",
-                        reward_mean, reward_std, reward_sem, reward_snr, nonzero_rewards, q,
-                        grad_norm, dx_norm, dx_max);
-            std::println("[ES]        draws: pairs={} app_nonzero={} max_app_diff={:.4f} max_apl_diff={:.4f} | same_winner={}(p1={} p2={}) split={}",
-                        draw_pairs, draw_pairs_nonzero_app, max_app_diff, max_apl_diff,
-                        same_winner_pairs, same_winner_p1, same_winner_p2, split_pairs);
         }
         std::fflush(stdout);
     }
