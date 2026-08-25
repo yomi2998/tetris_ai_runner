@@ -15,6 +15,7 @@
 #include <numeric>
 #include <algorithm>
 #include <functional>
+#include <mutex>
 #include <numbers>
 #include <print>
 
@@ -560,7 +561,7 @@ static double paired_reward(MatchOutcome const &a, MatchOutcome const &b)
 // from p1's perspective.
 static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, int threads, int search_ms, int max_rounds,
                                            TunerEngine &global_ai, std::atomic<bool> &view,
-                                           std::atomic<uint32_t> &view_index)
+                                           std::mutex &view_mutex, std::atomic<uint32_t> &view_index)
 {
     std::vector<MatchOutcome> out(jobs.size());
     std::atomic<size_t> next_job{ 0 };
@@ -591,13 +592,16 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
             uint32_t claim = static_cast<uint32_t>(idx) + 1;
             std::function<void()> view_cb = [&, idx, claim]() mutable
             {
-                if (!view.load(std::memory_order_relaxed))
+                if (view.load(std::memory_order_relaxed)
+                    && view_index.load(std::memory_order_relaxed) == 0)
                 {
-                    view_index.compare_exchange_strong(claim, 0);
-                    return;
+                    std::lock_guard<std::mutex> lock(view_mutex);
+                    if (view.load(std::memory_order_relaxed)
+                        && view_index.load(std::memory_order_relaxed) == 0)
+                    {
+                        view_index.store(claim, std::memory_order_relaxed);
+                    }
                 }
-                uint32_t zero = 0;
-                view_index.compare_exchange_strong(zero, claim);
                 if (view_index.load(std::memory_order_relaxed) != claim)
                 {
                     return;
@@ -605,7 +609,13 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
                 render_view(b1, b2, "PLUS", "MINUS");
             };
             MatchResult r = play_match(b1, b2, max_rounds, view_cb);
-            view_index.compare_exchange_strong(claim, 0);
+            {
+                std::lock_guard<std::mutex> lock(view_mutex);
+                if (view_index.load(std::memory_order_relaxed) == claim)
+                {
+                    view_index.store(0, std::memory_order_relaxed);
+                }
+            }
             out[idx].winner = r.winner;
             out[idx].dead1 = r.dead1;
             out[idx].dead2 = r.dead2;
@@ -672,7 +682,8 @@ static void adam_update(double const *grad, int q, double es_sigma, int k,
 
 static double run_challenge(double const *candidate, double const *incumbent, int threads,
                            int search_ms, int max_rounds, TunerEngine &global_ai,
-                           std::atomic<bool> &view, std::atomic<uint32_t> &view_index,
+                           std::atomic<bool> &view, std::mutex &view_mutex,
+                           std::atomic<uint32_t> &view_index,
                            uint64_t challenge_seed, int pairs)
 {
     std::vector<MatchJob> jobs;
@@ -697,7 +708,7 @@ static double run_challenge(double const *candidate, double const *incumbent, in
         jobs.push_back(a);
         jobs.push_back(b);
     }
-    auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_index);
+    auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_mutex, view_index);
     double score = 0;
     for (int j = 0; j < pairs; ++j)
     {
@@ -937,6 +948,7 @@ static int run_probe(int argc, char *argv[])
     int gradient_sign_sum[NUM_PARAMS] = { 0 };
     std::atomic<bool> view{ false };
     std::atomic<uint32_t> view_index{ 0 };
+    std::mutex view_mutex;
 
     std::println("[PROBE] fixed theta: {} batches, {} games/batch ({} directions), {} rounds/match, {} search, step={:.4f}",
                 batches, 2 * q, q, max_rounds, iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), step);
@@ -973,7 +985,7 @@ static int run_probe(int argc, char *argv[])
             jobs.push_back(b);
         }
 
-        auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_index);
+        auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_mutex, view_index);
         double score = 0;
         double grad[NUM_PARAMS] = { 0 };
         int capped = 0;
@@ -1170,6 +1182,7 @@ int main(int argc, char *argv[])
 
     std::atomic<bool> view{ false };
     std::atomic<uint32_t> view_index{ 0 };
+    std::mutex view_mutex;
 
     // Stdin listener
     std::thread stdin_thread([&]()
@@ -1185,6 +1198,7 @@ int main(int argc, char *argv[])
             else if (line.empty())
             {
                 view = false;
+                std::lock_guard<std::mutex> lock(view_mutex);
                 view_index = 0;
             }
         }
@@ -1226,7 +1240,7 @@ int main(int argc, char *argv[])
             jobs.push_back(b);
         }
 
-        auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_index);
+        auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_mutex, view_index);
 
         // ---- rewards: r_j = (wA - wB)/2, both from the x+eps perspective ----
         double score = 0;
@@ -1279,7 +1293,7 @@ int main(int argc, char *argv[])
         if ((k + 1) % CHALLENGE_EVERY == 0)
         {
             double challenge_score = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
-                                                   global_ai, view, view_index,
+                                                   global_ai, view, view_mutex, view_index,
                                                    CHALLENGE_SEED_BASE + static_cast<uint64_t>(k + 1), CHALLENGE_PAIRS);
             std::println("[ES]   challenge @ iter {}: score={:+.3f} (candidate vs incumbent)",
                         k + 1, challenge_score);
@@ -1291,13 +1305,10 @@ int main(int argc, char *argv[])
             }
         }
 
-        if ((k + 1) % 10 == 0 || k == resume_k)
-        {
-            auto now = std::chrono::steady_clock::now();
-            double sec = std::chrono::duration<double>(now - start_time).count();
-            std::println("[ES]   iter {:5d} | score={:+.3f} | sigma={:.4f} | R={:.0f} D={} C={} CA={} | {:.1f}s",
-                        k, score, es_sigma, avg_rounds, deaths, capped_games, capped_apl_games, sec);
-        }
+        auto now = std::chrono::steady_clock::now();
+        double sec = std::chrono::duration<double>(now - start_time).count();
+        std::println("[ES]   iter {:5d} | score={:+.3f} | sigma={:.4f} | R={:.0f} D={} C={} CA={} | {:.1f}s",
+                    k, score, es_sigma, avg_rounds, deaths, capped_games, capped_apl_games, sec);
         std::fflush(stdout);
     }
 
