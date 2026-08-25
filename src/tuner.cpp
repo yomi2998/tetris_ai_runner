@@ -537,7 +537,6 @@ struct MatchJob
     uint64_t scenario_seed_p1;
     uint64_t scenario_seed_p2;
     size_t job_id;
-    bool swapped;
 };
 
 struct MatchOutcome
@@ -603,14 +602,7 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
                 {
                     return;
                 }
-                if (jobs[idx].swapped)
-                {
-                    render_view(b1, b2, "MINUS", "PLUS");
-                }
-                else
-                {
-                    render_view(b1, b2, "PLUS", "MINUS");
-                }
+                render_view(b1, b2, "PLUS", "MINUS");
             };
             MatchResult r = play_match(b1, b2, max_rounds, view_cb);
             view_index.compare_exchange_strong(claim, 0);
@@ -702,8 +694,6 @@ static double run_challenge(double const *candidate, double const *incumbent, in
         b.scenario_seed_p2 = sa;
         a.job_id = static_cast<size_t>(2) * j;
         b.job_id = static_cast<size_t>(2) * j + 1;
-        a.swapped = false;
-        b.swapped = true;
         jobs.push_back(a);
         jobs.push_back(b);
     }
@@ -979,8 +969,6 @@ static int run_probe(int argc, char *argv[])
             b.scenario_seed_p2 = scenario_seed_a;
             a.job_id = static_cast<size_t>(2) * j;
             b.job_id = static_cast<size_t>(2) * j + 1;
-            a.swapped = false;
-            b.swapped = true;
             jobs.push_back(a);
             jobs.push_back(b);
         }
@@ -1234,8 +1222,6 @@ int main(int argc, char *argv[])
             b.scenario_seed_p2 = scenario_seed_a;
             a.job_id = static_cast<size_t>(2) * j;
             b.job_id = static_cast<size_t>(2) * j + 1;
-            a.swapped = false;
-            b.swapped = true;
             jobs.push_back(a);
             jobs.push_back(b);
         }
