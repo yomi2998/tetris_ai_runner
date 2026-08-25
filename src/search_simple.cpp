@@ -70,9 +70,9 @@ namespace search_simple
         node_mark_filtered_.clear();
         if(node->land_point != nullptr && node->low >= map.roof)
         {
-            for(auto cit = node->land_point->begin(); cit != node->land_point->end(); ++cit)
+            for (auto const *land_point_node : *node->land_point)
             {
-                push(node_mark_filtered_, land_point_cache_, (*cit)->drop(map));
+                push(node_mark_filtered_, land_point_cache_, land_point_node->drop(map));
             }
         }
         else

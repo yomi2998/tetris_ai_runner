@@ -1,4 +1,4 @@
-﻿#ifdef _WIN32
+#ifdef _WIN32
 #define DECLSPEC_EXPORT __declspec(dllexport)
 #define WINAPI __stdcall
 #else
@@ -402,7 +402,7 @@ class QQTetrisSearch
 {
 
 public:
-    enum Config
+    enum class Config
     {
         Simple, Simulate, Path
     };
@@ -417,11 +417,11 @@ public:
     {
         switch (*config_ptr)
         {
-        case Simple:
+        case Config::Simple:
             return simple_.make_path(node, land_point, map);
-        case Simulate:
+        case Config::Simulate:
             return simulate_.make_path(node, land_point, map);
-        case Path:
+        case Config::Path:
             return path_.make_path(node, land_point, map);
         default:
             return std::vector<char>();
@@ -431,11 +431,11 @@ public:
     {
         switch (*config_ptr)
         {
-        case Simple:
+        case Config::Simple:
             return simple_.search(map, node, depth);
-        case Simulate:
+        case Config::Simulate:
             return simulate_.search(map, node, depth);
-        case Path:
+        case Config::Path:
             return path_.search(map, node, depth);
         default:
             empty_.resize(1);
@@ -492,15 +492,15 @@ extern "C" DECLSPEC_EXPORT int __cdecl QQTetrisAI(int boardW, int boardH, int bo
     }
     if (level == 10)
     {
-        *qq_ai.search_config() = QQTetrisSearch::Path;
+        *qq_ai.search_config() = QQTetrisSearch::Config::Path;
     }
     else if (mode == 0 || map.count <= boardW * 2)
     {
-        *qq_ai.search_config() = QQTetrisSearch::Simulate;
+        *qq_ai.search_config() = QQTetrisSearch::Config::Simulate;
     }
     else
     {
-        *qq_ai.search_config() = QQTetrisSearch::Simple;
+        *qq_ai.search_config() = QQTetrisSearch::Config::Simple;
     }
     qq_ai.ai_config()->level = level;
     qq_ai.ai_config()->mode = mode;

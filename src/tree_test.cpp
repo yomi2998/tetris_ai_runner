@@ -20,9 +20,9 @@ struct Node
 
 struct RBTreeInterface
 {
-    typedef int key_t;
-    typedef Node node_t;
-    typedef Node value_node_t;
+    using key_t = int;
+    using node_t = Node;
+    using value_node_t = Node;
     static key_t const &get_key(Node *node)
     {
         return node->value;
@@ -75,9 +75,9 @@ struct RBTreeInterface
 
 struct SBTreeInterface
 {
-    typedef int key_t;
-    typedef Node node_t;
-    typedef Node value_node_t;
+    using key_t = int;
+    using node_t = Node;
+    using value_node_t = Node;
     static key_t const &get_key(Node *node)
     {
         return node->value;
@@ -172,8 +172,8 @@ void tree_test()
     assert(sb.count(1) == 2);
     assert(sb.count(1, 2) == 4);
     assert(sb.count(1, 3) == 6);
-    assert(rb.range(1, 3) == std::make_pair(rb.find(1), rb.find(4)));
-    assert(sb.range(0, 2) == std::make_pair(sb.begin(), sb.begin() + 6));
+    assert(rb.range(1, 3) == std::pair{rb.find(1), rb.find(4)});
+    assert(sb.range(0, 2) == std::pair{sb.begin(), sb.begin() + 6});
     assert(sb.range(2, 3) == sb.slice(4, 8));
     assert(sb.range(0, length) == sb.slice());
     assert(sb.front() == &*sb.begin());
@@ -205,7 +205,7 @@ void tree_test()
     }
     for(int i = 0; i < length; ++i)
     {
-        typedef decltype(sb.begin()) iter_t;
+        using iter_t = decltype(sb.begin());
         int off = r.rand() % sb.size();
         iter_t it(sb.at(off));
         assert(it - sb.begin() == off);

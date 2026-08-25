@@ -1,4 +1,4 @@
-﻿/*
+/*
 * EGE (Easy Graphics Engine)
 * filename  random.cpp
 
@@ -6,8 +6,9 @@
 */
 
 #include <time.h>
+#include <cstdint>
 
-typedef unsigned int uint32;
+using uint32 = unsigned int;
 
 namespace ege
 {
@@ -112,7 +113,7 @@ namespace ege
 
         double real()
         {
-            return (double)rand() / ((double)(unsigned long)(-1L) + 1);
+            return static_cast<double>(rand()) / (static_cast<double>(static_cast<unsigned long>(-1L)) + 1);
         }
 
         // generates a random number on [0,1) with 53-bit resolution
@@ -192,15 +193,15 @@ namespace ege
     };
     mtrandom mtrand_help::r;
 
-    extern void mtsrand(uint32 s)
+    void mtsrand(uint32 s)
     {
         mtrand_help()(s);
     }
-    extern uint32 mtirand()
+    uint32 mtirand()
     {
         return mtrand_help()();
     }
-    extern double mtdrand()
+    double mtdrand()
     {
         return mtrand_help()(1.0);
     }
@@ -209,7 +210,7 @@ namespace ege
         randomize()
     {
         static uint32 add = 0;
-        mtsrand((uint32)time(NULL) + add++);
+        mtsrand(static_cast<uint32>(time(nullptr)) + add++);
     }
 
     unsigned int
@@ -221,7 +222,7 @@ namespace ege
         }
         else
         {
-            return (unsigned int)(mtdrand() * n);
+            return static_cast<unsigned int>(mtdrand() * n);
         }
     }
 

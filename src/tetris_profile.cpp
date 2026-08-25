@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <print>
 #include <random>
 #include <string>
 #include <vector>
@@ -69,7 +70,7 @@ namespace
     };
     size_t ProfiledSearch::searches = 0;
 
-    typedef m_tetris::TetrisEngine<rule_toj::TetrisRule, ProfiledTOJ, ProfiledSearch> Engine;
+    using Engine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ProfiledTOJ, ProfiledSearch>;
 
     ai_zzz::TOJ::Param const default_param = {
         10.507166148, 7.539860726, 13.048099725, 13.388476179, 6.728747539, 9.476881786,
@@ -114,7 +115,7 @@ namespace
             {
                 if (i + 1 >= argc)
                 {
-                    std::fprintf(stderr, "missing value for %s\n", name.c_str());
+                    std::println(stderr, "missing value for {}", name);
                     std::exit(1);
                 }
                 return argv[++i];
@@ -130,7 +131,7 @@ namespace
             else if (a == "--quiet") opt.quiet = true;
             else
             {
-                std::fprintf(stderr, "unknown option: %s\n", a.c_str());
+                std::println(stderr, "unknown option: {}", a);
                 std::exit(1);
             }
         }
@@ -170,7 +171,7 @@ int main(int argc, char **argv)
     Engine engine;
     if (!engine.prepare(10, 40))
     {
-        std::fprintf(stderr, "engine.prepare(10, 40) failed\n");
+        std::println(stderr, "engine.prepare(10, 40) failed");
         return 1;
     }
     engine.memory_limit(256ull << 20);
@@ -186,7 +187,7 @@ int main(int argc, char **argv)
     engine.ai_config()->param = default_param;
     if (!opt.param_file.empty() && !read_param_file(opt.param_file, engine.ai_config()->param))
     {
-        std::fprintf(stderr, "failed to read 29-double parameter file: %s\n", opt.param_file.c_str());
+        std::println(stderr, "failed to read 29-double parameter file: {}", opt.param_file);
         return 1;
     }
 
@@ -327,7 +328,7 @@ int main(int argc, char **argv)
 
     if (opt.quiet)
     {
-        std::printf("%zu %.3f %.3f %.3f %.3f %.3f %.3f %zu %zu %zu %zu %.0f %.0f %.0f %zu\n",
+        std::println("{} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {} {} {} {} {:.0f} {:.0f} {:.0f} {}",
             move_ms.size(), total_sec,
             move_ms.empty() ? 0 : *std::min_element(move_ms.begin(), move_ms.end()),
             move_ms.empty() ? 0 : pct(move_ms, 0.5), pct(move_ms, 0.95), pct(move_ms, 0.99),
@@ -337,29 +338,29 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    std::printf("=== TetrisEngine profile (rule_toj + ai_zzz::TOJ + search_tspin) ===\n");
-    std::printf("board 10x40, budget %s, maxdepth %zu, hold %s, seed %u\n",
-        opt.iters > 0 ? (std::to_string(opt.iters) + " iters [DETERMINISTIC]").c_str() : (std::to_string(budget_ms) + " ms/move").c_str(),
+    std::println("=== TetrisEngine profile (rule_toj + ai_zzz::TOJ + search_tspin) ===");
+    std::println("board 10x40, budget {}, maxdepth {}, hold {}, seed {}",
+        opt.iters > 0 ? (std::to_string(opt.iters) + " iters [DETERMINISTIC]") : (std::to_string(budget_ms) + " ms/move"),
         opt.maxdepth, opt.hold ? "on" : "off", opt.seed);
-    std::printf("moves: %zu (games completed: %zu, dead-moves: %zu)\n", move_ms.size(), games, dead_moves);
-    std::printf("total wall time: %.3f s\n", total_sec);
-    std::printf("per-move wall time [ms]: min %.3f | median %.3f | p95 %.3f | p99 %.3f | max %.3f | avg %.3f\n",
+    std::println("moves: {} (games completed: {}, dead-moves: {})", move_ms.size(), games, dead_moves);
+    std::println("total wall time: {:.3f} s", total_sec);
+    std::println("per-move wall time [ms]: min {:.3f} | median {:.3f} | p95 {:.3f} | p99 {:.3f} | max {:.3f} | avg {:.3f}",
         move_ms.empty() ? 0 : *std::min_element(move_ms.begin(), move_ms.end()),
         pct(move_ms, 0.5), pct(move_ms, 0.95), pct(move_ms, 0.99),
         move_ms.empty() ? 0 : *std::max_element(move_ms.begin(), move_ms.end()),
         total_sec * 1000.0 / std::max<size_t>(1, move_ms.size()));
-    std::printf("eval calls:  total %zu | per move avg %.1f | rate %.0f/s\n",
+    std::println("eval calls:  total {} | per move avg {:.1f} | rate {:.0f}/s",
         total_evals, double(total_evals) / std::max<size_t>(1, move_ms.size()), total_evals / total_sec);
-    std::printf("get  calls:  total %zu | per move avg %.1f | rate %.0f/s\n",
+    std::println("get  calls:  total {} | per move avg {:.1f} | rate {:.0f}/s",
         total_gets, double(total_gets) / std::max<size_t>(1, move_ms.size()), total_gets / total_sec);
-    std::printf("search calls:total %zu | per move avg %.1f | rate %.0f/s\n",
+    std::println("search calls:total {} | per move avg {:.1f} | rate {:.0f}/s",
         total_searches, double(total_searches) / std::max<size_t>(1, move_ms.size()), total_searches / total_sec);
     size_t node_sum = 0;
     for (size_t n : move_nodes) node_sum += n;
-    std::printf("tree node pool growth (new allocs): total %zu | per move avg %.1f\n", node_sum, double(node_sum) / std::max<size_t>(1, move_nodes.size()));
-    std::printf("engine memory usage: %llu bytes (%.1f MB)\n",
-        (unsigned long long)engine.memory_usage(), engine.memory_usage() / (1024.0 * 1024.0));
-    std::printf("game stats: clears %zu, attack %zu, final roof %d, b2b %d, combo %d\n",
+    std::println("tree node pool growth (new allocs): total {} | per move avg {:.1f}", node_sum, double(node_sum) / std::max<size_t>(1, move_nodes.size()));
+    std::println("engine memory usage: {} bytes ({:.1f} MB)",
+        engine.memory_usage(), engine.memory_usage() / (1024.0 * 1024.0));
+    std::println("game stats: clears {}, attack {}, final roof {}, b2b {}, combo {}",
         total_clear, total_attack, map.roof, b2b, combo);
     return 0;
 }

@@ -228,38 +228,38 @@ namespace rule_qq
             nullptr,
         };
 #undef T
-        info.insert(std::make_pair(std::make_pair('O', 0), op_O1));
-        info.insert(std::make_pair(std::make_pair('I', 0), op_I1));
-        info.insert(std::make_pair(std::make_pair('I', 1), op_I2));
-        info.insert(std::make_pair(std::make_pair('S', 0), op_S1));
-        info.insert(std::make_pair(std::make_pair('S', 1), op_S2));
-        info.insert(std::make_pair(std::make_pair('Z', 0), op_Z1));
-        info.insert(std::make_pair(std::make_pair('Z', 1), op_Z2));
-        info.insert(std::make_pair(std::make_pair('L', 0), op_L1));
-        info.insert(std::make_pair(std::make_pair('L', 1), op_L2));
-        info.insert(std::make_pair(std::make_pair('L', 2), op_L3));
-        info.insert(std::make_pair(std::make_pair('L', 3), op_L4));
-        info.insert(std::make_pair(std::make_pair('J', 0), op_J1));
-        info.insert(std::make_pair(std::make_pair('J', 1), op_J2));
-        info.insert(std::make_pair(std::make_pair('J', 2), op_J3));
-        info.insert(std::make_pair(std::make_pair('J', 3), op_J4));
-        info.insert(std::make_pair(std::make_pair('T', 0), op_T1));
-        info.insert(std::make_pair(std::make_pair('T', 1), op_T2));
-        info.insert(std::make_pair(std::make_pair('T', 2), op_T3));
-        info.insert(std::make_pair(std::make_pair('T', 3), op_T4));
+        info.emplace(std::pair{'O', 0}, op_O1);
+        info.emplace(std::pair{'I', 0}, op_I1);
+        info.emplace(std::pair{'I', 1}, op_I2);
+        info.emplace(std::pair{'S', 0}, op_S1);
+        info.emplace(std::pair{'S', 1}, op_S2);
+        info.emplace(std::pair{'Z', 0}, op_Z1);
+        info.emplace(std::pair{'Z', 1}, op_Z2);
+        info.emplace(std::pair{'L', 0}, op_L1);
+        info.emplace(std::pair{'L', 1}, op_L2);
+        info.emplace(std::pair{'L', 2}, op_L3);
+        info.emplace(std::pair{'L', 3}, op_L4);
+        info.emplace(std::pair{'J', 0}, op_J1);
+        info.emplace(std::pair{'J', 1}, op_J2);
+        info.emplace(std::pair{'J', 2}, op_J3);
+        info.emplace(std::pair{'J', 3}, op_J4);
+        info.emplace(std::pair{'T', 0}, op_T1);
+        info.emplace(std::pair{'T', 1}, op_T2);
+        info.emplace(std::pair{'T', 2}, op_T3);
+        info.emplace(std::pair{'T', 3}, op_T4);
         return info;
     }
 
     std::map<char, m_tetris::TetrisBlockStatus(*)(TetrisContext const *)> TetrisRule::get_generate()
     {
         std::map<char, m_tetris::TetrisBlockStatus(*)(TetrisContext const *)> info;
-        info.insert(std::make_pair('O', &game_generate_template<'O'>));
-        info.insert(std::make_pair('I', &game_generate_template<'I'>));
-        info.insert(std::make_pair('S', &game_generate_template<'S'>));
-        info.insert(std::make_pair('Z', &game_generate_template<'Z'>));
-        info.insert(std::make_pair('L', &game_generate_template<'L'>));
-        info.insert(std::make_pair('J', &game_generate_template<'J'>));
-        info.insert(std::make_pair('T', &game_generate_template<'T'>));
+        info.emplace('O', &game_generate_template<'O'>);
+        info.emplace('I', &game_generate_template<'I'>);
+        info.emplace('S', &game_generate_template<'S'>);
+        info.emplace('Z', &game_generate_template<'Z'>);
+        info.emplace('L', &game_generate_template<'L'>);
+        info.emplace('J', &game_generate_template<'J'>);
+        info.emplace('T', &game_generate_template<'T'>);
         return info;
     }
 

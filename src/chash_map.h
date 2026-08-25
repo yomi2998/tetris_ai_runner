@@ -6,15 +6,15 @@
 template<class key_t, class value_t, class unique_t, class hasher_t, class key_equal_t, class allocator_t>
 struct chash_map_config_t
 {
-    typedef key_t key_type;
-    typedef value_t mapped_type;
-    typedef std::pair<key_t const, value_t> value_type;
-    typedef hasher_t hasher;
-    typedef key_equal_t key_equal;
-    typedef allocator_t allocator_type;
-    typedef std::uintptr_t offset_type;
-    typedef std::invoke_result_t<hasher, key_type> hash_value_type;
-    typedef unique_t unique_type;
+    using key_type = key_t;
+    using mapped_type = value_t;
+    using value_type = std::pair<key_t const, value_t>;
+    using hasher = hasher_t;
+    using key_equal = key_equal_t;
+    using allocator_type = allocator_t;
+    using offset_type = std::uintptr_t;
+    using hash_value_type = std::invoke_result_t<hasher, key_type>;
+    using unique_type = unique_t;
     static float grow_proportion(std::size_t)
     {
         return 2;

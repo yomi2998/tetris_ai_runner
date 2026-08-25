@@ -4,13 +4,14 @@
 #include "tetris_core.h"
 #include <vector>
 #include <cstddef>
+#include <span>
 
 namespace search_tspin
 {
     class Search
     {
     public:
-        enum TSpinType
+        enum class TSpinType
         {
             None, TSpin, TSpinMini
         };
@@ -30,7 +31,7 @@ namespace search_tspin
             {
                 std::memset(this, 0, sizeof(*this));
             }
-            TetrisNodeWithTSpinType(m_tetris::TetrisNode const *_node) : node(_node), last(), type(None), flags()
+            TetrisNodeWithTSpinType(m_tetris::TetrisNode const *_node) : node(_node), last(), type(TSpinType::None), flags()
             {
 
             }
@@ -83,7 +84,7 @@ namespace search_tspin
         std::vector<m_tetris::TetrisNode const *> node_search_;
         m_tetris::TetrisNodeMark node_mark_;
         m_tetris::TetrisNodeMarkFiltered node_mark_filtered_;
-        uint32_t *block_data_;
+        std::span<uint32_t> block_data_;
         uint32_t block_data_buffer_[52];
         int x_diff_, y_diff_;
         Config const *config_;

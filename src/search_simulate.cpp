@@ -302,18 +302,18 @@ namespace search_simulate
         node_search_.clear();
         if(node->land_point != nullptr && node->low >= map.roof)
         {
-            for(auto cit = node->land_point->begin(); cit != node->land_point->end(); ++cit)
+            for (auto const *land_point_node : *node->land_point)
             {
-                TetrisNode const *land_point = (*cit)->drop(map);
+                TetrisNode const *land_point = land_point_node->drop(map);
                 if(node_mark_filtered_.mark(land_point))
                 {
                     land_point_cache_.push_back(land_point);
                 }
             }
             TetrisNode const *last_node = nullptr;
-            for(auto cit = land_point_cache_.begin(); cit != land_point_cache_.end(); ++cit)
+            for (auto const *land_point_node : land_point_cache_)
             {
-                node = *cit;
+                node = land_point_node;
                 if(last_node != nullptr)
                 {
                     if(last_node->status.r == node->status.r && std::abs(last_node->status.x - node->status.x) == 1 && std::abs(last_node->status.y - node->status.y) > 1)

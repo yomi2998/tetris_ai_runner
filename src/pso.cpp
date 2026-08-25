@@ -439,9 +439,9 @@ struct Node : public BaseNode
 
 struct SBTreeInterface
 {
-    typedef double key_t;
-    typedef BaseNode node_t;
-    typedef Node value_node_t;
+    using key_t = double;
+    using node_t = BaseNode;
+    using value_node_t = Node;
     static key_t const &get_key(Node *node)
     {
         return *reinterpret_cast<double const *>(&node->data.score);
@@ -948,7 +948,7 @@ int main(int argc, char const *argv[])
     };
 
     std::map<std::string, std::function<bool(std::vector<std::string> const &)>> command_map;
-    command_map.insert(std::make_pair("select", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    command_map.emplace("select", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         if (token.size() == 2)
         {
@@ -968,8 +968,8 @@ int main(int argc, char const *argv[])
             rank_table_lock.unlock();
         }
         return true;
-    }));
-    command_map.insert(std::make_pair("set", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("set", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         if (token.size() >= 3 && token.size() <= 5 && edit != nullptr)
         {
@@ -995,8 +995,8 @@ int main(int argc, char const *argv[])
             rank_table_lock.unlock();
         }
         return true;
-    }));
-    command_map.insert(std::make_pair("copy", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("copy", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         if (token.size() == 2 && token[1].size() < 64 && edit != nullptr)
         {
@@ -1012,8 +1012,8 @@ int main(int argc, char const *argv[])
             rank_table_lock.unlock();
         }
         return true;
-    }));
-    command_map.insert(std::make_pair("rank", [&rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("rank", [&rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         rank_table_lock.lock();
         size_t begin = 0, end = rank_table.size();
@@ -1034,13 +1034,13 @@ int main(int argc, char const *argv[])
         }
         rank_table_lock.unlock();
         return true;
-    }));
-    command_map.insert(std::make_pair("view", [&view](std::vector<std::string> const &token)
+    });
+    command_map.emplace("view", [&view](std::vector<std::string> const &token)
     {
         view = true;
         return true;
-    }));
-    command_map.insert(std::make_pair("best", [&rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("best", [&rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         if (token.size() != 2)
         {
@@ -1167,8 +1167,8 @@ int main(int argc, char const *argv[])
         }
         rank_table_lock.unlock();
         return true;
-    }));
-    command_map.insert(std::make_pair("save", [&file, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("save", [&file, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         rank_table_lock.lock();
         std::ofstream ofs(file, std::ios::out | std::ios::binary);
@@ -1181,8 +1181,8 @@ int main(int argc, char const *argv[])
         printf("%d node(s) saved\n", rank_table.size());
         rank_table_lock.unlock();
         return true;
-    }));
-    command_map.insert(std::make_pair("exit", [&file, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("exit", [&file, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         rank_table_lock.lock();
         std::ofstream ofs(file, std::ios::out | std::ios::binary);
@@ -1195,8 +1195,8 @@ int main(int argc, char const *argv[])
         rank_table_lock.unlock();
         exit(0);
         return true;
-    }));
-    command_map.insert(std::make_pair("help", [](std::vector<std::string> const &token)
+    });
+    command_map.emplace("help", [](std::vector<std::string> const &token)
     {
         printf(
             "help                 - ...\n"
@@ -1212,7 +1212,7 @@ int main(int argc, char const *argv[])
             "exit                 - save & exit\n"
         );
         return true;
-    }));
+    });
     std::string line, last;
     while (true)
     {

@@ -1,12 +1,12 @@
-﻿
+
 //misakamm那里得到的mt随机
 namespace ege
 {
 
-    typedef unsigned int uint32;
+    using uint32 = unsigned int;
 
-    const size_t N = 624;
-    const size_t M = 397;
+    constexpr size_t N = 624;
+    constexpr size_t M = 397;
 
     class mtrandom
     {
@@ -27,7 +27,7 @@ namespace ege
         uint32* next;
     };
 
-    extern void mtsrand(unsigned int s);
-    extern unsigned int mtirand();
-    extern double mtdrand();
+    void mtsrand(unsigned int s);
+    unsigned int mtirand();
+    double mtdrand();
 }

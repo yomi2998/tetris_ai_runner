@@ -11,20 +11,20 @@ namespace zzz
     class rb_tree : public bst_base<Interface>
     {
     public:
-        typedef bst_base<Interface> base_t;
-        typedef Interface interface_t;
-        typedef typename base_t::key_t key_t;
-        typedef typename base_t::node_t node_t;
-        typedef typename base_t::value_node_t value_node_t;
+        using base_t = bst_base<Interface>;
+        using interface_t = Interface;
+        using key_t = typename base_t::key_t;
+        using node_t = typename base_t::node_t;
+        using value_node_t = typename base_t::value_node_t;
         class iterator
         {
         public:
-            typedef std::bidirectional_iterator_tag iterator_category;
-            typedef node_t value_type;
-            typedef int difference_type;
-            typedef unsigned int distance_type;
-            typedef node_t *pointer;
-            typedef node_t reference;
+            using iterator_category = std::bidirectional_iterator_tag;
+            using value_type = node_t;
+            using difference_type = int;
+            using distance_type = unsigned int;
+            using pointer = node_t *;
+            using reference = node_t;
         public:
             iterator(node_t *node) : ptr_(node)
             {
@@ -105,8 +105,8 @@ namespace zzz
         }
         rb_tree &operator = (rb_tree const &other) = delete;
 
-        typedef std::pair<iterator, bool> pair_ib_t;
-        typedef std::pair<iterator, iterator> pair_ii_t;
+        using pair_ib_t = std::pair<iterator, bool>;
+        using pair_ii_t = std::pair<iterator, iterator>;
 
         pair_ib_t insert(value_node_t *node)
         {

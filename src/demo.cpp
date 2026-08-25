@@ -1,4 +1,4 @@
-﻿
+
 #define DECLSPEC_EXPORT __declspec(dllexport)
 #define WINAPI __stdcall
 
@@ -15,7 +15,7 @@ m_tetris::TetrisEngine<rule_st::TetrisRule, ai_easy::AI, search_simple::Search> 
 
 extern "C" void attach_init()
 {
-    ege::mtsrand(unsigned int(time(nullptr)));
+    ege::mtsrand(static_cast<unsigned int>(time(nullptr)));
 }
 
 //返回AI名字，会显示在界面上

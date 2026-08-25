@@ -818,7 +818,7 @@ namespace ai_misaka
                 }
                 if(0)
                 {
-                    double h = pool_h - (double)avg / pool_w;
+                    double h = pool_h - static_cast<double>(avg) / pool_w;
                     score += int(ai_param.miny_factor * h * h / pool_h);
                 }
                 else
@@ -833,7 +833,7 @@ namespace ai_misaka
                 {
                     if(avg < pool_w * center)
                     {
-                        warning_factor = 0.0 + (double)avg / pool_w / center / 1;
+                        warning_factor = 0.0 + static_cast<double>(avg) / pool_w / center / 1;
                     }
                 }
                 // 偏差值
@@ -858,7 +858,7 @@ namespace ai_misaka
                 }
                 {
                     //if ( t_clear > t_att ) {
-                    //int warning_factor = 0.5 + (double)avg / pool_w / center / 2;
+                    //int warning_factor = 0.5 + static_cast<double>(avg) / pool_w / center / 2;
                     s += int(warning_factor * t_clear * ai_param.clear_useless_factor);
                     //}
                 }
@@ -912,7 +912,7 @@ namespace ai_misaka
             //    int center = 10; // 摆楼警戒线
             //    double factor = 1;
             //    if ( avg < pool_w * center ) {
-            //        factor = (double)avg / pool_w / center;
+            //        factor = static_cast<double>(avg) / pool_w / center;
             //    }
             //    int s = 0;
             //    if ( pool_hole_score < last_pool_hole_score ) {

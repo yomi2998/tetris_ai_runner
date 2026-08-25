@@ -379,7 +379,7 @@ namespace m_tetris
             {
                 TetrisNode &node = *node_index_.find(check[check_index])->second;
                 node.index = check_index;
-                node.index_filtered = index_filter.insert(std::make_pair(node, uint32_t(check_index))).first->second;
+                node.index_filtered = index_filter.emplace(node, uint32_t(check_index)).first->second;
 #define ROTATE(func)\
 /**//**//**//**/do\
 /**//**//**//**/{\
@@ -475,7 +475,7 @@ namespace m_tetris
             TetrisNode node_generate;
             create(generate_[convert(i)](this), node_generate);
             TetrisNode const *node = generate_cache_[i] = get(node_generate.status);
-            place_cache_.insert(std::make_pair(node->status.t, std::vector<TetrisNode const *>()));
+            place_cache_.emplace(node->status.t, std::vector<TetrisNode const *>());
             std::vector<TetrisNode const *> *land_point = &place_cache_.find(node->status.t)->second;
             TetrisNode const *rotate = node;
             do
@@ -608,7 +608,7 @@ namespace m_tetris
 
     TetrisOpertion TetrisContext::get_opertion(char t, unsigned char r) const
     {
-        auto find = opertion_.find(std::make_pair(t, r));
+        auto find = opertion_.find(std::pair{t, r});
         if(find == opertion_.end())
         {
             TetrisOpertion empty = {};

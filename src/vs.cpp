@@ -1,4 +1,4 @@
-﻿
+
 #define DECLSPEC_EXPORT __declspec(dllexport)
 #define WINAPI __stdcall
 
@@ -96,11 +96,11 @@ struct tetris_game
             return 0;
         }
         ai = GetProcAddress(hDll, "_QQTetrisAI@44");
-        if(ai == NULL)
+        if(ai == nullptr)
         {
             ai = GetProcAddress(hDll, "QQTetrisAI@44");
         }
-        if(ai == NULL)
+        if(ai == nullptr)
         {
             ai = GetProcAddress(hDll, "QQTetrisAI");
         }
@@ -118,7 +118,7 @@ struct tetris_game
         }
         std::memset(path, 0, sizeof path);
         next.push_back(0);
-        ((ai_run_t)ai)(tetris_ai.context()->width(), tetris_ai.context()->height(), reinterpret_cast<int *>(map.row), next.data(), node->status.x, node->status.y, (4 - node->status.r) % 4, 10, 0, path, limit);
+        reinterpret_cast<ai_run_t>(ai)(tetris_ai.context()->width(), tetris_ai.context()->height(), reinterpret_cast<int *>(map.row), next.data(), node->status.x, node->status.y, (4 - node->status.r) % 4, 10, 0, path, limit);
         char *move = path, *move_end = path + sizeof path;
         next.pop_back();
         next.erase(next.begin());
@@ -336,20 +336,20 @@ int speed_test(unsigned int argc, wchar_t *argv[], wchar_t *eve[])
     }
     void *ai[2] = {};
     ai[0] = GetProcAddress(hDll, "_AIPath@36");
-    if(ai[0] == NULL)
+    if(ai[0] == nullptr)
     {
         ai[0] = GetProcAddress(hDll, "AIPath@36");
     }
-    if(ai[0] == NULL)
+    if(ai[0] == nullptr)
     {
         ai[0] = GetProcAddress(hDll, "AIPath");
     }
     ai[1] = GetProcAddress(hDll, "_AI@40");
-    if(ai[1] == NULL)
+    if(ai[1] == nullptr)
     {
         ai[1] = GetProcAddress(hDll, "AI@40");
     }
-    if(ai[1] == NULL)
+    if(ai[1] == nullptr)
     {
         ai[1] = GetProcAddress(hDll, "AI");
     }
@@ -428,7 +428,7 @@ int speed_test(unsigned int argc, wchar_t *argv[], wchar_t *eve[])
             std::memset(path, 0, 1024);
             typedef int(__stdcall *ai_run_t)(int boardW, int boardH, char board[], char curPiece, int curX, int curY, int curR, char *nextPiece, char path[]);
             char next[] = {'\0'};
-            ((ai_run_t)ai[version])(w, h, param_map, node->status.t, node->status.x + 1, node->status.y + 1, node->status.r + 1, next, path);
+            reinterpret_cast<ai_run_t>(ai[version])(w, h, param_map, node->status.t, node->status.x + 1, node->status.y + 1, node->status.r + 1, next, path);
             char *move = path, *move_end = path + 1024;
             //printf("%c->%s\n", node->status.t, path);
             while(move != move_end && *move != '\0')
@@ -496,7 +496,7 @@ int speed_test(unsigned int argc, wchar_t *argv[], wchar_t *eve[])
         {
             typedef int(__stdcall *ai_run_t)(int boardW, int boardH, char board[], char curPiece, int curX, int curY, int curR, char nextPiece, int *bestX, int *bestRotation);
             int best_x = node->status.x + 1, best_r = node->status.r + 1;
-            ((ai_run_t)ai[version])(w, h, param_map, node->status.t, best_x, node->status.y + 1, best_r, ' ', &best_x, &best_r);
+            reinterpret_cast<ai_run_t>(ai[version])(w, h, param_map, node->status.t, best_x, node->status.y + 1, best_r, ' ', &best_x, &best_r);
             --best_x;
             --best_r;
             int r = node->status.r;

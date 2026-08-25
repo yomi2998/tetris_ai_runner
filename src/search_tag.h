@@ -1,24 +1,25 @@
-﻿
+
 #pragma once
 
 #include "tetris_core.h"
 #include <vector>
+#include <span>
 
 namespace search_tag
 {
     class Search
     {
     public:
-        enum TSpinType
+        enum class TSpinType
         {
             None, TSpin
         };
         struct TetrisNodeWithTSpinType
         {
-            TetrisNodeWithTSpinType() : node(), last(), type(None), is_check(), is_last_rotate(), is_ready()
+            TetrisNodeWithTSpinType() : node(), last(), type(TSpinType::None), is_check(), is_last_rotate(), is_ready()
             {
             }
-            TetrisNodeWithTSpinType(m_tetris::TetrisNode const *_node) : node(_node), last(), type(None), is_check(), is_last_rotate(), is_ready()
+            TetrisNodeWithTSpinType(m_tetris::TetrisNode const *_node) : node(_node), last(), type(TSpinType::None), is_check(), is_last_rotate(), is_ready()
             {
 
             }
@@ -48,7 +49,7 @@ namespace search_tag
         std::vector<m_tetris::TetrisNode const *> node_search_;
         m_tetris::TetrisNodeMark node_mark_;
         m_tetris::TetrisNodeMarkFiltered node_mark_filtered_;
-        uint32_t *block_data_;
+        std::span<uint32_t> block_data_;
         uint32_t block_data_buffer_[52];
         int x_diff_, y_diff_;
         m_tetris::TetrisContext const *context_;

@@ -187,9 +187,9 @@ namespace search_path
         node_search_.clear();
         if(node->land_point != nullptr && node->low >= map.roof)
         {
-            for(auto cit = node->land_point->begin(); cit != node->land_point->end(); ++cit)
+            for (auto const *land_point_node : *node->land_point)
             {
-                TetrisNode const *drop_node = (*cit)->drop(map);
+                TetrisNode const *drop_node = land_point_node->drop(map);
                 if(node_mark_filtered_.mark(drop_node))
                 {
                     land_point_cache_.push_back(drop_node);

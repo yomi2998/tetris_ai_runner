@@ -11,7 +11,7 @@ namespace search_tspin
         config_ = config;
         node_mark_.init(context->node_max());
         node_mark_filtered_.init(context->node_max());
-        block_data_ = block_data_buffer_ + 10;
+        block_data_ = std::span(block_data_buffer_);
         std::memset(block_data_buffer_, 0, sizeof block_data_buffer_);
         TetrisNode const *node = context->generate('T');
         if (node != nullptr)
@@ -28,17 +28,17 @@ namespace search_tspin
                 y_diff_ = (top + bottom) / 2 - node->status.y;
                 for (int x = 1; x < context->width() - 1; ++x)
                 {
-                    block_data_[x - x_diff_] = (1 << (x - 1)) | (1 << (x + 1));
+                    block_data_[10 + x - x_diff_] = (1 << (x - 1)) | (1 << (x + 1));
                 }
-                block_data_[0 - x_diff_] = (1 << 1);
-                block_data_[context->width() - 1 - x_diff_] = (1 << (context->width() - 2));
+                block_data_[10 - x_diff_] = (1 << 1);
+                block_data_[10 + context->width() - 1 - x_diff_] = (1 << (context->width() - 2));
             }
         }
     }
 
     std::vector<char> Search::make_path(TetrisNode const *node, TetrisNodeWithTSpinType const &land_point, TetrisMap const &map)
     {
-        //if (land_point.type != None)
+        //if (land_point.type != TSpinType::None)
         //{
         //    printf("T-SPIN %d\n", land_point.type);
         //}
@@ -46,14 +46,14 @@ namespace search_tspin
         {
             return make_path_20g(node, land_point, map);
         }
-        if (land_point.type == None && node->index_filtered == land_point->index_filtered)
+        if (land_point.type == TSpinType::None && node->index_filtered == land_point->index_filtered)
         {
             return std::vector<char>();
         }
         bool allow_180 = config_->allow_180;
         bool allow_LR = config_->allow_LR;
         bool allow_D = config_->allow_D;
-        const int index = land_point.type == None || land_point.last == nullptr ? land_point->index_filtered : land_point.last->index_filtered;
+        const int index = land_point.type == TSpinType::None || land_point.last == nullptr ? land_point->index_filtered : land_point.last->index_filtered;
         auto build_path = [&land_point, &map, allow_180, this](TetrisNode const *node, decltype(node_mark_) &node_mark)->std::vector<char>
         {
             size_t node_index = node->index_filtered;
@@ -136,14 +136,14 @@ namespace search_tspin
             }
             return path;
         };
-        bool disable_d = land_point.type == None && node->land_point != nullptr && node->low >= map.roof && land_point->open(map);
+        bool disable_d = land_point.type == TSpinType::None && node->land_point != nullptr && node->low >= map.roof && land_point->open(map);
         while (true)
         {
             node_mark_.clear();
             node_search_.clear();
             node_search_.push_back(node);
             node_mark_.set(node, nullptr, '\0');
-            if (node->index_filtered == index || (land_point.type != None && node->index_filtered == land_point->index_filtered && config_->last_rotate))
+            if (node->index_filtered == index || (land_point.type != TSpinType::None && node->index_filtered == land_point->index_filtered && config_->last_rotate))
             {
                 return build_path(node, node_mark_);
             }
@@ -476,9 +476,9 @@ namespace search_tspin
         }
         if (!is_20g && node->land_point != nullptr && node->low >= map.roof)
         {
-            for (auto cit = node->land_point->begin(); cit != node->land_point->end(); ++cit)
+            for (auto const *land_point_node : *node->land_point)
             {
-                TetrisNode const *drop_node = (*cit)->drop(map);
+                TetrisNode const *drop_node = land_point_node->drop(map);
                 if (node_mark_filtered_.mark(drop_node))
                 {
                     land_point_cache_.push_back(drop_node);
@@ -710,14 +710,14 @@ namespace search_tspin
     std::vector<char> Search::make_path_20g(TetrisNode const *node, TetrisNodeWithTSpinType const &land_point, TetrisMap const &map)
     {
         node = node->drop(map);
-        if (land_point.type == None && node->index_filtered == land_point->index_filtered)
+        if (land_point.type == TSpinType::None && node->index_filtered == land_point->index_filtered)
         {
             return std::vector<char>();
         }
         bool allow_180 = config_->allow_180;
         bool allow_LR = config_->allow_LR;
         bool allow_D = config_->allow_D;
-        const int index = land_point.type == None || land_point.last == nullptr ? land_point->index_filtered : land_point.last->index_filtered;
+        const int index = land_point.type == TSpinType::None || land_point.last == nullptr ? land_point->index_filtered : land_point.last->index_filtered;
         auto build_path = [&land_point, &map, allow_180, this](TetrisNode const *node, decltype(node_mark_) &node_mark)->std::vector<char>
         {
             size_t node_index = node->index_filtered;
@@ -807,7 +807,7 @@ namespace search_tspin
         node_search_.clear();
         node_search_.push_back(node);
         node_mark_.set(node, nullptr, '\0');
-        if (node->index_filtered == index || (land_point.type != None && node->index_filtered == land_point->index_filtered && config_->last_rotate))
+        if (node->index_filtered == index || (land_point.type != TSpinType::None && node->index_filtered == land_point->index_filtered && config_->last_rotate))
         {
             return build_path(node, node_mark_);
         }
@@ -1098,10 +1098,10 @@ namespace search_tspin
     {
         int count;
         int y = node->status.y + y_diff_;
-        int row = block_data_[node->status.x];
+        int row = block_data_[10 + node->status.x];
         if (y == 0)
         {
-            return ZZZ_BitCount(map.row[1] & row) + 2 >= 3;
+            return zzz::BitCount(map.row[1] & row) + 2 >= 3;
         }
         else
         {
@@ -1114,7 +1114,7 @@ namespace search_tspin
             {
                 count = 0;
             }
-            return ZZZ_BitCount(map.row[y - 1] & row) + ZZZ_BitCount(map.row[y + 1] & row) + count >= 3;
+            return zzz::BitCount(map.row[y - 1] & row) + zzz::BitCount(map.row[y + 1] & row) + count >= 3;
         }
     }
 

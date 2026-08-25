@@ -1,4 +1,4 @@
-﻿
+
 #include "tetris_core.h"
 #include "search_tspin.h"
 
@@ -7,8 +7,8 @@ namespace ai_misaka
     class misaka
     {
     public:
-        typedef search_tspin::Search::TSpinType TSpinType;
-        typedef search_tspin::Search::TetrisNodeWithTSpinType TetrisNodeEx;
+        using TSpinType = search_tspin::Search::TSpinType;
+        using TetrisNodeEx = search_tspin::Search::TetrisNodeWithTSpinType;
         struct Config
         {
             int miny_factor; // 最高高度分

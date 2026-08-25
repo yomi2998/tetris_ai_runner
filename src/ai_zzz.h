@@ -1,4 +1,4 @@
-﻿
+
 #include "tetris_core.h"
 #include "search_tspin.h"
 #include <array>
@@ -91,8 +91,8 @@ namespace ai_zzz
     class TOJ_PC
     {
     public:
-        typedef search_tspin::Search::TSpinType TSpinType;
-        typedef search_tspin::Search::TetrisNodeWithTSpinType TetrisNodeEx;
+        using TSpinType = search_tspin::Search::TSpinType;
+        using TetrisNodeEx = search_tspin::Search::TetrisNodeWithTSpinType;
         struct Config
         {
             int const *table;
@@ -134,8 +134,8 @@ namespace ai_zzz
     class TOJ_v08
     {
     public:
-        typedef search_tspin::Search::TSpinType TSpinType;
-        typedef search_tspin::Search::TetrisNodeWithTSpinType TetrisNodeEx;
+        using TSpinType = search_tspin::Search::TSpinType;
+        using TetrisNodeEx = search_tspin::Search::TetrisNodeWithTSpinType;
         struct Config
         {
             int const *table;
@@ -188,8 +188,8 @@ namespace ai_zzz
     class TOJ
     {
     public:
-        typedef search_tspin::Search::TSpinType TSpinType;
-        typedef search_tspin::Search::TetrisNodeWithTSpinType TetrisNodeEx;
+        using TSpinType = search_tspin::Search::TSpinType;
+        using TetrisNodeEx = search_tspin::Search::TetrisNodeWithTSpinType;
         struct Param {
             double base = 40;
             double roof = 160;

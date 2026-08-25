@@ -1,4 +1,4 @@
-﻿
+
 #include <chrono>
 #include <thread>
 #include <string>
@@ -451,7 +451,7 @@ struct test_ai
         if(clear > 0)
         {
             new_point = combo;
-            if(result.target.type == search_tag::Search::TSpin)
+            if(result.target.type == search_tag::Search::TSpinType::TSpin)
             {
                 new_point += clear * 6;
             }
@@ -610,9 +610,9 @@ struct Node : public BaseNode
 
 struct SBTreeInterface
 {
-    typedef volatile double key_t;
-    typedef BaseNode node_t;
-    typedef Node value_node_t;
+    using key_t = volatile double;
+    using node_t = BaseNode;
+    using value_node_t = Node;
     static key_t const &get_key(Node *node)
     {
         return node->data.score;
@@ -905,7 +905,7 @@ int wmain(int argc, wchar_t const *argv[])
     };
 
     command_map.clear();
-    command_map.insert(std::make_pair("select", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    command_map.emplace("select", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         if(token.size() == 2)
         {
@@ -919,8 +919,8 @@ int wmain(int argc, wchar_t const *argv[])
             }
         }
         return true;
-    }));
-    command_map.insert(std::make_pair("set", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("set", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         if(token.size() == 3 && edit != nullptr)
         {
@@ -944,8 +944,8 @@ int wmain(int argc, wchar_t const *argv[])
             rank_table_lock.unlock();
         }
         return true;
-    }));
-    command_map.insert(std::make_pair("copy", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("copy", [&edit, &print_config, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         if(token.size() == 2 && token[1].size() < 64 && edit != nullptr)
         {
@@ -961,8 +961,8 @@ int wmain(int argc, wchar_t const *argv[])
             rank_table_lock.unlock();
         }
         return true;
-    }));
-    command_map.insert(std::make_pair("rank", [&rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("rank", [&rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         printf("-------------------------------------------------------------\n");
         rank_table_lock.lock();
@@ -985,8 +985,8 @@ int wmain(int argc, wchar_t const *argv[])
         rank_table_lock.unlock();
         printf("-------------------------------------------------------------\n");
         return true;
-    }));
-    command_map.insert(std::make_pair("reset", [&rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("reset", [&rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         printf("-------------------------------------------------------------\n");
         rank_table_lock.lock();
@@ -1000,13 +1000,13 @@ int wmain(int argc, wchar_t const *argv[])
         rank_table_lock.unlock();
         printf("-------------------------------------------------------------\n");
         return true;
-    }));
-    command_map.insert(std::make_pair("view", [&view](std::vector<std::string> const &token)
+    });
+    command_map.emplace("view", [&view](std::vector<std::string> const &token)
     {
         view = true;
         return true;
-    }));
-    command_map.insert(std::make_pair("save", [&file, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("save", [&file, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         rank_table_lock.lock();
         std::ofstream ofs(file, std::ios::out | std::ios::binary);
@@ -1019,8 +1019,8 @@ int wmain(int argc, wchar_t const *argv[])
         printf("%d node(s) saved\n", rank_table.size());
         rank_table_lock.unlock();
         return true;
-    }));
-    command_map.insert(std::make_pair("exit", [&file, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
+    });
+    command_map.emplace("exit", [&file, &rank_table, &rank_table_lock](std::vector<std::string> const &token)
     {
         rank_table_lock.lock();
         std::ofstream ofs(file, std::ios::out | std::ios::binary);
@@ -1033,8 +1033,8 @@ int wmain(int argc, wchar_t const *argv[])
         rank_table_lock.unlock();
         exit(0);
         return true;
-    }));
-    command_map.insert(std::make_pair("help", [](std::vector<std::string> const &token)
+    });
+    command_map.emplace("help", [](std::vector<std::string> const &token)
     {
         printf(
             "-------------------------------------------------------------\n"
@@ -1052,7 +1052,7 @@ int wmain(int argc, wchar_t const *argv[])
             "-------------------------------------------------------------\n"
             );
         return true;
-    }));
+    });
     while(true)
     {
         std::string line;

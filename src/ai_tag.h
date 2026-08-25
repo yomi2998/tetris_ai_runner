@@ -42,8 +42,8 @@ namespace ai_tag
     class the_ai_games
     {
     public:
-        typedef search_tag::Search::TSpinType TSpinType;
-        typedef search_tag::Search::TetrisNodeWithTSpinType TetrisNodeEx;
+        using TSpinType = search_tag::Search::TSpinType;
+        using TetrisNodeEx = search_tag::Search::TetrisNodeWithTSpinType;
         struct Config
         {
             double map_low_width;
@@ -101,8 +101,8 @@ namespace ai_tag
     class the_ai_games_enemy
     {
     public:
-        typedef search_tag::Search::TSpinType TSpinType;
-        typedef search_tag::Search::TetrisNodeWithTSpinType TetrisNodeEx;
+        using TSpinType = search_tag::Search::TSpinType;
+        using TetrisNodeEx = search_tag::Search::TetrisNodeWithTSpinType;
         struct Config
         {
             int *up_ptr;

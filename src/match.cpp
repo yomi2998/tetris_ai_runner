@@ -8,6 +8,7 @@
 #include <random>
 #include <thread>
 #include <fstream>
+#include <print>
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
@@ -103,7 +104,7 @@ namespace
                 if (try_load(c)) return true;
                 last_err = last_error_;
             }
-            std::printf("failed to load %s: %s\n", path, last_err.c_str());
+            std::println("failed to load {}: {}", path, last_err);
             return false;
         }
 
@@ -165,7 +166,7 @@ namespace
         std::ifstream ifs(path);
         if (!ifs.good())
         {
-            std::printf("no config file %s, using defaults\n", path);
+            std::println("no config file {}, using defaults", path);
             return;
         }
         nlohmann::json root;
@@ -175,7 +176,7 @@ namespace
         }
         catch (std::exception const &e)
         {
-            std::printf("invalid json config %s (%s), using defaults\n", path, e.what());
+            std::println("invalid json config {} ({}), using defaults", path, e.what());
             return;
         }
         cfg.ft = root.value("ft", cfg.ft);
@@ -194,7 +195,7 @@ namespace
         if (root.contains("combo_table") && root["combo_table"].is_array())
         {
             cfg.combo_table = root["combo_table"].get<std::vector<int>>();
-            cfg.combo_table_max = (int)cfg.combo_table.size();
+            cfg.combo_table_max = static_cast<int>(cfg.combo_table.size());
         }
         auto parse_player = [](nlohmann::json const &obj, PlayerConfig &pc)
         {
@@ -300,7 +301,7 @@ namespace
             {
                 next.erase(next.begin());
             }
-            while (next.size() <= (size_t)cfg->max_depth)
+            while (next.size() <= static_cast<size_t>(cfg->max_depth))
             {
                 for (size_t i = 0; i < context->type_max(); ++i)
                 {
@@ -468,11 +469,11 @@ namespace
                 return false;
             }
             m_tetris::TetrisMap pre_map = map;
-            clear_out = (int)node->attach(context, map);
+            clear_out = static_cast<int>(node->attach(context, map));
             spin_out = Spin::None;
             if (current == 'T' && last_rotate)
             {
-                switch (tspin_search.classify(pre_map, node, last_rotate, (size_t)clear_out))
+                switch (tspin_search.classify(pre_map, node, last_rotate, static_cast<size_t>(clear_out)))
                 {
                 case search_tspin::Search::TSpinType::TSpinMini:
                     spin_out = Spin::Mini;
@@ -705,29 +706,29 @@ namespace
     // ---------- display ----------
     void view(Player const &p1, Player const &p2)
     {
-        std::printf("\x1b[H\x1b[2J");
+        std::print("\x1b[H\x1b[2J");
         int up1 = 0, up2 = 0;
         for (int v : p1.recv_attack) up1 += v;
         for (int v : p2.recv_attack) up2 += v;
-        std::printf(
-            "HOLD=%c NEXT=%s COMBO=%d B2B=%d UP=%d P=%d L=%d A=%d APL=%.2f APP=%.2f %s W=%d\n"
-            "HOLD=%c NEXT=%s COMBO=%d B2B=%d UP=%d P=%d L=%d A=%d APL=%.2f APP=%.2f %s W=%d\n",
-            p1.hold, std::string(p1.next.begin() + 1, p1.next.begin() + 1 + p1.cfg->max_depth).c_str(),
-            p1.combo, p1.b2b, up1, p1.total_block, p1.total_clear, p1.total_attack, p1.apl(), p1.app(), p1.bot->name.c_str(), p1.games_won,
-            p2.hold, std::string(p2.next.begin() + 1, p2.next.begin() + 1 + p2.cfg->max_depth).c_str(),
-            p2.combo, p2.b2b, up2, p2.total_block, p2.total_clear, p2.total_attack, p2.apl(), p2.app(), p2.bot->name.c_str(), p2.games_won);
+        std::println(
+            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {} W={}\n"
+            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {} W={}",
+            p1.hold, std::string(p1.next.begin() + 1, p1.next.begin() + 1 + p1.cfg->max_depth),
+            p1.combo, p1.b2b, up1, p1.total_block, p1.total_clear, p1.total_attack, p1.apl(), p1.app(), p1.bot->name, p1.games_won,
+            p2.hold, std::string(p2.next.begin() + 1, p2.next.begin() + 1 + p2.cfg->max_depth),
+            p2.combo, p2.b2b, up2, p2.total_block, p2.total_clear, p2.total_attack, p2.apl(), p2.app(), p2.bot->name, p2.games_won);
         for (int y = 21; y >= 0; --y)
         {
             for (int x = 0; x < 10; ++x)
             {
-                std::printf("%s", p1.map.full(x, y) ? "[]" : "  ");
+                std::print("{}", p1.map.full(x, y) ? "[]" : "  ");
             }
-            std::printf("  ");
+            std::print("  ");
             for (int x = 0; x < 10; ++x)
             {
-                std::printf("%s", p2.map.full(x, y) ? "[]" : "  ");
+                std::print("{}", p2.map.full(x, y) ? "[]" : "  ");
             }
-            std::printf("\n");
+            std::println("");
         }
         std::fflush(stdout);
     }
@@ -821,13 +822,13 @@ namespace
 
 int main(int argc, char **argv)
 {
-    std::printf(
+    std::println(
         "usage: match [bot1] [bot2] [config]\n"
         "  match <config>        - bots from player1/player2.dllplugin in config\n"
         "  match <bot1> <bot2>   - bots from args, config = match.cfg\n"
         "  match <bot1> <bot2> <config>\n"
         "config (json): ft, delay, max_depth, pieces, seed, view, combo_table, telemetry, big_attack_threshold\n"
-        "per-player (json): player1/player2 { dllplugin, level }\n");
+        "per-player (json): player1/player2 {{ dllplugin, level }}");
 
     Config cfg;
     char const *config_arg = "match.cfg";
@@ -857,34 +858,34 @@ int main(int argc, char **argv)
     if (!cfg.bot2.empty()) cfg.p2.plugin = cfg.bot2;
     if (cfg.p1.plugin.empty() || cfg.p2.plugin.empty())
     {
-        std::printf("missing bot plugin for player %d (set dllplugin in %s or pass as argument)\n",
-            cfg.p1.plugin.empty() ? 1 : 2, config_path.c_str());
+        std::println("missing bot plugin for player {} (set dllplugin in {} or pass as argument)",
+            cfg.p1.plugin.empty() ? 1 : 2, config_path);
         return 1;
     }
     if (cfg.seed == 0)
     {
-        cfg.seed = (unsigned)std::time(nullptr);
+        cfg.seed = static_cast<unsigned>(std::time(nullptr));
     }
 
     Bot bot1, bot2;
     if (!bot1.load(cfg.p1.plugin.c_str()))
     {
-        std::printf("failed to load bot1: %s\n", cfg.p1.plugin.c_str());
+        std::println("failed to load bot1: {}", cfg.p1.plugin);
         return 1;
     }
     if (!bot2.load(cfg.p2.plugin.c_str()))
     {
-        std::printf("failed to load bot2: %s\n", cfg.p2.plugin.c_str());
+        std::println("failed to load bot2: {}", cfg.p2.plugin);
         return 1;
     }
 
-    std::printf("=== %s vs %s ===\n", bot1.name.c_str(), bot2.name.c_str());
-    std::printf(
-        "p1: %s level=%d\np2: %s level=%d\n"
-        "ft=%d delay=%d max_depth=%d pieces=%zu seed=%u view=%d\n",
-        cfg.p1.plugin.c_str(), cfg.p1.level,
-        cfg.p2.plugin.c_str(), cfg.p2.level,
-        cfg.ft, cfg.delay, cfg.max_depth, cfg.max_pieces, cfg.seed, (int)cfg.view);
+    std::println("=== {} vs {} ===", bot1.name, bot2.name);
+    std::println(
+        "p1: {} level={}\np2: {} level={}\n"
+        "ft={} delay={} max_depth={} pieces={} seed={} view={}",
+        cfg.p1.plugin, cfg.p1.level,
+        cfg.p2.plugin, cfg.p2.level,
+        cfg.ft, cfg.delay, cfg.max_depth, cfg.max_pieces, cfg.seed, static_cast<int>(cfg.view));
 
     FILE *telemetry = nullptr;
     if (!cfg.telemetry_file.empty())
@@ -892,7 +893,7 @@ int main(int argc, char **argv)
         telemetry = std::fopen(cfg.telemetry_file.c_str(), "w");
         if (telemetry == nullptr)
         {
-            std::printf("failed to open telemetry file: %s\n", cfg.telemetry_file.c_str());
+            std::println("failed to open telemetry file: {}", cfg.telemetry_file);
             return 1;
         }
             write_telemetry_header(telemetry);
@@ -901,7 +902,7 @@ int main(int argc, char **argv)
     m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_easy::AI, search_simple::Search> global_ai;
     if (!global_ai.prepare(10, 40))
     {
-        std::printf("engine prepare failed\n");
+        std::println("engine prepare failed");
         return 1;
     }
     m_tetris::TetrisContext const *context = global_ai.context().get();
@@ -921,9 +922,9 @@ int main(int argc, char **argv)
             write_telemetry_row(telemetry, games, game_result, p1, p2, bot1, bot2, cfg);
             std::fflush(telemetry);
         }
-        std::printf(
-            "game %d: %s vs %s -> %s  (pieces %d/%d lines %d/%d attack %d/%d apl %.2f/%.2f app %.2f/%.2f)\n",
-            games, bot1.name.c_str(), bot2.name.c_str(),
+        std::println(
+            "game {}: {} vs {} -> {}  (pieces {}/{} lines {}/{} attack {}/{} apl {:.2f}/{:.2f} app {:.2f}/{:.2f})",
+            games, bot1.name, bot2.name,
             game_result.winner == 1 ? "P1 WIN" : (game_result.winner == 2 ? "P2 WIN" : "draw"),
             p1.total_block, p2.total_block, p1.total_clear, p2.total_clear,
             p1.total_attack, p2.total_attack, p1.apl(), p2.apl(), p1.app(), p2.app());
@@ -946,8 +947,8 @@ int main(int argc, char **argv)
         std::fclose(telemetry);
     }
 
-    std::printf(
-        "=== match result: %s %d - %d %s (draws %d) ===\n",
-        bot1.name.c_str(), wins1, wins2, bot2.name.c_str(), draws);
+    std::println(
+        "=== match result: {} {} - {} {} (draws {}) ===",
+        bot1.name, wins1, wins2, bot2.name, draws);
     return wins1 >= wins2 ? 0 : 1;
 }

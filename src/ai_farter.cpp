@@ -10,7 +10,7 @@ using namespace m_tetris;
 
 namespace
 {
-    enum BlockStatus
+    enum class BlockStatus
     {
         /** Empty block, except which are all solid */
         BLK_EMPTY = 0,
@@ -33,11 +33,11 @@ namespace
             }
             for(int i = 0; i < max_height; ++i)
             {
-                row_count[i] = i < map->height ? ZZZ_BitCount(map->row[i]) : 0;
+                row_count[i] = i < map->height ? zzz::BitCount(map->row[i]) : 0;
             }
             for(int y = 0; y < node->height; ++y)
             {
-                row_count[node->row + y] += ZZZ_BitCount(node->data[y]);
+                row_count[node->row + y] += zzz::BitCount(node->data[y]);
             }
             block_count = 0;
             for(int x = node->col; x < node->col + node->width; ++x)
@@ -72,17 +72,17 @@ namespace
             y = fh - y - 1;
             if(x < 0 || x >= map->width || y < 0 || y >= map->height)
             {
-                return BLK_OOB;
+                return BlockStatus::BLK_OOB;
             }
             if((node_data[y] >> x) & 1)
             {
-                return BLK_NEW;
+                return BlockStatus::BLK_NEW;
             }
             if(map->full(x, y))
             {
-                return BLK_FORMER;
+                return BlockStatus::BLK_FORMER;
             }
-            return BLK_EMPTY;
+            return BlockStatus::BLK_EMPTY;
         }
 
         int count(int y)
@@ -106,11 +106,11 @@ namespace
                 {
                     continue;
                 }
-                if(get(x, y + j) != BLK_EMPTY)
+                if(get(x, y + j) != BlockStatus::BLK_EMPTY)
                 {
                     break;
                 }
-                else if(ingap || (get(x + 1, y + j) != BLK_EMPTY && get(x - 1, y + j) != BLK_EMPTY))
+                else if(ingap || (get(x + 1, y + j) != BlockStatus::BLK_EMPTY && get(x - 1, y + j) != BlockStatus::BLK_EMPTY))
                 {
                     gapdep++;
                     ingap = true;
@@ -158,23 +158,23 @@ namespace ai_farteryhr
         {
             int cx = fmap.block[i].x;
             int cy = fmap.block[i].y;
-            if(fmap.get(cx, cy - 1) == BLK_FORMER)
+            if(fmap.get(cx, cy - 1) == BlockStatus::BLK_FORMER)
             {
                 pts += 100;
             }
-            if(fmap.get(cx - 1, cy) == BLK_FORMER)
+            if(fmap.get(cx - 1, cy) == BlockStatus::BLK_FORMER)
             {
                 pts += 50;
             }
-            if(fmap.get(cx - 1, cy) == BLK_OOB)
+            if(fmap.get(cx - 1, cy) == BlockStatus::BLK_OOB)
             {
                 pts += 60;
             }
-            if(fmap.get(cx + 1, cy) == BLK_FORMER)
+            if(fmap.get(cx + 1, cy) == BlockStatus::BLK_FORMER)
             {
                 pts += 50;
             }
-            if(fmap.get(cx + 1, cy) == BLK_OOB)
+            if(fmap.get(cx + 1, cy) == BlockStatus::BLK_OOB)
             {
                 pts += 60;
             }
@@ -186,14 +186,14 @@ namespace ai_farteryhr
 
             pts -= (fh - cy - 1) * 50;
 
-            if(fmap.get(cx, cy + 1) == BLK_EMPTY)
+            if(fmap.get(cx, cy + 1) == BlockStatus::BLK_EMPTY)
                 pts -= 20;
 
             {
                 int maxgapside = 0;
                 for(int dx = -1; dx <= 1; dx += 2)
                 {
-                    if(fmap.get(cx + dx, cy) != BLK_EMPTY)
+                    if(fmap.get(cx + dx, cy) != BlockStatus::BLK_EMPTY)
                         continue;
                     int getgaptmp = fmap.getgapdep(cx + dx, cy);
                     if(maxgapside < getgaptmp)
@@ -216,7 +216,7 @@ namespace ai_farteryhr
                     pts -= 50;
                 }
 
-                if(fmap.get(cx, cy + 1) != BLK_EMPTY)
+                if(fmap.get(cx, cy + 1) != BlockStatus::BLK_EMPTY)
                 {
                     int gapcvr = 0;
                     gapcvr = fmap.getgapdep(cx, cy + 1);
@@ -235,16 +235,16 @@ namespace ai_farteryhr
             int dist;
             for(int j = 0; j < 4 && j + cy < fh; j++)
             { // look downward
-                if(fmap.get(cx, cy + j) != BLK_EMPTY)
+                if(fmap.get(cx, cy + j) != BlockStatus::BLK_EMPTY)
                 {
                     // solid, see how many in current line are empty
                     int emptyC = fw - fmap.count(cy + j);
                     sumempty += emptyC;
                     for(int dx = -1; dx <= 1; dx += 2)
                     {
-                        if(fmap.get(cx + dx, cy + j) == BLK_EMPTY)
+                        if(fmap.get(cx + dx, cy + j) == BlockStatus::BLK_EMPTY)
                         {
-                            if(fmap.get(cx + dx + dx, cy + j) != BLK_EMPTY)
+                            if(fmap.get(cx + dx + dx, cy + j) != BlockStatus::BLK_EMPTY)
                             {
                                 sumempty += 3;
                             }
@@ -262,11 +262,11 @@ namespace ai_farteryhr
                     }
                     if(dist == 0)
                         continue; //all clear above line j
-                    if(fmap.get(cx - 1, cy + j) != BLK_EMPTY || fmap.get(cx + 1, cy + j) != BLK_EMPTY)
+                    if(fmap.get(cx - 1, cy + j) != BlockStatus::BLK_EMPTY || fmap.get(cx + 1, cy + j) != BlockStatus::BLK_EMPTY)
                     {
                         for(int dx = -1; dx <= 1; dx += 2)
                         {
-                            if(fmap.get(cx + dx, cy) == BLK_EMPTY)
+                            if(fmap.get(cx + dx, cy) == BlockStatus::BLK_EMPTY)
                             {
                                 scrcover += 100 / dist;
                             }

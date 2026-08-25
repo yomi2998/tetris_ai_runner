@@ -1,4 +1,4 @@
-﻿
+
 #include "search_tag.h"
 #include "integer_utils.h"
 
@@ -11,7 +11,7 @@ namespace search_tag
         context_ = context;
         node_mark_.init(context->node_max());
         node_mark_filtered_.init(context->node_max());
-        block_data_ = block_data_buffer_ + 10;
+        block_data_ = std::span(block_data_buffer_);
         std::memset(block_data_buffer_, 0, sizeof block_data_buffer_);
         TetrisNode const *node = context->generate('T');
         if(node != nullptr)
@@ -28,17 +28,17 @@ namespace search_tag
                 y_diff_ = (top + bottom) / 2 - node->status.y;
                 for(int x = 1; x < context->width() - 1; ++x)
                 {
-                    block_data_[x - x_diff_] = (1 << (x - 1)) | (1 << (x + 1));
+                    block_data_[10 + x - x_diff_] = (1 << (x - 1)) | (1 << (x + 1));
                 }
-                block_data_[0 - x_diff_] = (1 << 1);
-                block_data_[context->width() - 1 - x_diff_] = (1 << (context->width() - 2));
+                block_data_[10 - x_diff_] = (1 << 1);
+                block_data_[10 + context->width() - 1 - x_diff_] = (1 << (context->width() - 2));
             }
         }
     }
 
     std::vector<char> Search::make_path(TetrisNode const *node, TetrisNodeWithTSpinType const &land_point, TetrisMap const &map)
     {
-        if(land_point.type == None && node->index_filtered == land_point->index_filtered)
+        if(land_point.type == TSpinType::None && node->index_filtered == land_point->index_filtered)
         {
             return std::vector<char>();
         }
@@ -59,7 +59,7 @@ namespace search_tag
                 path.push_back(result.second);
             }
             std::reverse(path.begin(), path.end());
-            if(land_point.type != None && (path.empty() || (path.back() != 'c' && path.back() != 'z')))
+            if(land_point.type != TSpinType::None && (path.empty() || (path.back() != 'c' && path.back() != 'z')))
             {
                 path = make_path(raw_node, land_point.last, map);
                 TetrisNode const *last = land_point.last;
@@ -175,9 +175,9 @@ namespace search_tag
         }
         if(node->land_point != nullptr && node->low >= map.roof)
         {
-            for(auto cit = node->land_point->begin(); cit != node->land_point->end(); ++cit)
+            for (auto const *land_point_node : *node->land_point)
             {
-                TetrisNode const *drop_node = (*cit)->drop(map);
+                TetrisNode const *drop_node = land_point_node->drop(map);
                 if(node_mark_filtered_.mark(drop_node))
                 {
                     land_point_cache_.push_back(drop_node);
@@ -386,10 +386,10 @@ namespace search_tag
     {
         int count;
         int y = node->status.y + y_diff_;
-        int row = block_data_[node->status.x];
+        int row = block_data_[10 + node->status.x];
         if(y == 0)
         {
-            return ZZZ_BitCount(map.row[1] & row) + 2 >= 3;
+            return zzz::BitCount(map.row[1] & row) + 2 >= 3;
         }
         else
         {
@@ -402,7 +402,7 @@ namespace search_tag
             {
                 count = 0;
             }
-            return ZZZ_BitCount(map.row[y - 1] & row) + ZZZ_BitCount(map.row[y + 1] & row) + count >= 3;
+            return zzz::BitCount(map.row[y - 1] & row) + zzz::BitCount(map.row[y + 1] & row) + count >= 3;
         }
     }
 }

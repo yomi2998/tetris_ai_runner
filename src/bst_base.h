@@ -1,4 +1,4 @@
-﻿
+
 #pragma once
 
 #include <iterator>
@@ -10,14 +10,14 @@ namespace zzz
     class bst_base
     {
     public:
-        typedef Interface interface_t;
-        typedef typename interface_t::key_t key_t;
-        typedef typename interface_t::node_t node_t;
-        typedef typename interface_t::value_node_t value_node_t;
+        using interface_t = Interface;
+        using key_t = typename interface_t::key_t;
+        using node_t = typename interface_t::node_t;
+        using value_node_t = typename interface_t::value_node_t;
     protected:
         bst_base()
         {
-            static_assert(std::is_base_of<node_t, value_node_t>::value, "node_t must be base of value_node_t");
+            static_assert(std::is_base_of_v<node_t, value_node_t>, "node_t must be base of value_node_t");
             set_nil_(nil_(), true);
             set_root_(nil_());
             set_most_left_(nil_());
@@ -111,7 +111,7 @@ namespace zzz
         template<bool is_left>
         static void set_child_(node_t *node, node_t *child)
         {
-            if(is_left)
+            if constexpr (is_left)
             {
                 set_left_(node, child);
             }
@@ -124,7 +124,7 @@ namespace zzz
         template<bool is_left>
         static node_t *get_child_(node_t *node)
         {
-            if(is_left)
+            if constexpr (is_left)
             {
                 return get_left_(node);
             }

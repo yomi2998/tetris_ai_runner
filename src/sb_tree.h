@@ -42,19 +42,19 @@ namespace zzz
         using base_t::bst_upper_bound_;
         using base_t::bst_equal_range_;
         using base_t::bst_rotate_;
-        typedef typename base_t::key_t key_t;
+        using key_t = typename base_t::key_t;
 
 
     public:
         class iterator
         {
         public:
-            typedef std::random_access_iterator_tag iterator_category;
-            typedef node_t value_type;
-            typedef int difference_type;
-            typedef unsigned int distance_type;
-            typedef node_t *pointer;
-            typedef node_t reference;
+            using iterator_category = std::random_access_iterator_tag;
+            using value_type = node_t;
+            using difference_type = int;
+            using distance_type = unsigned int;
+            using pointer = node_t *;
+            using reference = node_t;
         public:
             iterator(node_t *node) : ptr_(node)
             {
@@ -144,8 +144,8 @@ namespace zzz
         sb_tree(sb_tree const &other) = delete;
         sb_tree &operator = (sb_tree const &other) = delete;
 
-        typedef std::pair<iterator, bool> pair_ib_t;
-        typedef std::pair<iterator, iterator> pair_ii_t;
+        using pair_ib_t = std::pair<iterator, bool>;
+        using pair_ii_t = std::pair<iterator, iterator>;
 
         pair_ib_t insert(value_node_t *node)
         {

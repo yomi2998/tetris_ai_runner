@@ -59,14 +59,14 @@ namespace ai_tag
             {
                 ++ColTrans;
             }
-            ColTrans += ZZZ_BitCount((map.row[y] ^ (map.row[y] << 1)) & col_mask_);
+            ColTrans += zzz::BitCount((map.row[y] ^ (map.row[y] << 1)) & col_mask_);
             if(y != 0)
             {
-                RowTrans += ZZZ_BitCount(map.row[y - 1] ^ map.row[y]);
+                RowTrans += zzz::BitCount(map.row[y - 1] ^ map.row[y]);
             }
         }
-        RowTrans += ZZZ_BitCount(row_mask_ & ~map.row[0]);
-        RowTrans += ZZZ_BitCount(map.roof == map.height ? row_mask_ & ~map.row[map.roof - 1] : map.row[map.roof - 1]);
+        RowTrans += zzz::BitCount(row_mask_ & ~map.row[0]);
+        RowTrans += zzz::BitCount(map.roof == map.height ? row_mask_ & ~map.row[map.roof - 1] : map.row[map.roof - 1]);
         struct
         {
             int HoleCount;
@@ -95,7 +95,7 @@ namespace ai_tag
             int LineHole = v.LineCoverBits ^ map.row[y];
             if(LineHole != 0)
             {
-                v.HoleCount += ZZZ_BitCount(LineHole);
+                v.HoleCount += zzz::BitCount(LineHole);
                 v.HoleLine++;
                 if(HolePosy0 == -1)
                 {
@@ -157,7 +157,7 @@ namespace ai_tag
             }
             if(MaxWellWidth >= 1 && MaxWellWidth <= 6)
             {
-                if(ZZZ_BitCount(map.row[y]) + MaxWellWidth == map.width)
+                if(zzz::BitCount(map.row[y]) + MaxWellWidth == map.width)
                 {
                     v.WideWellDepth[MaxWellWidth - 1] += 2;
                 }
@@ -176,7 +176,7 @@ namespace ai_tag
                 {
                     break;
                 }
-                v.ClearWidth0 += (y + 1) * ZZZ_BitCount(CheckLine);
+                v.ClearWidth0 += (y + 1) * zzz::BitCount(CheckLine);
             }
             if(HolePosy1 >= 0)
             {
@@ -187,7 +187,7 @@ namespace ai_tag
                     {
                         break;
                     }
-                    v.ClearWidth1 += (y + 1) * ZZZ_BitCount(CheckLine);
+                    v.ClearWidth1 += (y + 1) * zzz::BitCount(CheckLine);
                 }
                 if(HolePosy2 >= 0)
                 {
@@ -198,7 +198,7 @@ namespace ai_tag
                         {
                             break;
                         }
-                        v.ClearWidth2 += (y + 1) * ZZZ_BitCount(CheckLine);
+                        v.ClearWidth2 += (y + 1) * zzz::BitCount(CheckLine);
                     }
                 }
             }
@@ -419,14 +419,14 @@ namespace ai_tag
             {
                 ++ColTrans;
             }
-            ColTrans += ZZZ_BitCount((map.row[y] ^ (map.row[y] << 1)) & col_mask_);
+            ColTrans += zzz::BitCount((map.row[y] ^ (map.row[y] << 1)) & col_mask_);
             if(y != 0)
             {
-                RowTrans += ZZZ_BitCount(map.row[y - 1] ^ map.row[y]);
+                RowTrans += zzz::BitCount(map.row[y - 1] ^ map.row[y]);
             }
         }
-        RowTrans += ZZZ_BitCount(row_mask_ & ~map.row[0]);
-        RowTrans += ZZZ_BitCount(map.roof == map.height ? row_mask_ & ~map.row[map.roof - 1] : map.row[map.roof - 1]);
+        RowTrans += zzz::BitCount(row_mask_ & ~map.row[0]);
+        RowTrans += zzz::BitCount(map.roof == map.height ? row_mask_ & ~map.row[map.roof - 1] : map.row[map.roof - 1]);
         struct
         {
             int HoleCount;
@@ -449,7 +449,7 @@ namespace ai_tag
             int LineHole = v.LineCoverBits ^ map.row[y];
             if(LineHole != 0)
             {
-                v.HoleCount += ZZZ_BitCount(LineHole);
+                v.HoleCount += zzz::BitCount(LineHole);
                 v.HoleLine++;
                 for(int hy = y + 1; hy < map.roof; ++hy)
                 {
@@ -458,7 +458,7 @@ namespace ai_tag
                     {
                         break;
                     }
-                    v.ClearWidth += ZZZ_BitCount(CheckLine);
+                    v.ClearWidth += zzz::BitCount(CheckLine);
                 }
             }
             for(int x = 1; x < width_m1; ++x)
@@ -624,14 +624,14 @@ namespace ai_tag
         if(((row0 >> x) & 7) == 5)
         {
             value += 3;
-            if(ZZZ_BitCount(row0) == map.width - 1)
+            if(zzz::BitCount(row0) == map.width - 1)
             {
                 value += 3;
             }
             if(((((~row1) & row2) >> x) & ~7) == 0 && ((row1 >> x) & 7) == 0)
             {
                 value += 4;
-                if(ZZZ_BitCount(row1) == map.width - 3)
+                if(zzz::BitCount(row1) == map.width - 3)
                 {
                     value += 4;
                 }
@@ -646,7 +646,7 @@ namespace ai_tag
         for(y += 2; y < map.roof; ++y)
         {
             mask |= ((map.row[y] >> x) & 7);
-            if(ZZZ_BitCount(mask) > 1)
+            if(zzz::BitCount(mask) > 1)
             {
                 return 0;
             }
