@@ -96,10 +96,10 @@ static char const *const param_names[NUM_PARAMS] = {
 // Paired mirrored ES (OpenAI-ES style with antithetic seat-swapped pairs):
 static double const ES_SIGMA0 = 0.30;
 static double const ES_SIGMA_FLOOR = 0.08;
-static double const ES_SIGMA_TAU = 2000.0;
+static double const ES_SIGMA_FLOOR_FRACTION = 0.7;
 static double const ES_LR0 = 0.025;
 static double const ES_LR1 = 0.004;
-static double const ES_LR_HORIZON = 5000.0;
+static double const ES_LR_FRACTION = 0.7;
 static double const ES_BETA1 = 0.9;
 static double const ES_BETA2 = 0.999;
 static double const ES_EPS = 1e-8;
@@ -642,7 +642,7 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
     return out;
 }
 
-static void adam_update(double const *grad, int q, double es_sigma, int k,
+static void adam_update(double const *grad, int q, double es_sigma, int k, double lr_progress,
                         double *es_m1, double *es_m2, double *dx, double &grad_norm)
 {
     double g[NUM_PARAMS];
@@ -652,8 +652,8 @@ static void adam_update(double const *grad, int q, double es_sigma, int k,
         grad_norm += g[i] * g[i];
     }
     grad_norm = std::sqrt(grad_norm);
-    double lr = ES_LR1 + 0.5 * (ES_LR0 - ES_LR1)
-        * (1.0 + std::cos(std::numbers::pi * std::min<double>(k, ES_LR_HORIZON) / ES_LR_HORIZON));
+    double t = std::min(1.0, lr_progress / ES_LR_FRACTION);
+    double lr = ES_LR1 + 0.5 * (ES_LR0 - ES_LR1) * (1.0 + std::cos(std::numbers::pi * t));
     double beta1t = std::pow(ES_BETA1, k + 1);
     double beta2t = std::pow(ES_BETA2, k + 1);
     for (size_t i = 0; i < NUM_PARAMS; ++i)
@@ -1175,9 +1175,12 @@ int main(int argc, char *argv[])
         x[i] = theta[i] / param_scale[i];
     }
 
-    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}",
+    double const progress_scale = 1.0 / static_cast<double>(std::max(1, num_iters - 1));
+
+    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, lr_frac={:.2f}, sigma_frac={:.2f}",
                 num_iters, 2 * q, q, max_rounds,
-                iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), seed, threads);
+                iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), seed, threads,
+                ES_LR_FRACTION, ES_SIGMA_FLOOR_FRACTION);
     std::fflush(stdout);
 
     std::atomic<bool> view{ false };
@@ -1271,8 +1274,10 @@ int main(int argc, char *argv[])
 
         double dx[NUM_PARAMS] = { 0 };
         double grad_norm = 0;
-        adam_update(grad, q, es_sigma, k, es_m1, es_m2, dx, grad_norm);
-        es_sigma = std::max(ES_SIGMA_FLOOR, ES_SIGMA0 * std::exp(-static_cast<double>(k) / ES_SIGMA_TAU));
+        double progress = static_cast<double>(k) * progress_scale;
+        adam_update(grad, q, es_sigma, k, progress, es_m1, es_m2, dx, grad_norm);
+        es_sigma = ES_SIGMA_FLOOR
+            + (ES_SIGMA0 - ES_SIGMA_FLOOR) * std::exp(-8.0 * std::min(1.0, progress / ES_SIGMA_FLOOR_FRACTION));
 
         for (size_t i = 0; i < NUM_PARAMS; ++i)
         {
