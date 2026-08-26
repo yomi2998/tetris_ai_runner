@@ -13,7 +13,6 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_link_options(-flto)
 endif()
 
-# Sources shared by the two full AI DLL targets (tetris_ai / tetris_ai_runner).
 set(TETRIS_AI_SOURCES
     src/ai.cpp
     src/ai_ax.cpp
@@ -41,7 +40,6 @@ set(TETRIS_AI_SOURCES
     src/rule_srs.cpp
 )
 
-# Compiled once, linked into both AI DLLs instead of compiling twice.
 add_library(tetris_ai_objects OBJECT ${TETRIS_AI_SOURCES})
 target_include_directories(tetris_ai_objects PRIVATE src)
 set_target_properties(tetris_ai_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -57,7 +55,6 @@ endfunction()
 tetris_ai_shared(tetris_ai)
 tetris_ai_shared(tetris_ai_runner)
 
-
 add_library(top_pso SHARED
     src/ai_zzz.cpp
     src/integer_utils.cpp
@@ -68,7 +65,6 @@ add_library(top_pso SHARED
     src/ppt_pso.cpp
 )
 target_include_directories(top_pso PRIVATE src)
-
 
 add_executable(match
     src/match.cpp
@@ -84,7 +80,6 @@ if (_cxx_compiler_lower MATCHES "mingw")
     target_link_options(match PRIVATE -static-libgcc -static-libstdc++ -static)
 endif()
 
-
 add_executable(tetris_profile
     src/tetris_profile.cpp
     src/tetris_core.cpp
@@ -96,7 +91,6 @@ add_executable(tetris_profile
 )
 target_include_directories(tetris_profile PRIVATE src)
 
-
 add_executable(tuner
     src/tuner.cpp
     src/tetris_core.cpp
@@ -107,3 +101,27 @@ add_executable(tuner
     src/random.cpp
 )
 target_include_directories(tuner PRIVATE src)
+
+add_executable(tournament_optimizer
+    src/tournament_optimizer.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/integer_utils.cpp
+    src/random.cpp
+)
+target_include_directories(tournament_optimizer PRIVATE src)
+target_compile_definitions(tournament_optimizer PRIVATE TOURNAMENT_OPT_SELF_CHECK=1)
+
+add_executable(arm_driver
+    src/arm_driver.cpp
+    src/tournament_optimizer.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/integer_utils.cpp
+    src/random.cpp
+)
+target_include_directories(arm_driver PRIVATE src)

@@ -1,6 +1,3 @@
-// Usage:
-//   tuner [num_iters] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [iters_per_move]
-//   tuner probe [batches] [eval_matches] [search_ms] [seed] [threads] [max_rounds] [step] [iters_per_move]
 
 #include <ctime>
 #include <cstring>
@@ -18,6 +15,15 @@
 #include <mutex>
 #include <numbers>
 #include <print>
+#include <string>
+#include <vector>
+#if defined(_WIN32)
+#include <io.h>
+#include <fcntl.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #include "tetris_core.h"
 #include "search_tspin.h"
@@ -57,8 +63,18 @@ static int rademacher(uint64_t seed, int k, int j, int i)
 struct Scenario
 {
     std::deque<char> pieces;
-    std::deque<int> holes;
+    uint64_t pair_seed = 0;
+    int round = 0;
+    int packet_index = 0;
 };
+
+static int scenario_hole(Scenario const &s)
+{
+    uint64_t h = splitmix64(s.pair_seed
+        ^ splitmix64(static_cast<uint64_t>(s.round) * 0x9E3779B97F4A7C15ULL
+                     + static_cast<uint64_t>(s.packet_index) * 0x94D049BB133111EBULL));
+    return static_cast<int>(h % 10);
+}
 
 static Scenario make_scenario(uint64_t seed, size_t max_rounds, size_t next_length)
 {
@@ -76,11 +92,7 @@ static Scenario make_scenario(uint64_t seed, size_t max_rounds, size_t next_leng
         }
     }
 
-    size_t holes_needed = max_rounds * 2 + 8;
-    while (s.holes.size() < holes_needed)
-    {
-        s.holes.push_back(static_cast<int>(rng() % 10));
-    }
+    s.pair_seed = seed;
     return s;
 }
 
@@ -92,22 +104,25 @@ static char const *const param_names[NUM_PARAMS] = {
     "tspin_2", "tspin_3", "combo", "ratio",
 };
 
-// ---- optimizer configuration (normalized coordinates) ----
-// Paired mirrored ES (OpenAI-ES style with antithetic seat-swapped pairs):
 static double const ES_SIGMA0 = 0.30;
 static double const ES_SIGMA_FLOOR = 0.08;
-static double const ES_SIGMA_FLOOR_FRACTION = 0.7;
+static double const ES_SIGMA_TAU = 2000.0;
 static double const ES_LR0 = 0.025;
 static double const ES_LR1 = 0.004;
-static double const ES_LR_FRACTION = 0.7;
+static double const ES_LR_HORIZON = 5000.0;
 static double const ES_BETA1 = 0.9;
 static double const ES_BETA2 = 0.999;
 static double const ES_EPS = 1e-8;
-static double const ES_DX_MAX = 0.04;    // per-coordinate update clip
-static double const ES_DX_L2_MAX = 0.10; // update L2 clip
+static double const ES_DX_MAX = 0.04;
+static double const ES_DX_L2_MAX = 0.10;
 static uint64_t const CHALLENGE_SEED_BASE = 0x123456789ABCDEF0ULL;
 static int const CHALLENGE_EVERY = 50;
 static int const CHALLENGE_PAIRS = 4;
+static int const CHALLENGE_MAX_PAIRS = 32;
+static int const CHALLENGE_PROMOTE_LEVEL = 95;
+static int const STALL_WINDOW = 200;
+static int const MAX_RESTARTS = 4;
+static double const RESTART_SIGMA = 0.20;
 
 using TunerEngine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_zzz::TOJ, search_tspin::Search>;
 
@@ -156,9 +171,13 @@ static bool load_params(double *out, std::string const &tag = "")
         std::println("[TUNER] Loaded best parameters from {}", param::filename(tag));
         return true;
     }
-    double const dflt[NUM_PARAMS] = {};
-    std::memcpy(out, dflt, sizeof(dflt[0]) * NUM_PARAMS);
     return false;
+}
+
+static void default_params(double *out)
+{
+    ai_zzz::TOJ::Param p;
+    param_to_array(p, out);
 }
 
 struct BotInstance
@@ -182,7 +201,7 @@ struct BotInstance
     int total_attack = 0;
     int total_receive = 0;
 
-    explicit BotInstance(TunerEngine &global_ai) : ai(global_ai.context())
+    explicit BotInstance()
     {
         ai.prepare(10, 40);
         ai.memory_limit(256ull << 20);
@@ -359,8 +378,8 @@ struct BotInstance
             {
                 map.row[y] = map.row[y - line];
             }
-            uint32_t hole = 1u << scenario->holes.front();
-            scenario->holes.pop_front();
+            uint32_t hole = 1u << scenario_hole(*scenario);
+            ++scenario->packet_index;
             uint32_t garbage_row = ai.context()->full() & ~hole;
             for (int y = 0; y < line; ++y)
             {
@@ -459,21 +478,24 @@ struct MatchResult
         BOTH_DEAD_DRAW = 7,
         CAP_DRAW = 8,
     };
-    int winner;      // +1 = seat1, -1 = seat2, 0 = draw
+    int winner;
     bool dead1;
     bool dead2;
     bool capped;
     int winner_reason;
     int rounds;
-    double app1, app2;  // attack / piece
-    double apl1, apl2;  // attack / cleared line
+    double app1, app2;
+    double apl1, apl2;
 };
 
 static MatchResult play_match(BotInstance &b1, BotInstance &b2, int max_rounds = 1000,
                               std::function<void()> view_cb = nullptr)
 {
+    int played_rounds = 0;
     for (int round = 1; round <= max_rounds; ++round)
     {
+        b1.scenario->round = round;
+        b2.scenario->round = round;
         b1.prepare();
         b2.prepare();
         if (view_cb)
@@ -482,6 +504,7 @@ static MatchResult play_match(BotInstance &b1, BotInstance &b2, int max_rounds =
         }
         b1.run();
         b2.run();
+        ++played_rounds;
         if (b1.dead || b2.dead)
         {
             break;
@@ -498,7 +521,7 @@ static MatchResult play_match(BotInstance &b1, BotInstance &b2, int max_rounds =
     r.dead1 = b1.dead;
     r.dead2 = b2.dead;
     r.capped = !b1.dead && !b2.dead;
-    r.rounds = std::max(b1.total_block, b2.total_block);
+    r.rounds = played_rounds;
     r.app1 = b1.total_block > 0 ? static_cast<double>(b1.total_attack) / b1.total_block : 0.0;
     r.app2 = b2.total_block > 0 ? static_cast<double>(b2.total_attack) / b2.total_block : 0.0;
     r.apl1 = b1.total_clear > 0 ? static_cast<double>(b1.total_attack) / b1.total_clear : 0.0;
@@ -538,11 +561,15 @@ struct MatchJob
     uint64_t scenario_seed_p1;
     uint64_t scenario_seed_p2;
     size_t job_id;
+    int budget_iters_p1 = -1;
+    int budget_iters_p2 = -1;
+    int budget_ms_p1 = -1;
+    int budget_ms_p2 = -1;
 };
 
 struct MatchOutcome
 {
-    int winner;   // +1 = p1, -1 = p2, 0 = draw
+    int winner;
     bool dead1;
     bool dead2;
     bool capped;
@@ -557,8 +584,6 @@ static double paired_reward(MatchOutcome const &a, MatchOutcome const &b)
     return 0.5 * (a.winner - b.winner);
 }
 
-// Runs every job to completion (no early cancellation); outcome.winner is
-// from p1's perspective.
 static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, int threads, int search_ms, int max_rounds,
                                            TunerEngine &global_ai, std::atomic<bool> &view,
                                            std::mutex &view_mutex, std::atomic<uint32_t> &view_index)
@@ -576,16 +601,40 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
             }
             Scenario scenario_p1 = make_scenario(jobs[idx].scenario_seed_p1, static_cast<size_t>(max_rounds), static_cast<size_t>(next_length));
             Scenario scenario_p2 = make_scenario(jobs[idx].scenario_seed_p2, static_cast<size_t>(max_rounds), static_cast<size_t>(next_length));
-            BotInstance b1(global_ai), b2(global_ai);
+            BotInstance b1, b2;
             b1.scenario = &scenario_p1;
             b2.scenario = &scenario_p2;
-            if (iters_per_move > 0)
+            if (jobs[idx].budget_iters_p1 > 0)
             {
-                b1.search_budget = b2.search_budget = m_tetris::SearchBudget::by_iterations(static_cast<size_t>(iters_per_move));
+                b1.search_budget = m_tetris::SearchBudget::by_iterations(static_cast<size_t>(jobs[idx].budget_iters_p1));
+            }
+            else if (jobs[idx].budget_ms_p1 > 0)
+            {
+                b1.search_budget = m_tetris::SearchBudget{ static_cast<time_t>(jobs[idx].budget_ms_p1) };
+            }
+            else if (iters_per_move > 0)
+            {
+                b1.search_budget = m_tetris::SearchBudget::by_iterations(static_cast<size_t>(iters_per_move));
             }
             else
             {
-                b1.search_budget = b2.search_budget = m_tetris::SearchBudget{ static_cast<time_t>(search_ms) };
+                b1.search_budget = m_tetris::SearchBudget{ static_cast<time_t>(search_ms) };
+            }
+            if (jobs[idx].budget_iters_p2 > 0)
+            {
+                b2.search_budget = m_tetris::SearchBudget::by_iterations(static_cast<size_t>(jobs[idx].budget_iters_p2));
+            }
+            else if (jobs[idx].budget_ms_p2 > 0)
+            {
+                b2.search_budget = m_tetris::SearchBudget{ static_cast<time_t>(jobs[idx].budget_ms_p2) };
+            }
+            else if (iters_per_move > 0)
+            {
+                b2.search_budget = m_tetris::SearchBudget::by_iterations(static_cast<size_t>(iters_per_move));
+            }
+            else
+            {
+                b2.search_budget = m_tetris::SearchBudget{ static_cast<time_t>(search_ms) };
             }
             b1.init(jobs[idx].p1);
             b2.init(jobs[idx].p2);
@@ -642,7 +691,7 @@ static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, in
     return out;
 }
 
-static void adam_update(double const *grad, int q, double es_sigma, int k, double lr_progress,
+static void adam_update(double const *grad, int q, double es_sigma, int k,
                         double *es_m1, double *es_m2, double *dx, double &grad_norm)
 {
     double g[NUM_PARAMS];
@@ -652,7 +701,8 @@ static void adam_update(double const *grad, int q, double es_sigma, int k, doubl
         grad_norm += g[i] * g[i];
     }
     grad_norm = std::sqrt(grad_norm);
-    double t = std::min(1.0, lr_progress / ES_LR_FRACTION);
+    double const ptk = static_cast<double>(k);
+    double t = std::min(1.0, ptk / ES_LR_HORIZON);
     double lr = ES_LR1 + 0.5 * (ES_LR0 - ES_LR1) * (1.0 + std::cos(std::numbers::pi * t));
     double beta1t = std::pow(ES_BETA1, k + 1);
     double beta2t = std::pow(ES_BETA2, k + 1);
@@ -701,8 +751,8 @@ static double run_challenge(double const *candidate, double const *incumbent, in
         std::memcpy(b.p2, candidate, NUM_PARAMS * sizeof(double));
         a.scenario_seed_p1 = sa;
         a.scenario_seed_p2 = sb;
-        b.scenario_seed_p1 = sb;
-        b.scenario_seed_p2 = sa;
+        b.scenario_seed_p1 = sa;
+        b.scenario_seed_p2 = sb;
         a.job_id = static_cast<size_t>(2) * j;
         b.job_id = static_cast<size_t>(2) * j + 1;
         jobs.push_back(a);
@@ -727,6 +777,86 @@ static uint64_t checkpoint_checksum(void const *data, size_t bytes)
         h *= 0x100000001B3ULL;
     }
     return h;
+}
+
+static void fsync_path(std::string const &path)
+{
+#if defined(_WIN32)
+    int fd = ::_open(path.c_str(), _O_RDONLY);
+    if (fd >= 0)
+    {
+        ::_commit(fd);
+        ::_close(fd);
+    }
+#else
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd >= 0)
+    {
+        ::fsync(fd);
+        ::close(fd);
+    }
+#endif
+}
+
+static void fsync_directory(std::string const &path)
+{
+#if !defined(_WIN32)
+    std::string dir = path;
+    size_t const pos = dir.find_last_of("/\\");
+    if (pos != std::string::npos)
+    {
+        dir = dir.substr(0, pos);
+    }
+    if (dir.empty())
+    {
+        dir = ".";
+    }
+    int fd = ::open(dir.c_str(), O_RDONLY);
+    if (fd >= 0)
+    {
+        ::fsync(fd);
+        ::close(fd);
+    }
+#endif
+}
+
+static bool durable_write_doubles(std::string const &path, double const *data, size_t n)
+{
+    std::string const tmp = path + ".tmp";
+    {
+        std::ofstream ofs(tmp, std::ios::binary);
+        if (!ofs.good())
+        {
+            return false;
+        }
+        ofs.write(reinterpret_cast<char const *>(data), static_cast<std::streamsize>(n * sizeof(double)));
+        ofs.flush();
+        if (!ofs.good())
+        {
+            std::remove(tmp.c_str());
+            return false;
+        }
+    }
+    fsync_path(tmp);
+    {
+        std::ifstream src(path, std::ios::binary);
+        if (src.good())
+        {
+            std::ofstream dst(path + ".bak", std::ios::binary | std::ios::trunc);
+            if (dst.good())
+            {
+                dst << src.rdbuf();
+                dst.flush();
+            }
+        }
+    }
+    if (std::rename(tmp.c_str(), path.c_str()) != 0)
+    {
+        std::remove(tmp.c_str());
+        return false;
+    }
+    fsync_directory(path);
+    return true;
 }
 
 struct CheckpointConfig
@@ -879,7 +1009,7 @@ static bool save_state(std::string const &data_file, int k, double const *theta,
     std::memcpy(p, es_m2, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
     uint64_t checksum = checkpoint_checksum(payload.data(), payload.size());
 
-    std::string tmp = data_file + ".tmp";
+    std::string const tmp = data_file + ".tmp";
     {
         std::ofstream ofs(tmp, std::ios::binary);
         int ver = 1;
@@ -889,7 +1019,21 @@ static bool save_state(std::string const &data_file, int k, double const *theta,
         ofs.flush();
         if (!ofs.good())
         {
+            std::remove(tmp.c_str());
             return false;
+        }
+    }
+    fsync_path(tmp);
+    {
+        std::ifstream src(data_file, std::ios::binary);
+        if (src.good())
+        {
+            std::ofstream dst(data_file + ".bak", std::ios::binary | std::ios::trunc);
+            if (dst.good())
+            {
+                dst << src.rdbuf();
+                dst.flush();
+            }
         }
     }
     if (std::rename(tmp.c_str(), data_file.c_str()) != 0)
@@ -897,11 +1041,303 @@ static bool save_state(std::string const &data_file, int k, double const *theta,
         std::remove(tmp.c_str());
         return false;
     }
+    fsync_directory(data_file);
     return true;
+}
+
+static int run_bench(int argc, char *argv[])
+{
+    std::vector<char const *> positional;
+    bool want_default = false;
+    positional.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--default") == 0)
+        {
+            want_default = true;
+        }
+        else
+        {
+            positional.push_back(argv[i]);
+        }
+    }
+    int const n = static_cast<int>(positional.size());
+
+    int pairs = 64;
+    int iters_arm = 20;
+    int search_ms_arm = 20;
+    unsigned seed = 555;
+    int threads = 0;
+    int max_rounds = 3600;
+    if (n > 2) pairs = std::stoi(positional[2]);
+    if (n > 3) iters_arm = std::stoi(positional[3]);
+    if (n > 4) search_ms_arm = std::stoi(positional[4]);
+    if (n > 5) seed = static_cast<unsigned>(std::stoul(positional[5]));
+    if (n > 6) threads = std::stoi(positional[6]);
+    if (n > 7) max_rounds = std::stoi(positional[7]);
+    if (pairs <= 0 || iters_arm <= 0 || search_ms_arm <= 0 || max_rounds <= 0)
+    {
+        std::println(stderr, "[BENCH] invalid arguments");
+        return 1;
+    }
+    if (seed == 0) seed = static_cast<unsigned>(std::time(nullptr));
+    if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
+
+    TunerEngine global_ai;
+    global_ai.prepare(10, 40);
+    double theta[NUM_PARAMS];
+    if (!load_params(theta))
+    {
+        if (want_default)
+        {
+            default_params(theta);
+            std::println(stderr, "[BENCH] warning: {} missing or invalid; using built-in defaults", param::filename(""));
+        }
+        else
+        {
+            std::println(stderr, "[BENCH] error: {} missing or invalid; provide a valid param file or pass --default.", param::filename(""));
+            return 1;
+        }
+    }
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        theta[i] = std::isfinite(theta[i]) ? theta[i] : 0.0;
+    }
+
+    std::vector<MatchJob> jobs;
+    jobs.reserve(static_cast<size_t>(2) * pairs);
+    for (int j = 0; j < pairs; ++j)
+    {
+        uint64_t s = splitmix64(seed
+            ^ splitmix64(static_cast<uint64_t>(j) * 0x94D049BB133111EBULL));
+        uint64_t sa = splitmix64(s);
+        uint64_t sb = splitmix64(s ^ 0x9E3779B97F4A7C15ULL);
+        MatchJob a{}, b{};
+        std::memcpy(a.p1, theta, sizeof(a.p1));
+        std::memcpy(a.p2, theta, sizeof(a.p2));
+        a.budget_iters_p1 = iters_arm;
+        a.budget_ms_p2 = search_ms_arm;
+        a.scenario_seed_p1 = sa;
+        a.scenario_seed_p2 = sb;
+        a.job_id = static_cast<size_t>(2) * j;
+        std::memcpy(b.p1, theta, sizeof(b.p1));
+        std::memcpy(b.p2, theta, sizeof(b.p2));
+        b.budget_ms_p1 = search_ms_arm;
+        b.budget_iters_p2 = iters_arm;
+        b.scenario_seed_p1 = sa;
+        b.scenario_seed_p2 = sb;
+        b.job_id = static_cast<size_t>(2) * j + 1;
+        jobs.push_back(a);
+        jobs.push_back(b);
+    }
+
+    std::println("[BENCH] {} iters vs {} ms, {} seat-swapped pairs over {} rounds, seed {}, threads={}",
+                 iters_arm, search_ms_arm, pairs, max_rounds, seed, threads);
+    std::fflush(stdout);
+
+    std::atomic<bool> view{ false };
+    std::atomic<uint32_t> view_index{ 0 };
+    std::mutex view_mutex;
+    auto out = run_batch(jobs, threads, search_ms_arm, max_rounds, global_ai, view, view_mutex, view_index);
+
+    double wins_iters = 0;
+    double app_iters = 0, app_ms = 0;
+    double apl_iters = 0, apl_ms = 0;
+    double rounds_sum = 0;
+    int deaths_iters = 0, deaths_ms = 0;
+    for (int j = 0; j < pairs; ++j)
+    {
+        MatchOutcome const &ga = out[2 * j];
+        MatchOutcome const &gb = out[2 * j + 1];
+        if (ga.winner > 0) wins_iters += 1.0;
+        else if (ga.winner == 0) wins_iters += 0.5;
+        if (gb.winner < 0) wins_iters += 1.0;
+        else if (gb.winner == 0) wins_iters += 0.5;
+        app_iters += ga.app1 + gb.app2;
+        app_ms += ga.app2 + gb.app1;
+        apl_iters += ga.apl1 + gb.apl2;
+        apl_ms += ga.apl2 + gb.apl1;
+        rounds_sum += ga.rounds + gb.rounds;
+        deaths_iters += ga.dead1 + gb.dead2;
+        deaths_ms += ga.dead2 + gb.dead1;
+    }
+    int games = 2 * pairs;
+    double phat = wins_iters / static_cast<double>(games);
+    double z = 1.96;
+    double denom = 1.0 + z * z / games;
+    double mid = phat + z * z / (2.0 * games);
+    double margin = z * std::sqrt(std::max(0.0, phat * (1.0 - phat)) / games + z * z / (4.0 * games * games));
+    double lo = (mid - margin) / denom;
+    double hi = (mid + margin) / denom;
+
+    std::println("[BENCH] iters-arm win-equiv: {:.1f}/{:.0f} = {:.1f}% (95% CI [{:.1f}%, {:.1f}%])",
+                 wins_iters, static_cast<double>(games), 100.0 * phat,
+                 100.0 * std::max(0.0, lo), 100.0 * std::min(1.0, hi));
+    std::println("[BENCH] APP: iters={:.3f}  ms={:.3f} | APL: iters={:.3f}  ms={:.3f} | R={:.1f} | deaths: iters={} ms={}",
+                 app_iters / games, app_ms / games, apl_iters / games, apl_ms / games,
+                 rounds_sum / games, deaths_iters, deaths_ms);
+    return 0;
+}
+
+static int run_vs(int argc, char *argv[])
+{
+    std::vector<char const *> positional;
+    positional.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i)
+    {
+        positional.push_back(argv[i]);
+    }
+    int const n = static_cast<int>(positional.size());
+
+    std::string path_a, path_b;
+    int pairs = 32;
+    int search_ms = 20;
+    int ipm = 0;
+    unsigned seed = 555;
+    int threads = 0;
+    int max_rounds = 3600;
+    if (n > 2) path_a = positional[2];
+    if (n > 3) path_b = positional[3];
+    if (n > 4) pairs = std::stoi(positional[4]);
+    if (n > 5) search_ms = std::stoi(positional[5]);
+    if (n > 6) ipm = std::stoi(positional[6]);
+    if (n > 7) seed = static_cast<unsigned>(std::stoul(positional[7]));
+    if (n > 8) threads = std::stoi(positional[8]);
+    if (n > 9) max_rounds = std::stoi(positional[9]);
+    if (path_a.empty() || path_b.empty() || pairs <= 0 || search_ms < 0 || ipm < 0 || max_rounds <= 0
+        || (ipm <= 0 && search_ms <= 0))
+    {
+        std::println(stderr, "[VS] usage: tuner vs <path_a> <path_b> <pairs> <search_ms> <iters_per_move> <seed> <threads> <max_rounds>");
+        return 1;
+    }
+    if (seed == 0) seed = static_cast<unsigned>(std::time(nullptr));
+    if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
+
+    double pa[NUM_PARAMS], pb[NUM_PARAMS];
+    std::ifstream fa(path_a, std::ios::binary);
+    std::ifstream fb(path_b, std::ios::binary);
+    if (!fa.good() || !fb.good())
+    {
+        std::println(stderr, "[VS] error: could not open both param files");
+        return 1;
+    }
+    fa.read(reinterpret_cast<char *>(pa), NUM_PARAMS * sizeof(double));
+    fb.read(reinterpret_cast<char *>(pb), NUM_PARAMS * sizeof(double));
+    if (fa.gcount() != static_cast<std::streamsize>(NUM_PARAMS * sizeof(double))
+        || fb.gcount() != static_cast<std::streamsize>(NUM_PARAMS * sizeof(double)))
+    {
+        std::println(stderr, "[VS] error: param files must contain {} doubles", NUM_PARAMS);
+        return 1;
+    }
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        if (!std::isfinite(pa[i]) || !std::isfinite(pb[i]))
+        {
+            std::println(stderr, "[VS] error: non-finite param values");
+            return 1;
+        }
+    }
+
+    TunerEngine global_ai;
+    global_ai.prepare(10, 40);
+
+    std::vector<MatchJob> jobs;
+    jobs.reserve(static_cast<size_t>(2) * pairs);
+    for (int j = 0; j < pairs; ++j)
+    {
+        uint64_t s = splitmix64(seed
+            ^ splitmix64(static_cast<uint64_t>(j) * 0x94D049BB133111EBULL));
+        uint64_t sa = splitmix64(s);
+        uint64_t sb = splitmix64(s ^ 0x9E3779B97F4A7C15ULL);
+        MatchJob a{}, b{};
+        std::memcpy(a.p1, pa, sizeof(a.p1));
+        std::memcpy(a.p2, pb, sizeof(a.p2));
+        a.budget_iters_p1 = ipm;
+        a.budget_iters_p2 = ipm;
+        a.budget_ms_p1 = search_ms;
+        a.budget_ms_p2 = search_ms;
+        a.scenario_seed_p1 = sa;
+        a.scenario_seed_p2 = sb;
+        a.job_id = static_cast<size_t>(2) * j;
+        std::memcpy(b.p1, pb, sizeof(b.p1));
+        std::memcpy(b.p2, pa, sizeof(b.p2));
+        b.budget_iters_p1 = ipm;
+        b.budget_iters_p2 = ipm;
+        b.budget_ms_p1 = search_ms;
+        b.budget_ms_p2 = search_ms;
+        b.scenario_seed_p1 = sa;
+        b.scenario_seed_p2 = sb;
+        b.job_id = static_cast<size_t>(2) * j + 1;
+        jobs.push_back(a);
+        jobs.push_back(b);
+    }
+
+    std::println("[VS] {} vs {}, {} seat-swapped pairs over {} rounds, {} search, seed {}, threads={}",
+                 path_a, path_b, pairs, max_rounds,
+                 ipm > 0 ? (std::to_string(ipm) + " iters") : (std::to_string(search_ms) + "ms"),
+                 seed, threads);
+    std::fflush(stdout);
+
+    std::atomic<bool> view{ false };
+    std::atomic<uint32_t> view_index{ 0 };
+    std::mutex view_mutex;
+    auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_mutex, view_index);
+
+    double wins_a = 0;
+    double app_a = 0, app_b = 0, apl_a = 0, apl_b = 0, rounds_sum = 0;
+    int deaths_a = 0, deaths_b = 0;
+    for (int j = 0; j < pairs; ++j)
+    {
+        MatchOutcome const &ga = out[2 * j];
+        MatchOutcome const &gb = out[2 * j + 1];
+        if (ga.winner > 0) wins_a += 1.0;
+        else if (ga.winner == 0) wins_a += 0.5;
+        if (gb.winner < 0) wins_a += 1.0;
+        else if (gb.winner == 0) wins_a += 0.5;
+        app_a += ga.app1 + gb.app2;
+        app_b += ga.app2 + gb.app1;
+        apl_a += ga.apl1 + gb.apl2;
+        apl_b += ga.apl2 + gb.apl1;
+        rounds_sum += ga.rounds + gb.rounds;
+        deaths_a += ga.dead1 + gb.dead2;
+        deaths_b += ga.dead2 + gb.dead1;
+    }
+    int games = 2 * pairs;
+    double phat = wins_a / static_cast<double>(games);
+    double z = 1.96;
+    double denom = 1.0 + z * z / games;
+    double mid = phat + z * z / (2.0 * games);
+    double margin = z * std::sqrt(std::max(0.0, phat * (1.0 - phat)) / games + z * z / (4.0 * games * games));
+    double lo = (mid - margin) / denom;
+    double hi = (mid + margin) / denom;
+
+    std::println("[VS] A win-equiv: {:.1f}/{:.0f} = {:.1f}% (95% CI [{:.1f}%, {:.1f}%])",
+                 wins_a, static_cast<double>(games), 100.0 * phat,
+                 100.0 * std::max(0.0, lo), 100.0 * std::min(1.0, hi));
+    std::println("[VS] APP: A={:.3f} B={:.3f} | APL: A={:.3f} B={:.3f} | R={:.1f} | deaths: A={} B={}",
+                 app_a / games, app_b / games, apl_a / games, apl_b / games,
+                 rounds_sum / games, deaths_a, deaths_b);
+    return 0;
 }
 
 static int run_probe(int argc, char *argv[])
 {
+    std::vector<char const *> positional;
+    bool want_default = false;
+    positional.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--default") == 0)
+        {
+            want_default = true;
+        }
+        else
+        {
+            positional.push_back(argv[i]);
+        }
+    }
+    int const n = static_cast<int>(positional.size());
+
     int batches = 8;
     int eval_matches = 14;
     int search_ms = 20;
@@ -909,14 +1345,14 @@ static int run_probe(int argc, char *argv[])
     int threads = 14;
     int max_rounds = 3600;
     double step = 0.30;
-    if (argc > 2) batches = std::stoi(argv[2]);
-    if (argc > 3) eval_matches = std::stoi(argv[3]);
-    if (argc > 4) search_ms = std::stoi(argv[4]);
-    if (argc > 5) seed = static_cast<unsigned>(std::stoul(argv[5]));
-    if (argc > 6) threads = std::stoi(argv[6]);
-    if (argc > 7) max_rounds = std::stoi(argv[7]);
-    if (argc > 8) step = std::stod(argv[8]);
-    if (argc > 9) iters_per_move = std::stoi(argv[9]);
+    if (n > 2) batches = std::stoi(positional[2]);
+    if (n > 3) eval_matches = std::stoi(positional[3]);
+    if (n > 4) search_ms = std::stoi(positional[4]);
+    if (n > 5) seed = static_cast<unsigned>(std::stoul(positional[5]));
+    if (n > 6) threads = std::stoi(positional[6]);
+    if (n > 7) max_rounds = std::stoi(positional[7]);
+    if (n > 8) step = std::stod(positional[8]);
+    if (n > 9) iters_per_move = std::stoi(positional[9]);
     if (batches <= 0 || search_ms <= 0 || max_rounds <= 0 || step <= 0 || !std::isfinite(step))
     {
         std::println(stderr, "[PROBE] invalid arguments");
@@ -934,7 +1370,16 @@ static int run_probe(int argc, char *argv[])
     double theta[NUM_PARAMS];
     if (!load_params(theta))
     {
-        std::println(stderr, "[PROBE] warning: {} missing or invalid; using zero theta", param::filename(""));
+        if (want_default)
+        {
+            default_params(theta);
+            std::println(stderr, "[PROBE] warning: {} missing or invalid; using built-in defaults", param::filename(""));
+        }
+        else
+        {
+            std::println(stderr, "[PROBE] error: {} missing or invalid; provide a valid param file or pass --default.", param::filename(""));
+            return 1;
+        }
     }
     for (size_t i = 0; i < NUM_PARAMS; ++i)
     {
@@ -977,8 +1422,8 @@ static int run_probe(int argc, char *argv[])
             }
             a.scenario_seed_p1 = scenario_seed_a;
             a.scenario_seed_p2 = scenario_seed_b;
-            b.scenario_seed_p1 = scenario_seed_b;
-            b.scenario_seed_p2 = scenario_seed_a;
+            b.scenario_seed_p1 = scenario_seed_a;
+            b.scenario_seed_p2 = scenario_seed_b;
             a.job_id = static_cast<size_t>(2) * j;
             b.job_id = static_cast<size_t>(2) * j + 1;
             jobs.push_back(a);
@@ -1043,21 +1488,50 @@ int main(int argc, char *argv[])
     {
         return run_probe(argc, argv);
     }
+    if (argc > 1 && std::strcmp(argv[1], "bench") == 0)
+    {
+        return run_bench(argc, argv);
+    }
+    if (argc > 1 && std::strcmp(argv[1], "vs") == 0)
+    {
+        return run_vs(argc, argv);
+    }
+
+    std::vector<char const *> positional;
+    bool want_default = false;
+    bool want_zero = false;
+    positional.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--default") == 0)
+        {
+            want_default = true;
+        }
+        else if (std::strcmp(argv[i], "--fresh-zero") == 0)
+        {
+            want_zero = true;
+        }
+        else
+        {
+            positional.push_back(argv[i]);
+        }
+    }
+    int const n = static_cast<int>(positional.size());
 
     int num_iters = 10000;
     int eval_matches = 14;
     int search_ms = 20;
     unsigned seed = 0;
-    int threads = 1; // 0 = auto (hardware concurrency)
-    int max_rounds = 1000;
+    int threads = 1;
+    int max_rounds = 3600;
 
-    if (argc > 1) num_iters = std::stoi(argv[1]);
-    if (argc > 2) eval_matches = std::stoi(argv[2]);
-    if (argc > 3) search_ms = std::stoi(argv[3]);
-    if (argc > 4) seed = static_cast<unsigned>(std::stoul(argv[4]));
-    if (argc > 5) threads = std::stoi(argv[5]);
-    if (argc > 6) max_rounds = std::stoi(argv[6]);
-    if (argc > 7) iters_per_move = std::stoi(argv[7]);
+    if (n > 1) num_iters = std::stoi(positional[1]);
+    if (n > 2) eval_matches = std::stoi(positional[2]);
+    if (n > 3) search_ms = std::stoi(positional[3]);
+    if (n > 4) seed = static_cast<unsigned>(std::stoul(positional[4]));
+    if (n > 5) threads = std::stoi(positional[5]);
+    if (n > 6) max_rounds = std::stoi(positional[6]);
+    if (n > 7) iters_per_move = std::stoi(positional[7]);
     if (num_iters <= 0 || eval_matches <= 0 || eval_matches == 1 || threads < 0
         || iters_per_move < 0)
     {
@@ -1069,7 +1543,6 @@ int main(int argc, char *argv[])
         std::println(stderr, "[TUNER] search_ms must be > 0 when using time-based search");
         return 1;
     }
-    if (seed == 0) seed = static_cast<unsigned>(std::time(nullptr));
     if (threads == 0)
     {
         threads = std::max(1u, std::thread::hardware_concurrency());
@@ -1082,12 +1555,29 @@ int main(int argc, char *argv[])
         --games;
         std::println("[TUNER] eval_matches {} is odd; using {} (even seat-swapped pairs)", eval_matches, games);
     }
-    int q = std::max(1, games / 2); // directions per batch
+    int q = std::max(1, games / 2);
 
     std::string data_file = param::tag_filename("tuner_data.bin", "");
 
     TunerEngine global_ai;
     global_ai.prepare(10, 40);
+
+    double theta[NUM_PARAMS];
+    double es_sigma = ES_SIGMA0;
+    double es_m1[NUM_PARAMS] = { 0 };
+    double es_m2[NUM_PARAMS] = { 0 };
+    int resume_k = 0;
+    CheckpointConfig saved_cfg;
+    int load_result = load_state(data_file, resume_k, theta, es_sigma, es_m1, es_m2,
+                                 saved_cfg);
+    if (load_result == CHECKPOINT_OK && seed == 0)
+    {
+        seed = saved_cfg.seed;
+    }
+    if (seed == 0)
+    {
+        seed = static_cast<unsigned>(std::time(nullptr));
+    }
 
     CheckpointConfig cfg;
     cfg.max_rounds = max_rounds;
@@ -1099,14 +1589,6 @@ int main(int argc, char *argv[])
     std::memcpy(cfg.combo_table, combo_table, sizeof(combo_table));
     cfg.next_length = next_length;
 
-    double theta[NUM_PARAMS];
-    double es_sigma = ES_SIGMA0;
-    double es_m1[NUM_PARAMS] = { 0 };
-    double es_m2[NUM_PARAMS] = { 0 };
-    int resume_k = 0;
-    CheckpointConfig saved_cfg;
-    int load_result = load_state(data_file, resume_k, theta, es_sigma, es_m1, es_m2,
-                                 saved_cfg);
     if (load_result == CHECKPOINT_OK)
     {
         if (!checkpoint_config_equal(saved_cfg, cfg))
@@ -1133,24 +1615,32 @@ int main(int argc, char *argv[])
     {
         if (load_result == CHECKPOINT_CORRUPT)
         {
-            std::println(stderr, "[TUNER] warning: {} exists but is corrupt or an unsupported format; starting from zero weights.", data_file);
-            std::println(stderr, "[TUNER] press Enter to continue, or Ctrl-C to abort.");
-            std::fflush(stderr);
-            std::string line;
-            std::getline(std::cin, line);
+            std::println(stderr, "[TUNER] warning: {} exists but is corrupt or an unsupported format; starting fresh from params.", data_file);
         }
         std::println("[TUNER] Starting fresh");
     }
 
     if (load_result != CHECKPOINT_OK)
     {
-        if (!load_params(theta))
+        if (want_zero)
         {
-            std::println(stderr, "[TUNER] warning: {} missing or invalid; starting from zero weights.", param::filename(""));
-            std::println(stderr, "[TUNER] press Enter to continue with zero weights, or Ctrl-C to abort.");
-            std::fflush(stderr);
-            std::string line;
-            std::getline(std::cin, line);
+            double const zero[NUM_PARAMS] = {};
+            std::memcpy(theta, zero, sizeof(zero));
+            std::println("[TUNER] Fresh start from zero weights (--fresh-zero)");
+        }
+        else if (want_default)
+        {
+            default_params(theta);
+            std::println("[TUNER] Fresh start from built-in defaults (--default)");
+        }
+        else if (load_params(theta))
+        {
+            std::println("[TUNER] Fresh warm start from {}", param::filename(""));
+        }
+        else
+        {
+            default_params(theta);
+            std::println(stderr, "[TUNER] warning: {} missing or invalid; using built-in defaults (pass --fresh-zero to start from zero).", param::filename(""));
         }
     }
     for (size_t i = 0; i < NUM_PARAMS; ++i)
@@ -1175,19 +1665,20 @@ int main(int argc, char *argv[])
         x[i] = theta[i] / param_scale[i];
     }
 
-    double const progress_scale = 1.0 / static_cast<double>(std::max(1, num_iters - 1));
+    int stall_batches = 0;
+    bool rollback_pending = false;
+    int restarts = 0;
 
-    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, lr_frac={:.2f}, sigma_frac={:.2f}",
+    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, sigma_tau={:.0f}, lr_horizon={:.0f}",
                 num_iters, 2 * q, q, max_rounds,
                 iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), seed, threads,
-                ES_LR_FRACTION, ES_SIGMA_FLOOR_FRACTION);
+                ES_SIGMA_TAU, ES_LR_HORIZON);
     std::fflush(stdout);
 
     std::atomic<bool> view{ false };
     std::atomic<uint32_t> view_index{ 0 };
     std::mutex view_mutex;
 
-    // Stdin listener
     std::thread stdin_thread([&]()
     {
         std::string line;
@@ -1212,7 +1703,6 @@ int main(int argc, char *argv[])
 
     for (int k = resume_k; k < num_iters; ++k)
     {
-        // ---- build the batch: q directions, 2 seat-swapped games each ----
         double step = es_sigma;
         std::vector<MatchJob> jobs;
         jobs.reserve(2 * q);
@@ -1235,8 +1725,8 @@ int main(int argc, char *argv[])
             }
             a.scenario_seed_p1 = scenario_seed_a;
             a.scenario_seed_p2 = scenario_seed_b;
-            b.scenario_seed_p1 = scenario_seed_b;
-            b.scenario_seed_p2 = scenario_seed_a;
+            b.scenario_seed_p1 = scenario_seed_a;
+            b.scenario_seed_p2 = scenario_seed_b;
             a.job_id = static_cast<size_t>(2) * j;
             b.job_id = static_cast<size_t>(2) * j + 1;
             jobs.push_back(a);
@@ -1245,17 +1735,25 @@ int main(int argc, char *argv[])
 
         auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_mutex, view_index);
 
-        // ---- rewards: r_j = (wA - wB)/2, both from the x+eps perspective ----
         double score = 0;
         double grad[NUM_PARAMS] = { 0 };
         double avg_rounds = 0;
         int deaths = 0;
         int capped_games = 0;
         int capped_apl_games = 0;
+        int nonzero_directions = 0;
+        double reward_sum = 0;
+        double reward_sq_sum = 0;
         for (int j = 0; j < q; ++j)
         {
             double rj = paired_reward(out[2 * j], out[2 * j + 1]);
             score += rj;
+            reward_sum += rj;
+            reward_sq_sum += rj * rj;
+            if (rj != 0.0)
+            {
+                ++nonzero_directions;
+            }
             for (size_t i = 0; i < NUM_PARAMS; ++i)
             {
                 grad[i] += rj * rademacher(seed, k, j, static_cast<int>(i));
@@ -1274,10 +1772,35 @@ int main(int argc, char *argv[])
 
         double dx[NUM_PARAMS] = { 0 };
         double grad_norm = 0;
-        double progress = static_cast<double>(k) * progress_scale;
-        adam_update(grad, q, es_sigma, k, progress, es_m1, es_m2, dx, grad_norm);
-        es_sigma = ES_SIGMA_FLOOR
-            + (ES_SIGMA0 - ES_SIGMA_FLOOR) * std::exp(-8.0 * std::min(1.0, progress / ES_SIGMA_FLOOR_FRACTION));
+        bool zero_gradient = true;
+        for (size_t i = 0; i < NUM_PARAMS; ++i)
+        {
+            if (grad[i] != 0.0)
+            {
+                zero_gradient = false;
+                break;
+            }
+        }
+        if (zero_gradient)
+        {
+            for (size_t i = 0; i < NUM_PARAMS; ++i)
+            {
+                es_m1[i] = ES_BETA1 * es_m1[i];
+                es_m2[i] = ES_BETA2 * es_m2[i];
+            }
+        }
+        else
+        {
+            adam_update(grad, q, es_sigma, k, es_m1, es_m2, dx, grad_norm);
+        }
+        es_sigma = std::max(ES_SIGMA_FLOOR, ES_SIGMA0 * std::exp(-static_cast<double>(k) / ES_SIGMA_TAU));
+
+        double dx_norm = 0;
+        for (size_t i = 0; i < NUM_PARAMS; ++i)
+        {
+            dx_norm += dx[i] * dx[i];
+        }
+        dx_norm = std::sqrt(dx_norm);
 
         for (size_t i = 0; i < NUM_PARAMS; ++i)
         {
@@ -1293,31 +1816,97 @@ int main(int argc, char *argv[])
         {
             std::println(stderr, "[TUNER] warning: failed to write checkpoint {}", data_file);
         }
-        param::write_path(theta, NUM_PARAMS, "current_param.bin");
+        durable_write_doubles("current_param.bin", theta, NUM_PARAMS);
 
+        bool promoted = false;
         if ((k + 1) % CHALLENGE_EVERY == 0)
         {
-            double challenge_score = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
-                                                   global_ai, view, view_mutex, view_index,
-                                                   CHALLENGE_SEED_BASE + static_cast<uint64_t>(k + 1), CHALLENGE_PAIRS);
-            std::println("[ES]   challenge @ iter {}: score={:+.3f} (candidate vs incumbent)",
-                        k + 1, challenge_score);
-            if (challenge_score > 0.0)
+            double wins_equiv = 0.0;
+            int played = 0;
+            for (int pairs = 0; pairs < CHALLENGE_MAX_PAIRS; pairs += CHALLENGE_PAIRS)
             {
-                std::memcpy(best_theta, theta, sizeof(best_theta));
-                param::write_path(best_theta, NUM_PARAMS, "best_param.bin");
-                std::println("[ES]   promoted candidate to best_param.bin");
+                double stage = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
+                                             global_ai, view, view_mutex, view_index,
+                                             CHALLENGE_SEED_BASE
+                                                 + static_cast<uint64_t>(k + 1) * 0x9E3779B97F4A7C15ULL
+                                                 + static_cast<uint64_t>(pairs),
+                                             CHALLENGE_PAIRS);
+                wins_equiv += 2.0 * CHALLENGE_PAIRS * (1.0 + stage) / 2.0;
+                played += 2 * CHALLENGE_PAIRS;
+                double phat = wins_equiv / static_cast<double>(played);
+                double z = 1.6448536269514722;
+                double denom = 1.0 + z * z / played;
+                double mid = phat + z * z / (2.0 * played);
+                double margin = z * std::sqrt(std::max(0.0, phat * (1.0 - phat)) / played
+                                              + z * z / (4.0 * played * played));
+                double p_lo = (mid - margin) / denom;
+                std::println("[ES]   challenge @ iter {}: stage={:+.3f} (pairs {}..{}), games={}, win-equiv={:.1f}, LB={:.1f}%",
+                             k + 1, stage, pairs + 1, pairs + CHALLENGE_PAIRS, played,
+                             wins_equiv, 100.0 * p_lo);
+                if (p_lo * 100.0 >= CHALLENGE_PROMOTE_LEVEL)
+                {
+                    std::memcpy(best_theta, theta, sizeof(best_theta));
+                    durable_write_doubles("best_param.bin", best_theta, NUM_PARAMS);
+                    std::println("[ES]   promoted candidate to best_param.bin ({} games, {:.1f}% LB)",
+                                 played, 100.0 * p_lo);
+                    promoted = true;
+                    break;
+                }
+            }
+            if (!promoted)
+            {
+                std::println("[ES]   challenge not promoted after {} games", played);
             }
         }
 
+        if (promoted)
+        {
+            stall_batches = 0;
+        }
+        else
+        {
+            ++stall_batches;
+        }
+        if (!promoted && (k + 1) % CHALLENGE_EVERY == 0
+            && stall_batches >= STALL_WINDOW && restarts < MAX_RESTARTS)
+        {
+            std::memcpy(theta, best_theta, sizeof(best_theta));
+            for (size_t i = 0; i < NUM_PARAMS; ++i)
+            {
+                x[i] = theta[i] / param_scale[i];
+                es_m1[i] = 0.0;
+                es_m2[i] = 0.0;
+            }
+            es_sigma = RESTART_SIGMA;
+            stall_batches = 0;
+            ++restarts;
+            std::println("[ES]   STALL: {} batches without promotion; rolled back to incumbent, reset Adam, sigma={:.3f} (restart {}/{})",
+                         STALL_WINDOW, RESTART_SIGMA, restarts, MAX_RESTARTS);
+        }
+
+        double dist_inc_norm = 0;
+        double dist_inc_phys = 0;
+        for (size_t i = 0; i < NUM_PARAMS; ++i)
+        {
+            double d = x[i] - best_theta[i] / param_scale[i];
+            dist_inc_norm += d * d;
+            double dp = theta[i] - best_theta[i];
+            dist_inc_phys = std::max(dist_inc_phys, std::fabs(dp));
+        }
+        dist_inc_norm = std::sqrt(dist_inc_norm);
+
+        double reward_sd = std::sqrt(std::max(0.0, reward_sq_sum / q - (reward_sum / q) * (reward_sum / q)));
+
         auto now = std::chrono::steady_clock::now();
         double sec = std::chrono::duration<double>(now - start_time).count();
-        std::println("[ES]   iter {:5d} | score={:+.3f} | sigma={:.4f} | R={:.0f} D={} C={} CA={} | {:.1f}s",
-                    k, score, es_sigma, avg_rounds, deaths, capped_games, capped_apl_games, sec);
+        std::println("[ES]   iter {:5d} | score={:+.3f} sd={:.3f} nz={}/{} | g={:.3f} dx={:.3f} | sigma={:.4f} | R={:.0f} D={} C={} CA={} | dInc={:.3f}/{:.4f} | {:.1f}s",
+                     k, score, reward_sd, nonzero_directions, q, grad_norm, dx_norm, es_sigma,
+                     avg_rounds, deaths, capped_games, capped_apl_games,
+                     dist_inc_norm, dist_inc_phys, sec);
         std::fflush(stdout);
     }
 
-    param::write_path(theta, NUM_PARAMS, "current_param.bin");
+    durable_write_doubles("current_param.bin", theta, NUM_PARAMS);
     if (!save_state(data_file, num_iters, theta, es_sigma, es_m1, es_m2, cfg))
     {
         std::println(stderr, "[TUNER] warning: failed to write checkpoint {}", data_file);
@@ -1325,7 +1914,14 @@ int main(int argc, char *argv[])
 
     std::println("\n[TUNER] Done. {} iterations completed", num_iters);
     std::println("[TUNER] Current params saved to {}", "current_param.bin");
-    std::println("[TUNER] Validated best saved to {}", param::filename(""));
+    if (param::read(best_theta, NUM_PARAMS, ""))
+    {
+        std::println("[TUNER] Validated best saved to {}", param::filename(""));
+    }
+    else
+    {
+        std::println("[TUNER] No validated best was promoted during this run");
+    }
     std::println("[TUNER] theta:");
     for (size_t i = 0; i < NUM_PARAMS; ++i)
     {

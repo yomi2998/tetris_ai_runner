@@ -1,0 +1,636 @@
+#pragma once
+
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <functional>
+#include <iostream>
+#include <mutex>
+#include <numeric>
+#include <print>
+#include <random>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "ai_zzz.h"
+#include "rule_toj.h"
+#include "search_tspin.h"
+#include "tetris_core.h"
+
+namespace tuner_match
+{
+    inline constexpr size_t NUM_PARAMS = 29;
+    inline constexpr int next_length = 6;
+
+    inline const int combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
+    inline constexpr int combo_table_max = 10;
+
+    inline constexpr double param_scale[NUM_PARAMS] = {
+        0.17, 2.8, 0.31, 0.97, 6.3, 6.8, 0.43, 0.18, 7.3, 8.15,
+        0.037, 2.64, 1.8, 0.00085, 0.0012, 1.4, 0.31, 0.24, 0.99, 0.48,
+        0.70, 0.0092, 0.058, 1.3, 0.22, 0.26, 0.59, 0.94, 0.68,
+    };
+
+    inline char const *const param_names[NUM_PARAMS] = {
+        "base", "roof", "col_trans", "row_trans", "hole_count", "hole_line",
+        "clear_width", "wide_2", "wide_3", "wide_4", "safe", "b2b", "attack",
+        "hold_t", "hold_i", "waste_t", "waste_i", "clear_1", "clear_2",
+        "clear_3", "clear_4", "t2_slot", "t3_slot", "tspin_mini", "tspin_1",
+        "tspin_2", "tspin_3", "combo", "ratio",
+    };
+
+    inline uint64_t splitmix64(uint64_t x)
+    {
+        x += 0x9E3779B97F4A7C15ULL;
+        x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+        return x ^ (x >> 31);
+    }
+
+    inline int rademacher(uint64_t seed, int k, int j, int i)
+    {
+        uint64_t h = splitmix64(seed ^ splitmix64(static_cast<uint64_t>(k) * 0x9E3779B97F4A7C15ULL
+                                                  + static_cast<uint64_t>(j) * 0xBF58476D1CE4E5B9ULL
+                                                  + static_cast<uint64_t>(i)));
+        return static_cast<int>(h & 1) ? 1 : -1;
+    }
+
+    struct Scenario
+    {
+        std::deque<char> pieces;
+        uint64_t pair_seed = 0;
+        int round = 0;
+        int packet_index = 0;
+    };
+
+    inline int scenario_hole(Scenario const &s)
+    {
+        uint64_t h = splitmix64(s.pair_seed
+            ^ splitmix64(static_cast<uint64_t>(s.round) * 0x9E3779B97F4A7C15ULL
+                         + static_cast<uint64_t>(s.packet_index) * 0x94D049BB133111EBULL));
+        return static_cast<int>(h % 10);
+    }
+
+    inline Scenario make_scenario(uint64_t seed, size_t max_rounds, size_t next_len)
+    {
+        std::mt19937 rng(static_cast<unsigned>(splitmix64(seed)));
+        std::string bag = "IJLOSTZ";
+        Scenario s;
+
+        size_t pieces_needed = max_rounds * 2 + next_len * 2 + 4;
+        while (s.pieces.size() < pieces_needed)
+        {
+            std::shuffle(bag.begin(), bag.end(), rng);
+            for (char c : bag)
+            {
+                s.pieces.push_back(c);
+            }
+        }
+
+        s.pair_seed = seed;
+        return s;
+    }
+
+    using TunerEngine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_zzz::TOJ, search_tspin::Search>;
+
+    inline void param_to_array(ai_zzz::TOJ::Param const &p, double *out)
+    {
+        out[0] = p.base;      out[1] = p.roof;
+        out[2] = p.col_trans; out[3] = p.row_trans;
+        out[4] = p.hole_count; out[5] = p.hole_line;
+        out[6] = p.clear_width; out[7] = p.wide_2;
+        out[8] = p.wide_3;    out[9] = p.wide_4;
+        out[10] = p.safe;     out[11] = p.b2b;
+        out[12] = p.attack;   out[13] = p.hold_t;
+        out[14] = p.hold_i;   out[15] = p.waste_t;
+        out[16] = p.waste_i;  out[17] = p.clear_1;
+        out[18] = p.clear_2;  out[19] = p.clear_3;
+        out[20] = p.clear_4;  out[21] = p.t2_slot;
+        out[22] = p.t3_slot;  out[23] = p.tspin_mini;
+        out[24] = p.tspin_1;  out[25] = p.tspin_2;
+        out[26] = p.tspin_3;  out[27] = p.combo;
+        out[28] = p.ratio;
+    }
+
+    inline void array_to_param(double const *in, ai_zzz::TOJ::Param &p)
+    {
+        p.base = in[0];       p.roof = in[1];
+        p.col_trans = in[2];  p.row_trans = in[3];
+        p.hole_count = in[4]; p.hole_line = in[5];
+        p.clear_width = in[6]; p.wide_2 = in[7];
+        p.wide_3 = in[8];     p.wide_4 = in[9];
+        p.safe = in[10];      p.b2b = in[11];
+        p.attack = in[12];    p.hold_t = in[13];
+        p.hold_i = in[14];    p.waste_t = in[15];
+        p.waste_i = in[16];   p.clear_1 = in[17];
+        p.clear_2 = in[18];   p.clear_3 = in[19];
+        p.clear_4 = in[20];   p.t2_slot = in[21];
+        p.t3_slot = in[22];   p.tspin_mini = in[23];
+        p.tspin_1 = in[24];   p.tspin_2 = in[25];
+        p.tspin_3 = in[26];   p.combo = in[27];
+        p.ratio = in[28];
+    }
+
+    struct BotInstance
+    {
+        TunerEngine ai;
+        m_tetris::TetrisMap map;
+        Scenario *scenario = nullptr;
+
+        m_tetris::SearchBudget search_budget{ 20 };
+        int last_clear = 0;
+        std::vector<char> next;
+        std::deque<int> recv_attack;
+        int send_attack = 0;
+        int combo = 0;
+        int b2b = 0;
+        char hold = ' ';
+        bool dead = false;
+
+        int total_block = 0;
+        int total_clear = 0;
+        int total_attack = 0;
+        int total_receive = 0;
+
+        BotInstance()
+        {
+            ai.prepare(10, 40);
+            ai.memory_limit(256ull << 20);
+            ai.search_config()->allow_rotate_move = false;
+            ai.search_config()->allow_180 = true;
+            ai.search_config()->allow_d = true;
+            ai.search_config()->is_20g = false;
+            ai.search_config()->last_rotate = false;
+            ai.ai_config()->table = combo_table;
+            ai.ai_config()->table_max = combo_table_max;
+        }
+
+        void init(double const *params)
+        {
+            map = m_tetris::TetrisMap(10, 40);
+            array_to_param(params, ai.ai_config()->param);
+            next.clear();
+            recv_attack.clear();
+            send_attack = 0;
+            combo = 0;
+            b2b = 0;
+            hold = ' ';
+            dead = false;
+            total_block = 0;
+            total_clear = 0;
+            total_attack = 0;
+            total_receive = 0;
+            last_clear = 0;
+        }
+
+        void init_status()
+        {
+            ai.ai_config()->safe = ai.ai()->get_safe(map, next.front());
+            ai.status()->death = 0;
+            ai.status()->combo = combo;
+            ai.status()->under_attack = static_cast<int>(std::accumulate(recv_attack.begin(), recv_attack.end(), 0));
+            ai.status()->map_rise = 0;
+            ai.status()->b2b = !!b2b;
+            ai.status()->acc_value = 0;
+            ai.status()->like = 0;
+            ai.status()->value = 0;
+            ai_zzz::TOJ::Status::init_t_value(map, ai.status()->t2_value, ai.status()->t3_value);
+        }
+
+        void prepare()
+        {
+            if (!next.empty())
+            {
+                next.erase(next.begin());
+            }
+            while (next.size() <= static_cast<size_t>(next_length))
+            {
+                assert(!scenario->pieces.empty());
+                next.push_back(scenario->pieces.front());
+                scenario->pieces.pop_front();
+            }
+        }
+
+        void run()
+        {
+            init_status();
+
+            char current = next.front();
+            bool is_hold_piece = hold != ' ' && current == hold;
+            auto result = ai.run_hold(map, ai.spawn_node(current, last_clear, is_hold_piece), hold, true,
+                                      next.data() + 1, next_length, search_budget);
+            if (result.target == nullptr || result.target->row >= 20)
+            {
+                dead = true;
+                return;
+            }
+            if (result.change_hold)
+            {
+                if (hold == ' ')
+                {
+                    next.erase(next.begin());
+                }
+                hold = current;
+            }
+
+            int clear = result.target->attach(ai.context().get(), map);
+            total_clear += clear;
+            last_clear = clear;
+
+            auto get_combo_attack = [&](int c)
+            {
+                return combo_table[std::min(combo_table_max - 1, c)];
+            };
+            int attack = 0;
+            switch (clear)
+            {
+            case 0:
+                combo = 0;
+                break;
+            case 1:
+                if (result.target.type == ai_zzz::TOJ::TSpinType::TSpinMini)
+                {
+                    attack += 1 + b2b;
+                    b2b = 1;
+                }
+                else if (result.target.type == ai_zzz::TOJ::TSpinType::TSpin)
+                {
+                    attack += 2 + b2b;
+                    b2b = 1;
+                }
+                else
+                {
+                    b2b = 0;
+                }
+                attack += get_combo_attack(++combo);
+                break;
+            case 2:
+                if (result.target.type != ai_zzz::TOJ::TSpinType::None)
+                {
+                    attack += 4 + b2b;
+                    b2b = 1;
+                }
+                else
+                {
+                    attack += 1;
+                    b2b = 0;
+                }
+                attack += get_combo_attack(++combo);
+                break;
+            case 3:
+                if (result.target.type != ai_zzz::TOJ::TSpinType::None)
+                {
+                    attack += 6 + b2b * 2;
+                    b2b = 1;
+                }
+                else
+                {
+                    attack += 2;
+                    b2b = 0;
+                }
+                attack += get_combo_attack(++combo);
+                break;
+            case 4:
+                attack += get_combo_attack(++combo) + 4 + b2b;
+                b2b = 1;
+                break;
+            }
+            if (map.count == 0)
+            {
+                attack += 6;
+            }
+
+            ++total_block;
+            total_attack += attack;
+            send_attack = attack;
+
+            while (!recv_attack.empty())
+            {
+                if (send_attack > 0)
+                {
+                    if (recv_attack.front() <= send_attack)
+                    {
+                        send_attack -= recv_attack.front();
+                        recv_attack.pop_front();
+                        continue;
+                    }
+                    recv_attack.front() -= send_attack;
+                    send_attack = 0;
+                }
+                if (send_attack > 0 || combo > 0)
+                {
+                    break;
+                }
+                int line = recv_attack.front();
+                total_receive += line;
+                recv_attack.pop_front();
+
+                for (int y = map.height - 1; y >= line; --y)
+                {
+                    map.row[y] = map.row[y - line];
+                }
+                uint32_t hole = 1u << scenario_hole(*scenario);
+                ++scenario->packet_index;
+                uint32_t garbage_row = ai.context()->full() & ~hole;
+                for (int y = 0; y < line; ++y)
+                {
+                    map.row[y] = garbage_row;
+                }
+                map.count = 0;
+                map.roof = 0;
+                for (int my = 0; my < map.height; ++my)
+                {
+                    for (int mx = 0; mx < map.width; ++mx)
+                    {
+                        if (map.full(mx, my))
+                        {
+                            map.top[mx] = map.roof = my + 1;
+                            ++map.count;
+                        }
+                    }
+                }
+            }
+        }
+
+        void under_attack(int line)
+        {
+            if (line > 0)
+            {
+                recv_attack.emplace_back(line);
+            }
+        }
+    };
+
+    inline void render_view(BotInstance &b1, BotInstance &b2, char const *name1, char const *name2)
+    {
+        m_tetris::TetrisMap m1 = b1.map;
+        m_tetris::TetrisMap m2 = b2.map;
+        if (!b1.next.empty())
+        {
+            auto n1 = b1.ai.context()->generate(b1.next.front());
+            if (n1)
+            {
+                m_tetris::TetrisMap tmp = b1.map;
+                n1->attach(b1.ai.context().get(), tmp);
+                m1 = tmp;
+            }
+        }
+        if (!b2.next.empty())
+        {
+            auto n2 = b2.ai.context()->generate(b2.next.front());
+            if (n2)
+            {
+                m_tetris::TetrisMap tmp = b2.map;
+                n2->attach(b2.ai.context().get(), tmp);
+                m2 = tmp;
+            }
+        }
+
+        std::print("\x1b[H\x1b[2J");
+        int up1 = std::accumulate(b1.recv_attack.begin(), b1.recv_attack.end(), 0);
+        int up2 = std::accumulate(b2.recv_attack.begin(), b2.recv_attack.end(), 0);
+        std::println(
+            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {}\n"
+            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {}",
+            b1.hold, std::string(b1.next.begin() + 1, b1.next.begin() + 1 + next_length),
+            b1.combo, b1.b2b, up1, b1.total_block, b1.total_clear, b1.total_attack,
+            b1.total_clear ? static_cast<double>(b1.total_attack) / b1.total_clear : 0.0,
+            b1.total_block ? static_cast<double>(b1.total_attack) / b1.total_block : 0.0, name1,
+            b2.hold, std::string(b2.next.begin() + 1, b2.next.begin() + 1 + next_length),
+            b2.combo, b2.b2b, up2, b2.total_block, b2.total_clear, b2.total_attack,
+            b2.total_clear ? static_cast<double>(b2.total_attack) / b2.total_clear : 0.0,
+            b2.total_block ? static_cast<double>(b2.total_attack) / b2.total_block : 0.0, name2);
+        for (int y = 21; y >= 0; --y)
+        {
+            for (int x = 0; x < 10; ++x)
+            {
+                std::print("{}", m1.full(x, y) ? "[]" : "  ");
+            }
+            std::print("  ");
+            for (int x = 0; x < 10; ++x)
+            {
+                std::print("{}", m2.full(x, y) ? "[]" : "  ");
+            }
+            std::println("");
+        }
+        std::fflush(stdout);
+    }
+
+    struct MatchResult
+    {
+        enum WinnerReason
+        {
+            P1_SURVIVOR = 1,
+            P2_SURVIVOR = 2,
+            P1_CAP_APL = 3,
+            P2_CAP_APL = 4,
+            P1_BOTH_DEAD_APL = 5,
+            P2_BOTH_DEAD_APL = 6,
+            BOTH_DEAD_DRAW = 7,
+            CAP_DRAW = 8,
+        };
+        int winner;
+        bool dead1;
+        bool dead2;
+        bool capped;
+        int winner_reason;
+        int rounds;
+        double app1, app2;
+        double apl1, apl2;
+    };
+
+    inline MatchResult play_match(BotInstance &b1, BotInstance &b2, int max_rounds = 1000,
+                                  std::function<void()> view_cb = nullptr)
+    {
+        int played_rounds = 0;
+        for (int round = 1; round <= max_rounds; ++round)
+        {
+            b1.scenario->round = round;
+            b2.scenario->round = round;
+            b1.prepare();
+            b2.prepare();
+            if (view_cb)
+            {
+                view_cb();
+            }
+            b1.run();
+            b2.run();
+            ++played_rounds;
+            if (b1.dead || b2.dead)
+            {
+                break;
+            }
+
+            int min_attack = std::min(b1.send_attack, b2.send_attack);
+            b1.send_attack -= min_attack;
+            b2.send_attack -= min_attack;
+            b1.under_attack(b2.send_attack);
+            b2.under_attack(b1.send_attack);
+        }
+
+        MatchResult r;
+        r.dead1 = b1.dead;
+        r.dead2 = b2.dead;
+        r.capped = !b1.dead && !b2.dead;
+        r.rounds = played_rounds;
+        r.app1 = b1.total_block > 0 ? static_cast<double>(b1.total_attack) / b1.total_block : 0.0;
+        r.app2 = b2.total_block > 0 ? static_cast<double>(b2.total_attack) / b2.total_block : 0.0;
+        r.apl1 = b1.total_clear > 0 ? static_cast<double>(b1.total_attack) / b1.total_clear : 0.0;
+        r.apl2 = b2.total_clear > 0 ? static_cast<double>(b2.total_attack) / b2.total_clear : 0.0;
+        if (b1.dead && !b2.dead)
+        {
+            r.winner = -1;
+            r.winner_reason = MatchResult::P2_SURVIVOR;
+        }
+        else if (b2.dead && !b1.dead)
+        {
+            r.winner = +1;
+            r.winner_reason = MatchResult::P1_SURVIVOR;
+        }
+        else if (r.apl1 > r.apl2)
+        {
+            r.winner = +1;
+            r.winner_reason = r.capped ? MatchResult::P1_CAP_APL : MatchResult::P1_BOTH_DEAD_APL;
+        }
+        else if (r.apl2 > r.apl1)
+        {
+            r.winner = -1;
+            r.winner_reason = r.capped ? MatchResult::P2_CAP_APL : MatchResult::P2_BOTH_DEAD_APL;
+        }
+        else
+        {
+            r.winner = 0;
+            r.winner_reason = r.capped ? MatchResult::CAP_DRAW : MatchResult::BOTH_DEAD_DRAW;
+        }
+        return r;
+    }
+
+    struct MatchJob
+    {
+        double p1[NUM_PARAMS];
+        double p2[NUM_PARAMS];
+        uint64_t scenario_seed_p1;
+        uint64_t scenario_seed_p2;
+        size_t job_id;
+        int budget_iters_p1 = -1;
+        int budget_iters_p2 = -1;
+        int budget_ms_p1 = -1;
+        int budget_ms_p2 = -1;
+    };
+
+    struct MatchOutcome
+    {
+        int winner;
+        bool dead1;
+        bool dead2;
+        bool capped;
+        int winner_reason;
+        int rounds;
+        double app1, app2;
+        double apl1, apl2;
+    };
+
+    inline double paired_reward(MatchOutcome const &a, MatchOutcome const &b)
+    {
+        return 0.5 * (a.winner - b.winner);
+    }
+
+    inline std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, int threads,
+                                               int default_iters, int default_ms, int max_rounds,
+                                               std::atomic<bool> &view, std::mutex &view_mutex,
+                                               std::atomic<uint32_t> &view_index)
+    {
+        std::vector<MatchOutcome> out(jobs.size());
+        std::atomic<size_t> next_job{ 0 };
+        auto worker = [&]()
+        {
+            for (;;)
+            {
+                size_t idx = next_job.fetch_add(1);
+                if (idx >= jobs.size())
+                {
+                    return;
+                }
+                Scenario scenario_p1 = make_scenario(jobs[idx].scenario_seed_p1, static_cast<size_t>(max_rounds), static_cast<size_t>(next_length));
+                Scenario scenario_p2 = make_scenario(jobs[idx].scenario_seed_p2, static_cast<size_t>(max_rounds), static_cast<size_t>(next_length));
+                BotInstance b1, b2;
+                b1.scenario = &scenario_p1;
+                b2.scenario = &scenario_p2;
+                auto budget_of = [&](int iters, int ms)
+                {
+                    if (iters > 0)
+                    {
+                        return m_tetris::SearchBudget::by_iterations(static_cast<size_t>(iters));
+                    }
+                    if (ms > 0)
+                    {
+                        return m_tetris::SearchBudget{ static_cast<time_t>(ms) };
+                    }
+                    if (default_iters > 0)
+                    {
+                        return m_tetris::SearchBudget::by_iterations(static_cast<size_t>(default_iters));
+                    }
+                    return m_tetris::SearchBudget{ static_cast<time_t>(default_ms) };
+                };
+                b1.search_budget = budget_of(jobs[idx].budget_iters_p1, jobs[idx].budget_ms_p1);
+                b2.search_budget = budget_of(jobs[idx].budget_iters_p2, jobs[idx].budget_ms_p2);
+                b1.init(jobs[idx].p1);
+                b2.init(jobs[idx].p2);
+                uint32_t claim = static_cast<uint32_t>(idx) + 1;
+                std::function<void()> view_cb = [&, idx, claim]() mutable
+                {
+                    if (view.load(std::memory_order_relaxed)
+                        && view_index.load(std::memory_order_relaxed) == 0)
+                    {
+                        std::lock_guard<std::mutex> lock(view_mutex);
+                        if (view.load(std::memory_order_relaxed)
+                            && view_index.load(std::memory_order_relaxed) == 0)
+                        {
+                            view_index.store(claim, std::memory_order_relaxed);
+                        }
+                    }
+                    if (view_index.load(std::memory_order_relaxed) != claim)
+                    {
+                        return;
+                    }
+                    render_view(b1, b2, "PLUS", "MINUS");
+                };
+                MatchResult r = play_match(b1, b2, max_rounds, view_cb);
+                {
+                    std::lock_guard<std::mutex> lock(view_mutex);
+                    if (view_index.load(std::memory_order_relaxed) == claim)
+                    {
+                        view_index.store(0, std::memory_order_relaxed);
+                    }
+                }
+                out[idx].winner = r.winner;
+                out[idx].dead1 = r.dead1;
+                out[idx].dead2 = r.dead2;
+                out[idx].capped = r.capped;
+                out[idx].winner_reason = r.winner_reason;
+                out[idx].rounds = r.rounds;
+                out[idx].app1 = r.app1;
+                out[idx].app2 = r.app2;
+                out[idx].apl1 = r.apl1;
+                out[idx].apl2 = r.apl2;
+            }
+        };
+        size_t nthreads = std::min<size_t>(std::max(1, threads), jobs.size());
+        std::vector<std::thread> pool;
+        pool.reserve(nthreads);
+        for (size_t t = 0; t < nthreads; ++t)
+        {
+            pool.emplace_back(worker);
+        }
+        for (auto &th : pool)
+        {
+            th.join();
+        }
+        return out;
+    }
+}
