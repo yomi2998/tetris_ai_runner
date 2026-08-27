@@ -309,7 +309,8 @@ enum CheckpointLoadResult
 
 static int load_state(std::string const &data_file, int &resume_k, double *theta,
                       double &es_sigma, double *es_m1, double *es_m2,
-                      CheckpointConfig &saved_cfg)
+                      CheckpointConfig &saved_cfg, int &stall_batches,
+                      int &restarts, int &restart_origin)
 {
     std::ifstream ifs(data_file, std::ios::binary);
     if (!ifs.good())
@@ -330,6 +331,9 @@ static int load_state(std::string const &data_file, int &resume_k, double *theta
     ifs.read(reinterpret_cast<char *>(&es_sigma), sizeof(es_sigma));
     ifs.read(reinterpret_cast<char *>(es_m1), NUM_PARAMS * sizeof(double));
     ifs.read(reinterpret_cast<char *>(es_m2), NUM_PARAMS * sizeof(double));
+    ifs.read(reinterpret_cast<char *>(&stall_batches), sizeof(stall_batches));
+    ifs.read(reinterpret_cast<char *>(&restarts), sizeof(restarts));
+    ifs.read(reinterpret_cast<char *>(&restart_origin), sizeof(restart_origin));
     uint64_t stored_checksum = 0;
     ifs.read(reinterpret_cast<char *>(&stored_checksum), sizeof(stored_checksum));
     if (!ifs.good())
@@ -346,7 +350,8 @@ static int load_state(std::string const &data_file, int &resume_k, double *theta
         + sizeof(saved_cfg.eval_matches) + sizeof(saved_cfg.search_ms) + sizeof(saved_cfg.seed)
         + sizeof(saved_cfg.iters_per_move)
         + sizeof(saved_cfg.param_scale) + sizeof(saved_cfg.combo_table)
-        + sizeof(saved_cfg.next_length) + NUM_PARAMS * sizeof(double) * 3 + sizeof(es_sigma);
+        + sizeof(saved_cfg.next_length) + NUM_PARAMS * sizeof(double) * 3 + sizeof(es_sigma)
+        + sizeof(stall_batches) + sizeof(restarts) + sizeof(restart_origin);
     std::vector<char> payload(payload_bytes);
     char *p = payload.data();
     std::memcpy(p, &resume_k, sizeof(resume_k)); p += sizeof(resume_k);
@@ -362,6 +367,9 @@ static int load_state(std::string const &data_file, int &resume_k, double *theta
     std::memcpy(p, &es_sigma, sizeof(es_sigma)); p += sizeof(es_sigma);
     std::memcpy(p, es_m1, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
     std::memcpy(p, es_m2, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
+    std::memcpy(p, &stall_batches, sizeof(stall_batches)); p += sizeof(stall_batches);
+    std::memcpy(p, &restarts, sizeof(restarts)); p += sizeof(restarts);
+    std::memcpy(p, &restart_origin, sizeof(restart_origin)); p += sizeof(restart_origin);
     uint64_t computed = checkpoint_checksum(payload.data(), payload.size());
     if (computed != stored_checksum)
     {
@@ -383,12 +391,14 @@ static int load_state(std::string const &data_file, int &resume_k, double *theta
 
 static bool save_state(std::string const &data_file, int k, double const *theta,
                        double es_sigma, double const *es_m1, double const *es_m2,
-                       CheckpointConfig const &cfg)
+                       CheckpointConfig const &cfg, int stall_batches,
+                       int restarts, int restart_origin)
 {
     size_t const payload_bytes = sizeof(k) + sizeof(cfg.max_rounds) + sizeof(cfg.eval_matches)
         + sizeof(cfg.search_ms) + sizeof(cfg.seed) + sizeof(cfg.iters_per_move)
         + sizeof(cfg.param_scale) + sizeof(cfg.combo_table)
-        + sizeof(cfg.next_length) + NUM_PARAMS * sizeof(double) * 3 + sizeof(es_sigma);
+        + sizeof(cfg.next_length) + NUM_PARAMS * sizeof(double) * 3 + sizeof(es_sigma)
+        + sizeof(stall_batches) + sizeof(restarts) + sizeof(restart_origin);
     std::vector<char> payload(payload_bytes);
     char *p = payload.data();
     std::memcpy(p, &k, sizeof(k)); p += sizeof(k);
@@ -404,6 +414,9 @@ static bool save_state(std::string const &data_file, int k, double const *theta,
     std::memcpy(p, &es_sigma, sizeof(es_sigma)); p += sizeof(es_sigma);
     std::memcpy(p, es_m1, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
     std::memcpy(p, es_m2, NUM_PARAMS * sizeof(double)); p += NUM_PARAMS * sizeof(double);
+    std::memcpy(p, &stall_batches, sizeof(stall_batches)); p += sizeof(stall_batches);
+    std::memcpy(p, &restarts, sizeof(restarts)); p += sizeof(restarts);
+    std::memcpy(p, &restart_origin, sizeof(restart_origin)); p += sizeof(restart_origin);
     uint64_t checksum = checkpoint_checksum(payload.data(), payload.size());
 
     std::string const tmp = data_file + ".tmp";
@@ -998,12 +1011,16 @@ static void check_checkpoint_formats(SelfCheck &sc)
     std::memcpy(cfg.param_scale, param_scale, sizeof(param_scale));
     std::memcpy(cfg.combo_table, combo_table, sizeof(combo_table));
 
-    sc.check(save_state(path, 1000, theta, 0.15, es_m1, es_m2, cfg), "checkpoint saves");
+    sc.check(save_state(path, 1000, theta, 0.15, es_m1, es_m2, cfg, 7, 2, 500), "checkpoint saves");
     int resume_k = 0;
     double sigma = 0.0;
     CheckpointConfig loaded_cfg{};
-    int r = load_state(path, resume_k, loaded_theta, sigma, es_m1, es_m2, loaded_cfg);
+    int stall = 0, restarts = 0, origin = 0;
+    int r = load_state(path, resume_k, loaded_theta, sigma, es_m1, es_m2, loaded_cfg,
+                       stall, restarts, origin);
     sc.check(r == CHECKPOINT_OK && resume_k == 1000, "checkpoint resumes at the saved iteration");
+    sc.check(stall == 7 && restarts == 2 && origin == 500,
+             "stall and restart state survives a save/load round-trip");
     bool theta_ok = true;
     for (size_t i = 0; i < NUM_PARAMS; ++i) { theta_ok = theta_ok && loaded_theta[i] == theta[i]; }
     sc.check(theta_ok && std::fabs(sigma - 0.15) < 1e-12 && checkpoint_config_equal(loaded_cfg, cfg),
@@ -1018,8 +1035,20 @@ static void check_checkpoint_formats(SelfCheck &sc)
         char flipped = static_cast<char>(ch ^ 0x20);
         f.write(&flipped, 1);
     }
-    r = load_state(path, resume_k, loaded_theta, sigma, es_m1, es_m2, loaded_cfg);
+    r = load_state(path, resume_k, loaded_theta, sigma, es_m1, es_m2, loaded_cfg,
+                   stall, restarts, origin);
     sc.check(r == CHECKPOINT_CORRUPT, "a corrupted checkpoint is rejected rather than trusted");
+
+    int pr = 0, pk = 0, ps = 0, po = 0;
+    sc.check(save_state(path, 10, theta, 0.2, es_m1, es_m2, cfg, 0, 0, -1)
+             && load_state(path, pr, loaded_theta, sigma, es_m1, es_m2, loaded_cfg, pk, ps, po)
+                 == CHECKPOINT_OK && pr == 10 && pk == 0 && ps == 0 && po == -1,
+             "a run with no restart history round-trips");
+
+    sc.check(save_state(path, 10, theta, 0.2, es_m1, es_m2, cfg, 5, 9, 100)
+             && load_state(path, pr, loaded_theta, sigma, es_m1, es_m2, loaded_cfg, pk, ps, po)
+                 == CHECKPOINT_OK && pr == 10 && pk == 5 && ps == 9 && po == 100,
+             "a mid-run stall clock and restart count resume intact");
 
     std::remove(path.c_str());
     std::remove((path + ".bak").c_str());
@@ -1209,8 +1238,11 @@ int main(int argc, char *argv[])
     double es_m2[NUM_PARAMS] = { 0 };
     int resume_k = 0;
     CheckpointConfig saved_cfg;
+    int stall_batches = 0;
+    int restarts = 0;
+    int restart_origin = -1;
     int load_result = load_state(data_file, resume_k, theta, es_sigma, es_m1, es_m2,
-                                 saved_cfg);
+                                 saved_cfg, stall_batches, restarts, restart_origin);
     if (load_result == CHECKPOINT_OK && seed == 0)
     {
         seed = saved_cfg.seed;
@@ -1250,7 +1282,8 @@ int main(int argc, char *argv[])
                         "       Delete {} for a fresh start.", resume_k, num_iters, data_file);
             return 0;
         }
-        std::println("[TUNER] Resumed from iteration {} (overrides best_param)", resume_k);
+        std::println("[TUNER] Resumed from iteration {} (overrides best_param); stall={} restarts={}/{} restart_origin={}",
+                     resume_k, stall_batches, restarts, MAX_RESTARTS, restart_origin);
     }
     else
     {
@@ -1305,10 +1338,6 @@ int main(int argc, char *argv[])
     {
         x[i] = theta[i] / param_scale[i];
     }
-
-    int stall_batches = 0;
-    int restarts = 0;
-    int restart_origin = -1;
 
     std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, sigma_tau={:.0f}, lr_horizon={:.0f}",
                 num_iters, 2 * q, q, max_rounds,
@@ -1456,7 +1485,8 @@ int main(int argc, char *argv[])
             theta[i] = x[i] * param_scale[i];
         }
 
-        if (!save_state(data_file, k + 1, theta, es_sigma, es_m1, es_m2, cfg))
+        if (!save_state(data_file, k + 1, theta, es_sigma, es_m1, es_m2, cfg,
+                        stall_batches, restarts, restart_origin))
         {
             std::println(stderr, "[TUNER] warning: failed to write checkpoint {}", data_file);
         }
@@ -1523,7 +1553,7 @@ int main(int argc, char *argv[])
             es_sigma = RESTART_SIGMA;
             stall_batches = 0;
             ++restarts;
-            std::println("[ES]   STALL: {} campaigns without promotion; rolled back to incumbent, reset Adam, sigma={:.3f} re-annealing from iter {} (restart {}/{})",
+            std::println("[ES]   STALL: {} iterations without promotion; rolled back to incumbent, reset Adam, sigma={:.3f} re-annealing from iter {} (restart {}/{})",
                          STALL_WINDOW, RESTART_SIGMA, restart_origin, restarts, MAX_RESTARTS);
         }
 
@@ -1550,7 +1580,8 @@ int main(int argc, char *argv[])
     }
 
     durable_write_doubles("current_param.bin", theta, NUM_PARAMS);
-    if (!save_state(data_file, num_iters, theta, es_sigma, es_m1, es_m2, cfg))
+    if (!save_state(data_file, num_iters, theta, es_sigma, es_m1, es_m2, cfg,
+                    stall_batches, restarts, restart_origin))
     {
         std::println(stderr, "[TUNER] warning: failed to write checkpoint {}", data_file);
     }
