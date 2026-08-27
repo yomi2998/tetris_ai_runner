@@ -1042,10 +1042,87 @@ static int run_selfcheck()
     return 1;
 }
 
+static void print_usage()
+{
+    std::println("tuner - paired mirrored ES tuner for the TOJ policy");
+    std::println("");
+    std::println("Usage:");
+    std::println("  tuner [<iters> <games> <search_ms> <seed> <threads> <rounds> <iters_per_move>] [--default|--fresh-zero]");
+    std::println("  tuner probe [<batches> <games> <search_ms> <seed> <threads> <rounds> <step> <iters_per_move>] [--default]");
+    std::println("  tuner bench [<pairs> <iters_arm> <ms_arm> <seed> <threads> <rounds>] [--default]");
+    std::println("  tuner vs <path_a> <path_b> [<pairs> <search_ms> <iters_per_move> <seed> <threads> <rounds>]");
+    std::println("  tuner selfcheck");
+    std::println("  tuner --help | -h | help");
+    std::println("");
+    std::println("Modes:");
+    std::println("  (default)   Run the paired mirrored ES search from the current policy.");
+    std::println("              Iterates <iters> batches of <games> seat-swapped matches,");
+    std::println("              promoting to best_param.bin when a candidate clears the");
+    std::println("              incumbent challenge. Checkpoints to tuner_data.bin and resumes.");
+    std::println("  probe       Fixed-theta gradient probe: measures the parameter gradient at");
+    std::println("              the current policy over <batches> batches of mirrored pairs.");
+    std::println("  bench       Budget calibration: <pairs> seat-swapped pairs of iters-arm vs");
+    std::println("              ms-arm, reporting win rate, CI, APP, APL and deaths.");
+    std::println("  vs          Held-out comparison of two param files <path_a> and <path_b>,");
+    std::println("              reporting win-equiv, CI, APP, APL, deaths and rounds.");
+    std::println("  selfcheck   Fast deterministic assertions (promotion stats, CRN event");
+    std::println("              scoping, checkpoint formats, warm-start identity). No games.");
+    std::println("");
+    std::println("Common options:");
+    std::println("  --default     Start from the production baseline instead of best_param.bin.");
+    std::println("  --fresh-zero  Start from zero weights (default mode only).");
+    std::println("");
+    std::println("Arguments (positional, defaults in parentheses):");
+    std::println("  <iters>            total iterations (10000)");
+    std::println("  <games>            matches per batch, even (14)");
+    std::println("  <search_ms>        per-move search budget in ms (20)");
+    std::println("  <seed>             RNG seed, 0 = time-based (default 0, others 555)");
+    std::println("  <threads>          worker threads, 0 = auto (1)");
+    std::println("  <rounds>           max rounds per match (3600)");
+    std::println("  <iters_per_move>   search budget in iterations, 0 = use ms (0)");
+    std::println("  <pairs>            seat-swapped pairs (bench 64, vs 32)");
+    std::println("  <iters_arm>        bench: iterations budget for the iters arm (20)");
+    std::println("  <ms_arm>           bench: ms budget for the ms arm (20)");
+    std::println("  <batches>          probe: number of gradient batches (8)");
+    std::println("  <step>             probe: mirrored step size in normalized coords (0.30)");
+    std::println("");
+    std::println("Files:");
+    std::println("  best_param.bin     validated incumbent / warm-start policy (29 doubles)");
+    std::println("  current_param.bin  latest candidate, written every iteration");
+    std::println("  tuner_data.bin     resumable ES checkpoint (with .bak)");
+    std::println("");
+    std::println("Examples:");
+    std::println("  tuner 5000 14 20 0 8 3600 80");
+    std::println("  tuner --default 1000 14 20 42 4");
+    std::println("  tuner probe 16 14 20 7 8");
+    std::println("  tuner bench 64 20 20 555 8");
+    std::println("  tuner vs best_param.bin candidate.bin 32 20 0 555 8");
+    std::println("  tuner selfcheck");
+}
+
+static bool wants_help(int argc, char *argv[])
+{
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0
+            || std::strcmp(argv[i], "help") == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 int main(int argc, char *argv[])
 {
     std::setbuf(stdout, nullptr);
     std::setbuf(stderr, nullptr);
+
+    if (wants_help(argc, argv))
+    {
+        print_usage();
+        return 0;
+    }
 
     if (argc > 1 && std::strcmp(argv[1], "selfcheck") == 0)
     {
