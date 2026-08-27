@@ -2,6 +2,8 @@
 #include "tetris_core.h"
 #include "search_tspin.h"
 #include <array>
+#include <cmath>
+#include <cstddef>
 
 namespace ai_zzz
 {
@@ -221,6 +223,83 @@ namespace ai_zzz
             double combo = 80;
             double ratio = 0;
         };
+
+        static constexpr size_t NUM_PARAMS = 29;
+        static constexpr double kProductionDefaultTheta[NUM_PARAMS] = {
+            10.507166148, 7.539860726, 13.048099725, 13.388476179, 6.728747539, 9.476881786,
+            0.258534525, -0.108269503, 4.394241496, -4.892359035, 0.049148374, 1.586714505,
+            8.885878229, -0.006001836, -0.004336234, -2.021765056, -0.951446468, -1.145468832,
+            -1.515758227, -0.612910192, -0.476031978, 0.009596827, -0.399212013, -0.855819915,
+            -0.418779377, -0.454784178, -1.417493065, 1.050941751, 0.756272086,
+        };
+
+        static void production_default_theta(double *out)
+        {
+            for (size_t i = 0; i < NUM_PARAMS; ++i)
+            {
+                out[i] = kProductionDefaultTheta[i];
+            }
+        }
+
+        static void theta_from_param(Param const &p, double *out)
+        {
+            out[0] = p.base;         out[1] = p.roof;
+            out[2] = p.col_trans;    out[3] = p.row_trans;
+            out[4] = p.hole_count;   out[5] = p.hole_line;
+            out[6] = p.clear_width;  out[7] = p.wide_2;
+            out[8] = p.wide_3;       out[9] = p.wide_4;
+            out[10] = p.safe;        out[11] = p.b2b;
+            out[12] = p.attack;      out[13] = p.hold_t;
+            out[14] = p.hold_i;      out[15] = p.waste_t;
+            out[16] = p.waste_i;     out[17] = p.clear_1;
+            out[18] = p.clear_2;     out[19] = p.clear_3;
+            out[20] = p.clear_4;     out[21] = p.t2_slot;
+            out[22] = p.t3_slot;     out[23] = p.tspin_mini;
+            out[24] = p.tspin_1;     out[25] = p.tspin_2;
+            out[26] = p.tspin_3;     out[27] = p.combo;
+            out[28] = p.ratio;
+        }
+
+        static void theta_to_param(double const *in, Param &p)
+        {
+            p.base = in[0];          p.roof = in[1];
+            p.col_trans = in[2];     p.row_trans = in[3];
+            p.hole_count = in[4];    p.hole_line = in[5];
+            p.clear_width = in[6];   p.wide_2 = in[7];
+            p.wide_3 = in[8];        p.wide_4 = in[9];
+            p.safe = in[10];         p.b2b = in[11];
+            p.attack = in[12];       p.hold_t = in[13];
+            p.hold_i = in[14];       p.waste_t = in[15];
+            p.waste_i = in[16];      p.clear_1 = in[17];
+            p.clear_2 = in[18];      p.clear_3 = in[19];
+            p.clear_4 = in[20];      p.t2_slot = in[21];
+            p.t3_slot = in[22];      p.tspin_mini = in[23];
+            p.tspin_1 = in[24];      p.tspin_2 = in[25];
+            p.tspin_3 = in[26];      p.combo = in[27];
+            p.ratio = in[28];
+        }
+
+        static void struct_defaults_theta(double *out)
+        {
+            Param const p;
+            theta_from_param(p, out);
+        }
+
+        static bool all_finite(double const *v, size_t n)
+        {
+            if (v == nullptr)
+            {
+                return false;
+            }
+            for (size_t i = 0; i < n; ++i)
+            {
+                if (!std::isfinite(v[i]))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
         struct Config
         {
             int const *table;

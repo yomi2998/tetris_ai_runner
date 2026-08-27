@@ -123,26 +123,25 @@ namespace
 {
     ai_zzz::TOJ::Param default_toj_param()
     {
-        return {
-            10.507166148, 7.539860726, 13.048099725, 13.388476179, 6.728747539, 9.476881786,
-            0.258534525, -0.108269503, 4.394241496, -4.892359035, 0.049148374, 1.586714505,
-            8.885878229, -0.006001836, -0.004336234, -2.021765056, -0.951446468, -1.145468832,
-            -1.515758227, -0.612910192, -0.476031978, 0.009596827, -0.399212013, -0.855819915,
-            -0.418779377, -0.454784178, -1.417493065, 1.050941751, 0.756272086,
-        };
+        double values[ai_zzz::TOJ::NUM_PARAMS];
+        ai_zzz::TOJ::production_default_theta(values);
+        ai_zzz::TOJ::Param result;
+        ai_zzz::TOJ::theta_to_param(values, result);
+        return result;
     }
 
     bool read_toj_param(char const *path, ai_zzz::TOJ::Param &out)
     {
-        double values[29];
+        double values[ai_zzz::TOJ::NUM_PARAMS];
         FILE *file = std::fopen(path, "rb");
         if (file == nullptr)
         {
             return false;
         }
-        size_t const count = std::fread(values, sizeof(double), 29, file);
+        size_t const count = std::fread(values, sizeof(double),
+                                        ai_zzz::TOJ::NUM_PARAMS, file);
         std::fclose(file);
-        if (count != 29)
+        if (count != ai_zzz::TOJ::NUM_PARAMS)
         {
             return false;
         }
@@ -153,12 +152,7 @@ namespace
                 return false;
             }
         }
-        out = {
-            values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
-            values[8], values[9], values[10], values[11], values[12], values[13], values[14], values[15],
-            values[16], values[17], values[18], values[19], values[20], values[21], values[22], values[23],
-            values[24], values[25], values[26], values[27], values[28],
-        };
+        ai_zzz::TOJ::theta_to_param(values, out);
         return true;
     }
 

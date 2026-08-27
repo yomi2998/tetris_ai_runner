@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <mutex>
@@ -21,119 +22,90 @@
 #include "rule_toj.h"
 #include "search_tspin.h"
 #include "tetris_core.h"
+#include "tuner_toj.h"
 
 namespace tuner_match
 {
     inline constexpr size_t NUM_PARAMS = 29;
-    inline constexpr int next_length = 6;
+    inline constexpr int next_length = tuner_toj::Tuner::NEXT_LENGTH;
 
-    inline const int combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
-    inline constexpr int combo_table_max = 10;
+    inline constexpr double const (&param_scale)[NUM_PARAMS] = tuner_toj::Tuner::param_scale;
+    inline char const *const (&param_names)[NUM_PARAMS] = tuner_toj::Tuner::param_names;
+    inline constexpr int const (&combo_table)[tuner_toj::Tuner::combo_table_max] = tuner_toj::Tuner::combo_table;
+    inline constexpr int combo_table_max = tuner_toj::Tuner::combo_table_max;
 
-    inline constexpr double param_scale[NUM_PARAMS] = {
-        0.17, 2.8, 0.31, 0.97, 6.3, 6.8, 0.43, 0.18, 7.3, 8.15,
-        0.037, 2.64, 1.8, 0.00085, 0.0012, 1.4, 0.31, 0.24, 0.99, 0.48,
-        0.70, 0.0092, 0.058, 1.3, 0.22, 0.26, 0.59, 0.94, 0.68,
-    };
-
-    inline char const *const param_names[NUM_PARAMS] = {
-        "base", "roof", "col_trans", "row_trans", "hole_count", "hole_line",
-        "clear_width", "wide_2", "wide_3", "wide_4", "safe", "b2b", "attack",
-        "hold_t", "hold_i", "waste_t", "waste_i", "clear_1", "clear_2",
-        "clear_3", "clear_4", "t2_slot", "t3_slot", "tspin_mini", "tspin_1",
-        "tspin_2", "tspin_3", "combo", "ratio",
-    };
-
-    inline uint64_t splitmix64(uint64_t x)
+    using Scenario = tuner_toj::Tuner::Scenario;
+    inline void begin_round(Scenario &s1, Scenario &s2, int round)
     {
-        x += 0x9E3779B97F4A7C15ULL;
-        x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
-        x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
-        return x ^ (x >> 31);
+        tuner_toj::Tuner::begin_round(s1, s2, round);
     }
-
-    inline int rademacher(uint64_t seed, int k, int j, int i)
-    {
-        uint64_t h = splitmix64(seed ^ splitmix64(static_cast<uint64_t>(k) * 0x9E3779B97F4A7C15ULL
-                                                  + static_cast<uint64_t>(j) * 0xBF58476D1CE4E5B9ULL
-                                                  + static_cast<uint64_t>(i)));
-        return static_cast<int>(h & 1) ? 1 : -1;
-    }
-
-    struct Scenario
-    {
-        std::deque<char> pieces;
-        uint64_t pair_seed = 0;
-        int round = 0;
-        int packet_index = 0;
-    };
-
     inline int scenario_hole(Scenario const &s)
     {
-        uint64_t h = splitmix64(s.pair_seed
-            ^ splitmix64(static_cast<uint64_t>(s.round) * 0x9E3779B97F4A7C15ULL
-                         + static_cast<uint64_t>(s.packet_index) * 0x94D049BB133111EBULL));
-        return static_cast<int>(h % 10);
+        return tuner_toj::Tuner::scenario_hole(s);
     }
-
     inline Scenario make_scenario(uint64_t seed, size_t max_rounds, size_t next_len)
     {
-        std::mt19937 rng(static_cast<unsigned>(splitmix64(seed)));
-        std::string bag = "IJLOSTZ";
-        Scenario s;
-
-        size_t pieces_needed = max_rounds * 2 + next_len * 2 + 4;
-        while (s.pieces.size() < pieces_needed)
-        {
-            std::shuffle(bag.begin(), bag.end(), rng);
-            for (char c : bag)
-            {
-                s.pieces.push_back(c);
-            }
-        }
-
-        s.pair_seed = seed;
-        return s;
+        return tuner_toj::Tuner::make_scenario(seed, max_rounds, next_len);
+    }
+    inline uint64_t splitmix64(uint64_t x)
+    {
+        return tuner_toj::Tuner::splitmix64(x);
+    }
+    inline int rademacher(uint64_t seed, int k, int j, int i)
+    {
+        return tuner_toj::Tuner::rademacher(seed, k, j, i);
     }
 
     using TunerEngine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_zzz::TOJ, search_tspin::Search>;
 
     inline void param_to_array(ai_zzz::TOJ::Param const &p, double *out)
     {
-        out[0] = p.base;      out[1] = p.roof;
-        out[2] = p.col_trans; out[3] = p.row_trans;
-        out[4] = p.hole_count; out[5] = p.hole_line;
-        out[6] = p.clear_width; out[7] = p.wide_2;
-        out[8] = p.wide_3;    out[9] = p.wide_4;
-        out[10] = p.safe;     out[11] = p.b2b;
-        out[12] = p.attack;   out[13] = p.hold_t;
-        out[14] = p.hold_i;   out[15] = p.waste_t;
-        out[16] = p.waste_i;  out[17] = p.clear_1;
-        out[18] = p.clear_2;  out[19] = p.clear_3;
-        out[20] = p.clear_4;  out[21] = p.t2_slot;
-        out[22] = p.t3_slot;  out[23] = p.tspin_mini;
-        out[24] = p.tspin_1;  out[25] = p.tspin_2;
-        out[26] = p.tspin_3;  out[27] = p.combo;
-        out[28] = p.ratio;
+        static_assert(NUM_PARAMS == ai_zzz::TOJ::NUM_PARAMS,
+                      "parameter count mismatch between tuner_match and ai_zzz::TOJ");
+        ai_zzz::TOJ::theta_from_param(p, out);
     }
 
     inline void array_to_param(double const *in, ai_zzz::TOJ::Param &p)
     {
-        p.base = in[0];       p.roof = in[1];
-        p.col_trans = in[2];  p.row_trans = in[3];
-        p.hole_count = in[4]; p.hole_line = in[5];
-        p.clear_width = in[6]; p.wide_2 = in[7];
-        p.wide_3 = in[8];     p.wide_4 = in[9];
-        p.safe = in[10];      p.b2b = in[11];
-        p.attack = in[12];    p.hold_t = in[13];
-        p.hold_i = in[14];    p.waste_t = in[15];
-        p.waste_i = in[16];   p.clear_1 = in[17];
-        p.clear_2 = in[18];   p.clear_3 = in[19];
-        p.clear_4 = in[20];   p.t2_slot = in[21];
-        p.t3_slot = in[22];   p.tspin_mini = in[23];
-        p.tspin_1 = in[24];   p.tspin_2 = in[25];
-        p.tspin_3 = in[26];   p.combo = in[27];
-        p.ratio = in[28];
+        ai_zzz::TOJ::theta_to_param(in, p);
+    }
+
+    inline void production_default_theta(double *out)
+    {
+        static_assert(NUM_PARAMS == ai_zzz::TOJ::NUM_PARAMS,
+                      "parameter count mismatch between tuner_match and ai_zzz::TOJ");
+        for (size_t i = 0; i < NUM_PARAMS; ++i)
+        {
+            out[i] = ai_zzz::TOJ::kProductionDefaultTheta[i];
+        }
+    }
+
+    inline bool read_theta_strict(std::string const &path, double *out)
+    {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (!f.good())
+        {
+            return false;
+        }
+        std::streamoff const size = f.tellg();
+        if (size != static_cast<std::streamoff>(NUM_PARAMS * sizeof(double)))
+        {
+            return false;
+        }
+        f.seekg(0, std::ios::beg);
+        f.read(reinterpret_cast<char *>(out), static_cast<std::streamsize>(size));
+        if (!f.good())
+        {
+            return false;
+        }
+        for (size_t i = 0; i < NUM_PARAMS; ++i)
+        {
+            if (!std::isfinite(out[i]))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     struct BotInstance
@@ -450,8 +422,7 @@ namespace tuner_match
         int played_rounds = 0;
         for (int round = 1; round <= max_rounds; ++round)
         {
-            b1.scenario->round = round;
-            b2.scenario->round = round;
+            begin_round(*b1.scenario, *b2.scenario, round);
             b1.prepare();
             b2.prepare();
             if (view_cb)

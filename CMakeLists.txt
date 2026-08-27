@@ -101,27 +101,3 @@ add_executable(tuner
     src/random.cpp
 )
 target_include_directories(tuner PRIVATE src)
-
-add_executable(tournament_optimizer
-    src/tournament_optimizer.cpp
-    src/tetris_core.cpp
-    src/rule_toj.cpp
-    src/search_tspin.cpp
-    src/ai_zzz.cpp
-    src/integer_utils.cpp
-    src/random.cpp
-)
-target_include_directories(tournament_optimizer PRIVATE src)
-target_compile_definitions(tournament_optimizer PRIVATE TOURNAMENT_OPT_SELF_CHECK=1)
-
-add_executable(arm_driver
-    src/arm_driver.cpp
-    src/tournament_optimizer.cpp
-    src/tetris_core.cpp
-    src/rule_toj.cpp
-    src/search_tspin.cpp
-    src/ai_zzz.cpp
-    src/integer_utils.cpp
-    src/random.cpp
-)
-target_include_directories(arm_driver PRIVATE src)

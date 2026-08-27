@@ -12,97 +12,87 @@
 #include <numeric>
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <numbers>
 #include <print>
 #include <string>
 #include <vector>
-#if defined(_WIN32)
-#include <io.h>
-#include <fcntl.h>
-#else
-#include <fcntl.h>
-#include <unistd.h>
-#endif
 
-#include "tetris_core.h"
-#include "search_tspin.h"
-#include "ai_zzz.h"
-#include "rule_toj.h"
 #include "param.h"
+#include "tuner_match.h"
 
-static int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
-static int const combo_table_max = 10;
-
-size_t const NUM_PARAMS = 29;
-static int iters_per_move = 0;
-static int const next_length = 6;
-
-static double const param_scale[NUM_PARAMS] = {
-    0.17, 2.8, 0.31, 0.97, 6.3, 6.8, 0.43, 0.18, 7.3, 8.15,
-    0.037, 2.64, 1.8, 0.00085, 0.0012, 1.4, 0.31, 0.24, 0.99, 0.48,
-    0.70, 0.0092, 0.058, 1.3, 0.22, 0.26, 0.59, 0.94, 0.68,
-};
-
-static uint64_t splitmix64(uint64_t x)
+namespace stat_util
 {
-    x += 0x9E3779B97F4A7C15ULL;
-    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
-    return x ^ (x >> 31);
-}
+    inline constexpr double Z_ONE_SIDED_95 = 1.6448536269514722;
 
-static int rademacher(uint64_t seed, int k, int j, int i)
-{
-    uint64_t h = splitmix64(seed ^ splitmix64(static_cast<uint64_t>(k) * 0x9E3779B97F4A7C15ULL
-                                              + static_cast<uint64_t>(j) * 0xBF58476D1CE4E5B9ULL
-                                              + static_cast<uint64_t>(i)));
-    return static_cast<int>(h & 1) ? 1 : -1;
-}
-
-struct Scenario
-{
-    std::deque<char> pieces;
-    uint64_t pair_seed = 0;
-    int round = 0;
-    int packet_index = 0;
-};
-
-static int scenario_hole(Scenario const &s)
-{
-    uint64_t h = splitmix64(s.pair_seed
-        ^ splitmix64(static_cast<uint64_t>(s.round) * 0x9E3779B97F4A7C15ULL
-                     + static_cast<uint64_t>(s.packet_index) * 0x94D049BB133111EBULL));
-    return static_cast<int>(h % 10);
-}
-
-static Scenario make_scenario(uint64_t seed, size_t max_rounds, size_t next_length)
-{
-    std::mt19937 rng(static_cast<unsigned>(splitmix64(seed)));
-    std::string bag = "IJLOSTZ";
-    Scenario s;
-
-    size_t pieces_needed = max_rounds * 2 + next_length * 2 + 4;
-    while (s.pieces.size() < pieces_needed)
+    inline double normal_quantile_upper(double p)
     {
-        std::shuffle(bag.begin(), bag.end(), rng);
-        for (char c : bag)
+        double const target = 2.0 * p;
+        double lo = 0.0;
+        double hi = 10.0;
+        if (target <= std::erfc(hi / std::sqrt(2.0)))
         {
-            s.pieces.push_back(c);
+            return hi;
         }
+        for (int i = 0; i < 200; ++i)
+        {
+            double const mid = 0.5 * (lo + hi);
+            if (std::erfc(mid / std::sqrt(2.0)) > target)
+            {
+                lo = mid;
+            }
+            else
+            {
+                hi = mid;
+            }
+        }
+        return 0.5 * (lo + hi);
     }
 
-    s.pair_seed = seed;
-    return s;
-}
+    inline double wilson_lower_bound(double wins_equiv, int games, double z)
+    {
+        if (games <= 0 || wins_equiv < 0.0)
+        {
+            return 0.0;
+        }
+        double const n = static_cast<double>(games);
+        double const phat = std::min(1.0, std::max(0.0, wins_equiv / n));
+        double const denom = 1.0 + z * z / n;
+        double const mid = phat + z * z / (2.0 * n);
+        double const margin = z * std::sqrt(std::max(0.0, phat * (1.0 - phat)) / n
+                                            + z * z / (4.0 * n * n));
+        return (mid - margin) / denom;
+    }
 
-static char const *const param_names[NUM_PARAMS] = {
-    "base", "roof", "col_trans", "row_trans", "hole_count", "hole_line",
-    "clear_width", "wide_2", "wide_3", "wide_4", "safe", "b2b", "attack",
-    "hold_t", "hold_i", "waste_t", "waste_i", "clear_1", "clear_2",
-    "clear_3", "clear_4", "t2_slot", "t3_slot", "tspin_mini", "tspin_1",
-    "tspin_2", "tspin_3", "combo", "ratio",
-};
+    inline void wilson_interval(double wins_equiv, int games, double z, double &lo, double &hi)
+    {
+        lo = 0.0;
+        hi = 1.0;
+        if (games <= 0)
+        {
+            return;
+        }
+        double const n = static_cast<double>(games);
+        double const phat = std::min(1.0, std::max(0.0, wins_equiv / n));
+        double const denom = 1.0 + z * z / n;
+        double const mid = phat + z * z / (2.0 * n);
+        double const margin = z * std::sqrt(std::max(0.0, phat * (1.0 - phat)) / n
+                                            + z * z / (4.0 * n * n));
+        lo = std::max(0.0, (mid - margin) / denom);
+        hi = std::min(1.0, (mid + margin) / denom);
+    }
+
+    inline double look_z(int look_index, int looks_before_final, double alpha_final)
+    {
+        constexpr double z_interim = 3.0;
+        if (look_index > looks_before_final)
+        {
+            return normal_quantile_upper(alpha_final);
+        }
+        return z_interim;
+    }
+}
 
 static double const ES_SIGMA0 = 0.30;
 static double const ES_SIGMA_FLOOR = 0.08;
@@ -115,583 +105,70 @@ static double const ES_BETA2 = 0.999;
 static double const ES_EPS = 1e-8;
 static double const ES_DX_MAX = 0.04;
 static double const ES_DX_L2_MAX = 0.10;
+
 static uint64_t const CHALLENGE_SEED_BASE = 0x123456789ABCDEF0ULL;
 static int const CHALLENGE_EVERY = 50;
 static int const CHALLENGE_PAIRS = 4;
 static int const CHALLENGE_MAX_PAIRS = 32;
-static int const CHALLENGE_PROMOTE_LEVEL = 95;
+static double const CHALLENGE_PROMOTE_LB = 0.50;
+static double const CHALLENGE_ALPHA = 0.05;
+static int const CHALLENGE_TOTAL_LOOKS = CHALLENGE_MAX_PAIRS / CHALLENGE_PAIRS;
+
 static int const STALL_WINDOW = 200;
 static int const MAX_RESTARTS = 4;
 static double const RESTART_SIGMA = 0.20;
 
-using TunerEngine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_zzz::TOJ, search_tspin::Search>;
+namespace tmatch = tuner_match;
 
-static void param_to_array(ai_zzz::TOJ::Param const &p, double *out)
-{
-    out[0] = p.base;      out[1] = p.roof;
-    out[2] = p.col_trans; out[3] = p.row_trans;
-    out[4] = p.hole_count; out[5] = p.hole_line;
-    out[6] = p.clear_width; out[7] = p.wide_2;
-    out[8] = p.wide_3;    out[9] = p.wide_4;
-    out[10] = p.safe;     out[11] = p.b2b;
-    out[12] = p.attack;   out[13] = p.hold_t;
-    out[14] = p.hold_i;   out[15] = p.waste_t;
-    out[16] = p.waste_i;  out[17] = p.clear_1;
-    out[18] = p.clear_2;  out[19] = p.clear_3;
-    out[20] = p.clear_4;  out[21] = p.t2_slot;
-    out[22] = p.t3_slot;  out[23] = p.tspin_mini;
-    out[24] = p.tspin_1;  out[25] = p.tspin_2;
-    out[26] = p.tspin_3;  out[27] = p.combo;
-    out[28] = p.ratio;
-}
+using TunerEngine = tmatch::TunerEngine;
+using MatchJob = tmatch::MatchJob;
+using MatchOutcome = tmatch::MatchOutcome;
+using MatchResult = tmatch::MatchResult;
 
-static void array_to_param(double const *in, ai_zzz::TOJ::Param &p)
+constexpr size_t NUM_PARAMS = tmatch::NUM_PARAMS;
+inline constexpr double const (&param_scale)[NUM_PARAMS] = tmatch::param_scale;
+inline constexpr int const next_length = tmatch::next_length;
+inline constexpr int const combo_table_max = tmatch::combo_table_max;
+inline int const (&combo_table)[combo_table_max] = tmatch::combo_table;
+inline char const *const (&param_names)[NUM_PARAMS] = tmatch::param_names;
+
+using tmatch::Scenario;
+using tmatch::begin_round;
+using tmatch::make_scenario;
+using tmatch::scenario_hole;
+using tmatch::splitmix64;
+using tmatch::rademacher;
+using tmatch::paired_reward;
+
+static int iters_per_move = 0;
+
+static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, int threads,
+                                           int search_ms, int max_rounds,
+                                           std::atomic<bool> &view, std::mutex &view_mutex,
+                                           std::atomic<uint32_t> &view_index)
 {
-    p.base = in[0];       p.roof = in[1];
-    p.col_trans = in[2];  p.row_trans = in[3];
-    p.hole_count = in[4]; p.hole_line = in[5];
-    p.clear_width = in[6]; p.wide_2 = in[7];
-    p.wide_3 = in[8];     p.wide_4 = in[9];
-    p.safe = in[10];      p.b2b = in[11];
-    p.attack = in[12];    p.hold_t = in[13];
-    p.hold_i = in[14];    p.waste_t = in[15];
-    p.waste_i = in[16];   p.clear_1 = in[17];
-    p.clear_2 = in[18];   p.clear_3 = in[19];
-    p.clear_4 = in[20];   p.t2_slot = in[21];
-    p.t3_slot = in[22];   p.tspin_mini = in[23];
-    p.tspin_1 = in[24];   p.tspin_2 = in[25];
-    p.tspin_3 = in[26];   p.combo = in[27];
-    p.ratio = in[28];
+    return tmatch::run_batch(jobs, threads, iters_per_move, search_ms, max_rounds,
+                         view, view_mutex, view_index);
 }
 
 static bool load_params(double *out, std::string const &tag = "")
 {
-    if (param::read(out, NUM_PARAMS, tag))
+    std::string const path = param::filename(tag);
+    if (!tmatch::read_theta_strict(path, out))
     {
-        std::println("[TUNER] Loaded best parameters from {}", param::filename(tag));
-        return true;
+        return false;
     }
-    return false;
+    std::println("[TUNER] Loaded best parameters from {}", path);
+    return true;
 }
 
 static void default_params(double *out)
 {
-    ai_zzz::TOJ::Param p;
-    param_to_array(p, out);
+    ai_zzz::TOJ::production_default_theta(out);
 }
 
-struct BotInstance
-{
-    TunerEngine ai;
-    m_tetris::TetrisMap map;
-    Scenario *scenario = nullptr;
 
-    m_tetris::SearchBudget search_budget{ 20 };
-    int last_clear = 0;
-    std::vector<char> next;
-    std::deque<int> recv_attack;
-    int send_attack = 0;
-    int combo = 0;
-    int b2b = 0;
-    char hold = ' ';
-    bool dead = false;
-
-    int total_block = 0;
-    int total_clear = 0;
-    int total_attack = 0;
-    int total_receive = 0;
-
-    explicit BotInstance()
-    {
-        ai.prepare(10, 40);
-        ai.memory_limit(256ull << 20);
-        ai.search_config()->allow_rotate_move = false;
-        ai.search_config()->allow_180 = true;
-        ai.search_config()->allow_d = true;
-        ai.search_config()->is_20g = false;
-        ai.search_config()->last_rotate = false;
-        ai.ai_config()->table = combo_table;
-        ai.ai_config()->table_max = combo_table_max;
-    }
-
-    void init(double const *params)
-    {
-        map = m_tetris::TetrisMap(10, 40);
-        array_to_param(params, ai.ai_config()->param);
-        next.clear();
-        recv_attack.clear();
-        send_attack = 0;
-        combo = 0;
-        b2b = 0;
-        hold = ' ';
-        dead = false;
-        total_block = 0;
-        total_clear = 0;
-        total_attack = 0;
-        total_receive = 0;
-        last_clear = 0;
-    }
-
-    void init_status()
-    {
-        ai.ai_config()->safe = ai.ai()->get_safe(map, next.front());
-        ai.status()->death = 0;
-        ai.status()->combo = combo;
-        ai.status()->under_attack = static_cast<int>(std::accumulate(recv_attack.begin(), recv_attack.end(), 0));
-        ai.status()->map_rise = 0;
-        ai.status()->b2b = !!b2b;
-        ai.status()->acc_value = 0;
-        ai.status()->like = 0;
-        ai.status()->value = 0;
-        ai_zzz::TOJ::Status::init_t_value(map, ai.status()->t2_value, ai.status()->t3_value);
-    }
-
-    void prepare()
-    {
-        if (!next.empty())
-        {
-            next.erase(next.begin());
-        }
-        while (next.size() <= static_cast<size_t>(next_length))
-        {
-            assert(!scenario->pieces.empty());
-            next.push_back(scenario->pieces.front());
-            scenario->pieces.pop_front();
-        }
-    }
-
-    void run()
-    {
-        init_status();
-
-        char current = next.front();
-        bool is_hold_piece = hold != ' ' && current == hold;
-        auto result = ai.run_hold(map, ai.spawn_node(current, last_clear, is_hold_piece), hold, true,
-                                  next.data() + 1, next_length, search_budget);
-        if (result.target == nullptr || result.target->row >= 20)
-        {
-            dead = true;
-            return;
-        }
-        if (result.change_hold)
-        {
-            if (hold == ' ')
-            {
-                next.erase(next.begin());
-            }
-            hold = current;
-        }
-
-        int clear = result.target->attach(ai.context().get(), map);
-        total_clear += clear;
-        last_clear = clear;
-
-        auto get_combo_attack = [&](int c)
-        {
-            return combo_table[std::min(combo_table_max - 1, c)];
-        };
-        int attack = 0;
-        switch (clear)
-        {
-        case 0:
-            combo = 0;
-            break;
-        case 1:
-            if (result.target.type == ai_zzz::TOJ::TSpinType::TSpinMini)
-            {
-                attack += 1 + b2b;
-                b2b = 1;
-            }
-            else if (result.target.type == ai_zzz::TOJ::TSpinType::TSpin)
-            {
-                attack += 2 + b2b;
-                b2b = 1;
-            }
-            else
-            {
-                b2b = 0;
-            }
-            attack += get_combo_attack(++combo);
-            break;
-        case 2:
-            if (result.target.type != ai_zzz::TOJ::TSpinType::None)
-            {
-                attack += 4 + b2b;
-                b2b = 1;
-            }
-            else
-            {
-                attack += 1;
-                b2b = 0;
-            }
-            attack += get_combo_attack(++combo);
-            break;
-        case 3:
-            if (result.target.type != ai_zzz::TOJ::TSpinType::None)
-            {
-                attack += 6 + b2b * 2;
-                b2b = 1;
-            }
-            else
-            {
-                attack += 2;
-                b2b = 0;
-            }
-            attack += get_combo_attack(++combo);
-            break;
-        case 4:
-            attack += get_combo_attack(++combo) + 4 + b2b;
-            b2b = 1;
-            break;
-        }
-        if (map.count == 0)
-        {
-            attack += 6;
-        }
-
-        ++total_block;
-        total_attack += attack;
-        send_attack = attack;
-
-        while (!recv_attack.empty())
-        {
-            if (send_attack > 0)
-            {
-                if (recv_attack.front() <= send_attack)
-                {
-                    send_attack -= recv_attack.front();
-                    recv_attack.pop_front();
-                    continue;
-                }
-                recv_attack.front() -= send_attack;
-                send_attack = 0;
-            }
-            if (send_attack > 0 || combo > 0)
-            {
-                break;
-            }
-            int line = recv_attack.front();
-            total_receive += line;
-            recv_attack.pop_front();
-
-            for (int y = map.height - 1; y >= line; --y)
-            {
-                map.row[y] = map.row[y - line];
-            }
-            uint32_t hole = 1u << scenario_hole(*scenario);
-            ++scenario->packet_index;
-            uint32_t garbage_row = ai.context()->full() & ~hole;
-            for (int y = 0; y < line; ++y)
-            {
-                map.row[y] = garbage_row;
-            }
-            map.count = 0;
-            map.roof = 0;
-            for (int my = 0; my < map.height; ++my)
-            {
-                for (int mx = 0; mx < map.width; ++mx)
-                {
-                    if (map.full(mx, my))
-                    {
-                        map.top[mx] = map.roof = my + 1;
-                        ++map.count;
-                    }
-                }
-            }
-        }
-    }
-
-    void under_attack(int line)
-    {
-        if (line > 0)
-        {
-            recv_attack.emplace_back(line);
-        }
-    }
-};
-
-static void render_view(BotInstance &b1, BotInstance &b2, char const *name1, char const *name2)
-{
-    m_tetris::TetrisMap m1 = b1.map;
-    m_tetris::TetrisMap m2 = b2.map;
-    if (!b1.next.empty())
-    {
-        auto n1 = b1.ai.context()->generate(b1.next.front());
-        if (n1)
-        {
-            m_tetris::TetrisMap tmp = b1.map;
-            n1->attach(b1.ai.context().get(), tmp);
-            m1 = tmp;
-        }
-    }
-    if (!b2.next.empty())
-    {
-        auto n2 = b2.ai.context()->generate(b2.next.front());
-        if (n2)
-        {
-            m_tetris::TetrisMap tmp = b2.map;
-            n2->attach(b2.ai.context().get(), tmp);
-            m2 = tmp;
-        }
-    }
-
-    std::print("\x1b[H\x1b[2J");
-    int up1 = std::accumulate(b1.recv_attack.begin(), b1.recv_attack.end(), 0);
-    int up2 = std::accumulate(b2.recv_attack.begin(), b2.recv_attack.end(), 0);
-    std::println(
-        "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {}\n"
-        "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {}",
-        b1.hold, std::string(b1.next.begin() + 1, b1.next.begin() + 1 + next_length),
-        b1.combo, b1.b2b, up1, b1.total_block, b1.total_clear, b1.total_attack,
-        b1.total_clear ? static_cast<double>(b1.total_attack) / b1.total_clear : 0.0,
-        b1.total_block ? static_cast<double>(b1.total_attack) / b1.total_block : 0.0, name1,
-        b2.hold, std::string(b2.next.begin() + 1, b2.next.begin() + 1 + next_length),
-        b2.combo, b2.b2b, up2, b2.total_block, b2.total_clear, b2.total_attack,
-        b2.total_clear ? static_cast<double>(b2.total_attack) / b2.total_clear : 0.0,
-        b2.total_block ? static_cast<double>(b2.total_attack) / b2.total_block : 0.0, name2);
-    for (int y = 21; y >= 0; --y)
-    {
-        for (int x = 0; x < 10; ++x)
-        {
-            std::print("{}", m1.full(x, y) ? "[]" : "  ");
-        }
-        std::print("  ");
-        for (int x = 0; x < 10; ++x)
-        {
-            std::print("{}", m2.full(x, y) ? "[]" : "  ");
-        }
-        std::println("");
-    }
-    std::fflush(stdout);
-}
-
-struct MatchResult
-{
-    enum WinnerReason
-    {
-        P1_SURVIVOR = 1,
-        P2_SURVIVOR = 2,
-        P1_CAP_APL = 3,
-        P2_CAP_APL = 4,
-        P1_BOTH_DEAD_APL = 5,
-        P2_BOTH_DEAD_APL = 6,
-        BOTH_DEAD_DRAW = 7,
-        CAP_DRAW = 8,
-    };
-    int winner;
-    bool dead1;
-    bool dead2;
-    bool capped;
-    int winner_reason;
-    int rounds;
-    double app1, app2;
-    double apl1, apl2;
-};
-
-static MatchResult play_match(BotInstance &b1, BotInstance &b2, int max_rounds = 1000,
-                              std::function<void()> view_cb = nullptr)
-{
-    int played_rounds = 0;
-    for (int round = 1; round <= max_rounds; ++round)
-    {
-        b1.scenario->round = round;
-        b2.scenario->round = round;
-        b1.prepare();
-        b2.prepare();
-        if (view_cb)
-        {
-            view_cb();
-        }
-        b1.run();
-        b2.run();
-        ++played_rounds;
-        if (b1.dead || b2.dead)
-        {
-            break;
-        }
-
-        int min_attack = std::min(b1.send_attack, b2.send_attack);
-        b1.send_attack -= min_attack;
-        b2.send_attack -= min_attack;
-        b1.under_attack(b2.send_attack);
-        b2.under_attack(b1.send_attack);
-    }
-
-    MatchResult r;
-    r.dead1 = b1.dead;
-    r.dead2 = b2.dead;
-    r.capped = !b1.dead && !b2.dead;
-    r.rounds = played_rounds;
-    r.app1 = b1.total_block > 0 ? static_cast<double>(b1.total_attack) / b1.total_block : 0.0;
-    r.app2 = b2.total_block > 0 ? static_cast<double>(b2.total_attack) / b2.total_block : 0.0;
-    r.apl1 = b1.total_clear > 0 ? static_cast<double>(b1.total_attack) / b1.total_clear : 0.0;
-    r.apl2 = b2.total_clear > 0 ? static_cast<double>(b2.total_attack) / b2.total_clear : 0.0;
-    if (b1.dead && !b2.dead)
-    {
-        r.winner = -1;
-        r.winner_reason = MatchResult::P2_SURVIVOR;
-    }
-    else if (b2.dead && !b1.dead)
-    {
-        r.winner = +1;
-        r.winner_reason = MatchResult::P1_SURVIVOR;
-    }
-    else if (r.apl1 > r.apl2)
-    {
-        r.winner = +1;
-        r.winner_reason = r.capped ? MatchResult::P1_CAP_APL : MatchResult::P1_BOTH_DEAD_APL;
-    }
-    else if (r.apl2 > r.apl1)
-    {
-        r.winner = -1;
-        r.winner_reason = r.capped ? MatchResult::P2_CAP_APL : MatchResult::P2_BOTH_DEAD_APL;
-    }
-    else
-    {
-        r.winner = 0;
-        r.winner_reason = r.capped ? MatchResult::CAP_DRAW : MatchResult::BOTH_DEAD_DRAW;
-    }
-    return r;
-}
-
-struct MatchJob
-{
-    double p1[NUM_PARAMS];
-    double p2[NUM_PARAMS];
-    uint64_t scenario_seed_p1;
-    uint64_t scenario_seed_p2;
-    size_t job_id;
-    int budget_iters_p1 = -1;
-    int budget_iters_p2 = -1;
-    int budget_ms_p1 = -1;
-    int budget_ms_p2 = -1;
-};
-
-struct MatchOutcome
-{
-    int winner;
-    bool dead1;
-    bool dead2;
-    bool capped;
-    int winner_reason;
-    int rounds;
-    double app1, app2;
-    double apl1, apl2;
-};
-
-static double paired_reward(MatchOutcome const &a, MatchOutcome const &b)
-{
-    return 0.5 * (a.winner - b.winner);
-}
-
-static std::vector<MatchOutcome> run_batch(std::vector<MatchJob> const &jobs, int threads, int search_ms, int max_rounds,
-                                           TunerEngine &global_ai, std::atomic<bool> &view,
-                                           std::mutex &view_mutex, std::atomic<uint32_t> &view_index)
-{
-    std::vector<MatchOutcome> out(jobs.size());
-    std::atomic<size_t> next_job{ 0 };
-    auto worker = [&]()
-    {
-        for (;;)
-        {
-            size_t idx = next_job.fetch_add(1);
-            if (idx >= jobs.size())
-            {
-                return;
-            }
-            Scenario scenario_p1 = make_scenario(jobs[idx].scenario_seed_p1, static_cast<size_t>(max_rounds), static_cast<size_t>(next_length));
-            Scenario scenario_p2 = make_scenario(jobs[idx].scenario_seed_p2, static_cast<size_t>(max_rounds), static_cast<size_t>(next_length));
-            BotInstance b1, b2;
-            b1.scenario = &scenario_p1;
-            b2.scenario = &scenario_p2;
-            if (jobs[idx].budget_iters_p1 > 0)
-            {
-                b1.search_budget = m_tetris::SearchBudget::by_iterations(static_cast<size_t>(jobs[idx].budget_iters_p1));
-            }
-            else if (jobs[idx].budget_ms_p1 > 0)
-            {
-                b1.search_budget = m_tetris::SearchBudget{ static_cast<time_t>(jobs[idx].budget_ms_p1) };
-            }
-            else if (iters_per_move > 0)
-            {
-                b1.search_budget = m_tetris::SearchBudget::by_iterations(static_cast<size_t>(iters_per_move));
-            }
-            else
-            {
-                b1.search_budget = m_tetris::SearchBudget{ static_cast<time_t>(search_ms) };
-            }
-            if (jobs[idx].budget_iters_p2 > 0)
-            {
-                b2.search_budget = m_tetris::SearchBudget::by_iterations(static_cast<size_t>(jobs[idx].budget_iters_p2));
-            }
-            else if (jobs[idx].budget_ms_p2 > 0)
-            {
-                b2.search_budget = m_tetris::SearchBudget{ static_cast<time_t>(jobs[idx].budget_ms_p2) };
-            }
-            else if (iters_per_move > 0)
-            {
-                b2.search_budget = m_tetris::SearchBudget::by_iterations(static_cast<size_t>(iters_per_move));
-            }
-            else
-            {
-                b2.search_budget = m_tetris::SearchBudget{ static_cast<time_t>(search_ms) };
-            }
-            b1.init(jobs[idx].p1);
-            b2.init(jobs[idx].p2);
-            uint32_t claim = static_cast<uint32_t>(idx) + 1;
-            std::function<void()> view_cb = [&, idx, claim]() mutable
-            {
-                if (view.load(std::memory_order_relaxed)
-                    && view_index.load(std::memory_order_relaxed) == 0)
-                {
-                    std::lock_guard<std::mutex> lock(view_mutex);
-                    if (view.load(std::memory_order_relaxed)
-                        && view_index.load(std::memory_order_relaxed) == 0)
-                    {
-                        view_index.store(claim, std::memory_order_relaxed);
-                    }
-                }
-                if (view_index.load(std::memory_order_relaxed) != claim)
-                {
-                    return;
-                }
-                render_view(b1, b2, "PLUS", "MINUS");
-            };
-            MatchResult r = play_match(b1, b2, max_rounds, view_cb);
-            {
-                std::lock_guard<std::mutex> lock(view_mutex);
-                if (view_index.load(std::memory_order_relaxed) == claim)
-                {
-                    view_index.store(0, std::memory_order_relaxed);
-                }
-            }
-            out[idx].winner = r.winner;
-            out[idx].dead1 = r.dead1;
-            out[idx].dead2 = r.dead2;
-            out[idx].capped = r.capped;
-            out[idx].winner_reason = r.winner_reason;
-            out[idx].rounds = r.rounds;
-            out[idx].app1 = r.app1;
-            out[idx].app2 = r.app2;
-            out[idx].apl1 = r.apl1;
-            out[idx].apl2 = r.apl2;
-        }
-    };
-    size_t nthreads = std::min<size_t>(std::max(1, threads), jobs.size());
-    std::vector<std::thread> pool;
-    pool.reserve(nthreads);
-    for (size_t t = 0; t < nthreads; ++t)
-    {
-        pool.emplace_back(worker);
-    }
-    for (auto &th : pool)
-    {
-        th.join();
-    }
-    return out;
-}
-
-static void adam_update(double const *grad, int q, double es_sigma, int k,
+static void adam_update(double const *grad, int q, double es_sigma, int k, int schedule_iter,
                         double *es_m1, double *es_m2, double *dx, double &grad_norm)
 {
     double g[NUM_PARAMS];
@@ -702,7 +179,7 @@ static void adam_update(double const *grad, int q, double es_sigma, int k,
     }
     grad_norm = std::sqrt(grad_norm);
     double const ptk = static_cast<double>(k);
-    double t = std::min(1.0, ptk / ES_LR_HORIZON);
+    double t = std::min(1.0, static_cast<double>(schedule_iter) / ES_LR_HORIZON);
     double lr = ES_LR1 + 0.5 * (ES_LR0 - ES_LR1) * (1.0 + std::cos(std::numbers::pi * t));
     double beta1t = std::pow(ES_BETA1, k + 1);
     double beta2t = std::pow(ES_BETA2, k + 1);
@@ -731,7 +208,7 @@ static void adam_update(double const *grad, int q, double es_sigma, int k,
 }
 
 static double run_challenge(double const *candidate, double const *incumbent, int threads,
-                           int search_ms, int max_rounds, TunerEngine &global_ai,
+                           int search_ms, int max_rounds,
                            std::atomic<bool> &view, std::mutex &view_mutex,
                            std::atomic<uint32_t> &view_index,
                            uint64_t challenge_seed, int pairs)
@@ -758,7 +235,7 @@ static double run_challenge(double const *candidate, double const *incumbent, in
         jobs.push_back(a);
         jobs.push_back(b);
     }
-    auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_mutex, view_index);
+    auto out = run_batch(jobs, threads, search_ms, max_rounds, view, view_mutex, view_index);
     double score = 0;
     for (int j = 0; j < pairs; ++j)
     {
@@ -779,84 +256,10 @@ static uint64_t checkpoint_checksum(void const *data, size_t bytes)
     return h;
 }
 
-static void fsync_path(std::string const &path)
-{
-#if defined(_WIN32)
-    int fd = ::_open(path.c_str(), _O_RDONLY);
-    if (fd >= 0)
-    {
-        ::_commit(fd);
-        ::_close(fd);
-    }
-#else
-    int fd = ::open(path.c_str(), O_RDONLY);
-    if (fd >= 0)
-    {
-        ::fsync(fd);
-        ::close(fd);
-    }
-#endif
-}
-
-static void fsync_directory(std::string const &path)
-{
-#if !defined(_WIN32)
-    std::string dir = path;
-    size_t const pos = dir.find_last_of("/\\");
-    if (pos != std::string::npos)
-    {
-        dir = dir.substr(0, pos);
-    }
-    if (dir.empty())
-    {
-        dir = ".";
-    }
-    int fd = ::open(dir.c_str(), O_RDONLY);
-    if (fd >= 0)
-    {
-        ::fsync(fd);
-        ::close(fd);
-    }
-#endif
-}
 
 static bool durable_write_doubles(std::string const &path, double const *data, size_t n)
 {
-    std::string const tmp = path + ".tmp";
-    {
-        std::ofstream ofs(tmp, std::ios::binary);
-        if (!ofs.good())
-        {
-            return false;
-        }
-        ofs.write(reinterpret_cast<char const *>(data), static_cast<std::streamsize>(n * sizeof(double)));
-        ofs.flush();
-        if (!ofs.good())
-        {
-            std::remove(tmp.c_str());
-            return false;
-        }
-    }
-    fsync_path(tmp);
-    {
-        std::ifstream src(path, std::ios::binary);
-        if (src.good())
-        {
-            std::ofstream dst(path + ".bak", std::ios::binary | std::ios::trunc);
-            if (dst.good())
-            {
-                dst << src.rdbuf();
-                dst.flush();
-            }
-        }
-    }
-    if (std::rename(tmp.c_str(), path.c_str()) != 0)
-    {
-        std::remove(tmp.c_str());
-        return false;
-    }
-    fsync_directory(path);
-    return true;
+    return durable::write_doubles(path, data, n);
 }
 
 struct CheckpointConfig
@@ -914,12 +317,6 @@ static int load_state(std::string const &data_file, int &resume_k, double *theta
         return CHECKPOINT_MISSING;
     }
 
-    int ver = 0;
-    ifs.read(reinterpret_cast<char *>(&ver), sizeof(ver));
-    if (ver != 1)
-    {
-        return CHECKPOINT_CORRUPT;
-    }
     ifs.read(reinterpret_cast<char *>(&resume_k), sizeof(resume_k));
     ifs.read(reinterpret_cast<char *>(&saved_cfg.max_rounds), sizeof(saved_cfg.max_rounds));
     ifs.read(reinterpret_cast<char *>(&saved_cfg.eval_matches), sizeof(saved_cfg.eval_matches));
@@ -1012,8 +409,6 @@ static bool save_state(std::string const &data_file, int k, double const *theta,
     std::string const tmp = data_file + ".tmp";
     {
         std::ofstream ofs(tmp, std::ios::binary);
-        int ver = 1;
-        ofs.write(reinterpret_cast<char const *>(&ver), sizeof(ver));
         ofs.write(payload.data(), (std::streamsize)payload.size());
         ofs.write(reinterpret_cast<char const *>(&checksum), sizeof(checksum));
         ofs.flush();
@@ -1023,7 +418,7 @@ static bool save_state(std::string const &data_file, int k, double const *theta,
             return false;
         }
     }
-    fsync_path(tmp);
+    durable::fsync_path(tmp);
     {
         std::ifstream src(data_file, std::ios::binary);
         if (src.good())
@@ -1041,7 +436,7 @@ static bool save_state(std::string const &data_file, int k, double const *theta,
         std::remove(tmp.c_str());
         return false;
     }
-    fsync_directory(data_file);
+    durable::fsync_directory(data_file);
     return true;
 }
 
@@ -1083,8 +478,6 @@ static int run_bench(int argc, char *argv[])
     if (seed == 0) seed = static_cast<unsigned>(std::time(nullptr));
     if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
 
-    TunerEngine global_ai;
-    global_ai.prepare(10, 40);
     double theta[NUM_PARAMS];
     if (!load_params(theta))
     {
@@ -1138,7 +531,7 @@ static int run_bench(int argc, char *argv[])
     std::atomic<bool> view{ false };
     std::atomic<uint32_t> view_index{ 0 };
     std::mutex view_mutex;
-    auto out = run_batch(jobs, threads, search_ms_arm, max_rounds, global_ai, view, view_mutex, view_index);
+    auto out = run_batch(jobs, threads, search_ms_arm, max_rounds, view, view_mutex, view_index);
 
     double wins_iters = 0;
     double app_iters = 0, app_ms = 0;
@@ -1238,8 +631,6 @@ static int run_vs(int argc, char *argv[])
         }
     }
 
-    TunerEngine global_ai;
-    global_ai.prepare(10, 40);
 
     std::vector<MatchJob> jobs;
     jobs.reserve(static_cast<size_t>(2) * pairs);
@@ -1281,7 +672,7 @@ static int run_vs(int argc, char *argv[])
     std::atomic<bool> view{ false };
     std::atomic<uint32_t> view_index{ 0 };
     std::mutex view_mutex;
-    auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_mutex, view_index);
+    auto out = run_batch(jobs, threads, search_ms, max_rounds, view, view_mutex, view_index);
 
     double wins_a = 0;
     double app_a = 0, app_b = 0, apl_a = 0, apl_b = 0, rounds_sum = 0;
@@ -1365,8 +756,6 @@ static int run_probe(int argc, char *argv[])
     if (games % 2 != 0) --games;
     int q = std::max(1, games / 2);
 
-    TunerEngine global_ai;
-    global_ai.prepare(10, 40);
     double theta[NUM_PARAMS];
     if (!load_params(theta))
     {
@@ -1430,7 +819,7 @@ static int run_probe(int argc, char *argv[])
             jobs.push_back(b);
         }
 
-        auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_mutex, view_index);
+        auto out = run_batch(jobs, threads, search_ms, max_rounds, view, view_mutex, view_index);
         double score = 0;
         double grad[NUM_PARAMS] = { 0 };
         int capped = 0;
@@ -1479,11 +868,189 @@ static int run_probe(int argc, char *argv[])
     return 0;
 }
 
+
+struct SelfCheck
+{
+    int failures = 0;
+    void check(bool cond, char const *name)
+    {
+        if (cond)
+        {
+            std::println("PASS: {}", name);
+        }
+        else
+        {
+            std::println("FAIL: {}", name);
+            ++failures;
+        }
+    }
+};
+
+static void check_promotion_statistics(SelfCheck &sc)
+{
+    double const z_final = stat_util::normal_quantile_upper(CHALLENGE_ALPHA);
+    sc.check(std::fabs(z_final - stat_util::Z_ONE_SIDED_95) < 1e-4,
+             "final-look z equals the one-sided 95% quantile");
+    sc.check(stat_util::look_z(1, CHALLENGE_TOTAL_LOOKS - 1, CHALLENGE_ALPHA) > z_final,
+             "interim looks are stricter than the final look");
+    sc.check(stat_util::look_z(CHALLENGE_TOTAL_LOOKS, CHALLENGE_TOTAL_LOOKS - 1, CHALLENGE_ALPHA) == z_final,
+             "final look uses the nominal alpha");
+
+    double const lb_perfect = stat_util::wilson_lower_bound(64, 64, z_final);
+    double const lb_63 = stat_util::wilson_lower_bound(63, 64, z_final);
+    double const lb_coin = stat_util::wilson_lower_bound(32, 64, z_final);
+    sc.check(lb_63 < 0.95, "a 63-1 record really cannot clear a 95% bound (the old rule)");
+    sc.check(lb_perfect > CHALLENGE_PROMOTE_LB && lb_63 > CHALLENGE_PROMOTE_LB,
+             "dominant candidates clear the 50% promotion bar at the budget ceiling");
+    sc.check(lb_coin < CHALLENGE_PROMOTE_LB, "an exactly-equal candidate is not promoted at the ceiling");
+
+    double const lb_interim = stat_util::wilson_lower_bound(8, 8, stat_util::look_z(1, 7, CHALLENGE_ALPHA));
+    sc.check(lb_interim < CHALLENGE_PROMOTE_LB, "8-0 at the first interim look does not promote");
+    double const lb_interim2 = stat_util::wilson_lower_bound(15.5, 16, stat_util::look_z(2, 7, CHALLENGE_ALPHA));
+    sc.check(lb_interim2 > CHALLENGE_PROMOTE_LB, "a 15.5-0.5 interim lead does promote");
+    sc.check(stat_util::wilson_lower_bound(0, 0, z_final) == 0.0, "zero-game bound is degenerate-safe");
+}
+
+static void check_crn_event_scope(SelfCheck &sc)
+{
+    Scenario a = make_scenario(0xC0FFEE, 200, static_cast<size_t>(next_length));
+    Scenario b = make_scenario(0xC0FFEE, 200, static_cast<size_t>(next_length));
+    begin_round(a, b, 99);
+    for (int i = 0; i < 7; ++i) { ++a.packet_index; }
+    for (int i = 0; i < 3; ++i) { ++b.packet_index; }
+    begin_round(a, b, 100);
+    bool same = true;
+    for (int k = 0; k < 5; ++k)
+    {
+        same = same && (scenario_hole(a) == scenario_hole(b));
+        ++a.packet_index;
+        ++b.packet_index;
+    }
+    sc.check(same, "garbage hole columns are event-synchronised across policies");
+    sc.check(a.packet_index == 5 && b.packet_index == 5,
+             "packet counter is scoped per round, not per game");
+
+    Scenario c = make_scenario(0xC0FFEE, 200, static_cast<size_t>(next_length));
+    begin_round(c, c, 101);
+    bool differs = false;
+    for (int k = 0; k < 5; ++k)
+    {
+        if (scenario_hole(c) != scenario_hole(a)) { differs = true; }
+        ++c.packet_index;
+        ++a.packet_index;
+    }
+    sc.check(differs, "rounds are distinguished inside the CRN hash");
+}
+
+static void check_warm_start_identity(SelfCheck &sc)
+{
+    double prod[NUM_PARAMS], weak[NUM_PARAMS];
+    default_params(prod);
+    ai_zzz::TOJ::struct_defaults_theta(weak);
+    bool differs = false;
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        if (prod[i] != weak[i]) { differs = true; }
+    }
+    sc.check(differs, "the --default baseline is the production policy, not the struct initializers");
+    sc.check(std::fabs(prod[0] - 10.507166148) < 1e-9 && std::fabs(prod[28] - 0.756272086) < 1e-9,
+             "production baseline values match the shipped policy");
+
+    std::string const tmp = "selfcheck_param_tmp.bin";
+    {
+        std::ofstream f(tmp, std::ios::binary);
+        f.write(reinterpret_cast<char const *>(prod), (NUM_PARAMS - 1) * sizeof(double));
+    }
+    double probe[NUM_PARAMS];
+    sc.check(!tmatch::read_theta_strict(tmp, probe), "truncated param file is rejected");
+    {
+        std::ofstream f(tmp, std::ios::binary);
+        double bad[NUM_PARAMS];
+        std::memcpy(bad, prod, sizeof(bad));
+        bad[3] = std::numeric_limits<double>::quiet_NaN();
+        f.write(reinterpret_cast<char const *>(bad), sizeof(bad));
+    }
+    sc.check(!tmatch::read_theta_strict(tmp, probe), "non-finite param file is rejected");
+    {
+        std::ofstream f(tmp, std::ios::binary);
+        f.write(reinterpret_cast<char const *>(prod), sizeof(prod));
+    }
+    bool ok = tmatch::read_theta_strict(tmp, probe);
+    for (size_t i = 0; ok && i < NUM_PARAMS; ++i) { ok = probe[i] == prod[i]; }
+    sc.check(ok, "a complete finite param file round-trips exactly");
+    std::remove(tmp.c_str());
+}
+
+static void check_checkpoint_formats(SelfCheck &sc)
+{
+    std::string const path = "selfcheck_tuner_data_tmp.bin";
+    double theta[NUM_PARAMS], loaded_theta[NUM_PARAMS];
+    default_params(theta);
+    double es_m1[NUM_PARAMS] = { 0 }, es_m2[NUM_PARAMS] = { 0 };
+    for (size_t i = 0; i < NUM_PARAMS; ++i) { es_m1[i] = 0.001 * i; es_m2[i] = 0.002 * i; }
+    CheckpointConfig cfg{};
+    cfg.max_rounds = 3600;
+    cfg.eval_matches = 14;
+    cfg.search_ms = 20;
+    cfg.seed = 4242;
+    cfg.iters_per_move = 80;
+    cfg.next_length = next_length;
+    std::memcpy(cfg.param_scale, param_scale, sizeof(param_scale));
+    std::memcpy(cfg.combo_table, combo_table, sizeof(combo_table));
+
+    sc.check(save_state(path, 1000, theta, 0.15, es_m1, es_m2, cfg), "checkpoint saves");
+    int resume_k = 0;
+    double sigma = 0.0;
+    CheckpointConfig loaded_cfg{};
+    int r = load_state(path, resume_k, loaded_theta, sigma, es_m1, es_m2, loaded_cfg);
+    sc.check(r == CHECKPOINT_OK && resume_k == 1000, "checkpoint resumes at the saved iteration");
+    bool theta_ok = true;
+    for (size_t i = 0; i < NUM_PARAMS; ++i) { theta_ok = theta_ok && loaded_theta[i] == theta[i]; }
+    sc.check(theta_ok && std::fabs(sigma - 0.15) < 1e-12 && checkpoint_config_equal(loaded_cfg, cfg),
+             "checkpoint payload is faithful");
+
+    {
+        std::fstream f(path, std::ios::in | std::ios::out | std::ios::binary);
+        f.seekg(6, std::ios::beg);
+        char ch = 0;
+        f.read(&ch, 1);
+        f.seekp(6, std::ios::beg);
+        char flipped = static_cast<char>(ch ^ 0x20);
+        f.write(&flipped, 1);
+    }
+    r = load_state(path, resume_k, loaded_theta, sigma, es_m1, es_m2, loaded_cfg);
+    sc.check(r == CHECKPOINT_CORRUPT, "a corrupted checkpoint is rejected rather than trusted");
+
+    std::remove(path.c_str());
+    std::remove((path + ".bak").c_str());
+}
+
+static int run_selfcheck()
+{
+    SelfCheck sc;
+    check_promotion_statistics(sc);
+    check_crn_event_scope(sc);
+    check_warm_start_identity(sc);
+    check_checkpoint_formats(sc);
+    std::println("");
+    if (sc.failures == 0)
+    {
+        std::println("ALL SELF-CHECKS PASSED");
+        return 0;
+    }
+    std::println("{} SELF-CHECK(S) FAILED", sc.failures);
+    return 1;
+}
+
 int main(int argc, char *argv[])
 {
     std::setbuf(stdout, nullptr);
     std::setbuf(stderr, nullptr);
 
+    if (argc > 1 && std::strcmp(argv[1], "selfcheck") == 0)
+    {
+        return run_selfcheck();
+    }
     if (argc > 1 && std::strcmp(argv[1], "probe") == 0)
     {
         return run_probe(argc, argv);
@@ -1559,9 +1126,6 @@ int main(int argc, char *argv[])
 
     std::string data_file = param::tag_filename("tuner_data.bin", "");
 
-    TunerEngine global_ai;
-    global_ai.prepare(10, 40);
-
     double theta[NUM_PARAMS];
     double es_sigma = ES_SIGMA0;
     double es_m1[NUM_PARAMS] = { 0 };
@@ -1631,7 +1195,7 @@ int main(int argc, char *argv[])
         else if (want_default)
         {
             default_params(theta);
-            std::println("[TUNER] Fresh start from built-in defaults (--default)");
+            std::println("[TUNER] Fresh start from production defaults (--default)");
         }
         else if (load_params(theta))
         {
@@ -1640,7 +1204,7 @@ int main(int argc, char *argv[])
         else
         {
             default_params(theta);
-            std::println(stderr, "[TUNER] warning: {} missing or invalid; using built-in defaults (pass --fresh-zero to start from zero).", param::filename(""));
+            std::println(stderr, "[TUNER] warning: {} missing or invalid; starting from the production default policy (pass --fresh-zero to start from zero).", param::filename(""));
         }
     }
     for (size_t i = 0; i < NUM_PARAMS; ++i)
@@ -1649,7 +1213,7 @@ int main(int argc, char *argv[])
     }
 
     double best_theta[NUM_PARAMS];
-    if (param::read(best_theta, NUM_PARAMS, ""))
+    if (tmatch::read_theta_strict(param::filename(""), best_theta))
     {
         std::println("[TUNER] Incumbent (validated best) loaded from {}", param::filename(""));
     }
@@ -1666,8 +1230,8 @@ int main(int argc, char *argv[])
     }
 
     int stall_batches = 0;
-    bool rollback_pending = false;
     int restarts = 0;
+    int restart_origin = -1;
 
     std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, sigma_tau={:.0f}, lr_horizon={:.0f}",
                 num_iters, 2 * q, q, max_rounds,
@@ -1703,6 +1267,10 @@ int main(int argc, char *argv[])
 
     for (int k = resume_k; k < num_iters; ++k)
     {
+        int const schedule_iter = restart_origin >= 0 ? std::max(0, k - restart_origin) : k;
+        double const phase_sigma0 = restart_origin >= 0 ? RESTART_SIGMA : ES_SIGMA0;
+        es_sigma = std::max(ES_SIGMA_FLOOR,
+                            phase_sigma0 * std::exp(-static_cast<double>(schedule_iter) / ES_SIGMA_TAU));
         double step = es_sigma;
         std::vector<MatchJob> jobs;
         jobs.reserve(2 * q);
@@ -1733,7 +1301,7 @@ int main(int argc, char *argv[])
             jobs.push_back(b);
         }
 
-        auto out = run_batch(jobs, threads, search_ms, max_rounds, global_ai, view, view_mutex, view_index);
+        auto out = run_batch(jobs, threads, search_ms, max_rounds, view, view_mutex, view_index);
 
         double score = 0;
         double grad[NUM_PARAMS] = { 0 };
@@ -1791,9 +1359,8 @@ int main(int argc, char *argv[])
         }
         else
         {
-            adam_update(grad, q, es_sigma, k, es_m1, es_m2, dx, grad_norm);
+            adam_update(grad, q, es_sigma, k, schedule_iter, es_m1, es_m2, dx, grad_norm);
         }
-        es_sigma = std::max(ES_SIGMA_FLOOR, ES_SIGMA0 * std::exp(-static_cast<double>(k) / ES_SIGMA_TAU));
 
         double dx_norm = 0;
         for (size_t i = 0; i < NUM_PARAMS; ++i)
@@ -1823,32 +1390,30 @@ int main(int argc, char *argv[])
         {
             double wins_equiv = 0.0;
             int played = 0;
+            int look = 0;
             for (int pairs = 0; pairs < CHALLENGE_MAX_PAIRS; pairs += CHALLENGE_PAIRS)
             {
+                ++look;
                 double stage = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
-                                             global_ai, view, view_mutex, view_index,
+                                             view, view_mutex, view_index,
                                              CHALLENGE_SEED_BASE
                                                  + static_cast<uint64_t>(k + 1) * 0x9E3779B97F4A7C15ULL
                                                  + static_cast<uint64_t>(pairs),
                                              CHALLENGE_PAIRS);
                 wins_equiv += 2.0 * CHALLENGE_PAIRS * (1.0 + stage) / 2.0;
                 played += 2 * CHALLENGE_PAIRS;
-                double phat = wins_equiv / static_cast<double>(played);
-                double z = 1.6448536269514722;
-                double denom = 1.0 + z * z / played;
-                double mid = phat + z * z / (2.0 * played);
-                double margin = z * std::sqrt(std::max(0.0, phat * (1.0 - phat)) / played
-                                              + z * z / (4.0 * played * played));
-                double p_lo = (mid - margin) / denom;
-                std::println("[ES]   challenge @ iter {}: stage={:+.3f} (pairs {}..{}), games={}, win-equiv={:.1f}, LB={:.1f}%",
+                double const z = stat_util::look_z(look, CHALLENGE_TOTAL_LOOKS - 1, CHALLENGE_ALPHA);
+                double const phat = wins_equiv / static_cast<double>(played);
+                double const p_lo = stat_util::wilson_lower_bound(wins_equiv, played, z);
+                std::println("[ES]   challenge @ iter {}: stage={:+.3f} (pairs {}..{}), games={}, win-equiv={:.1f}, win={:.1f}%, LB={:.1f}% (z={:.2f}, need > {:.0f}%)",
                              k + 1, stage, pairs + 1, pairs + CHALLENGE_PAIRS, played,
-                             wins_equiv, 100.0 * p_lo);
-                if (p_lo * 100.0 >= CHALLENGE_PROMOTE_LEVEL)
+                             wins_equiv, 100.0 * phat, 100.0 * p_lo, z, 100.0 * CHALLENGE_PROMOTE_LB);
+                if (p_lo > CHALLENGE_PROMOTE_LB)
                 {
                     std::memcpy(best_theta, theta, sizeof(best_theta));
                     durable_write_doubles("best_param.bin", best_theta, NUM_PARAMS);
-                    std::println("[ES]   promoted candidate to best_param.bin ({} games, {:.1f}% LB)",
-                                 played, 100.0 * p_lo);
+                    std::println("[ES]   promoted candidate to best_param.bin ({} games, win={:.1f}%, LB={:.1f}%)",
+                                 played, 100.0 * phat, 100.0 * p_lo);
                     promoted = true;
                     break;
                 }
@@ -1870,6 +1435,7 @@ int main(int argc, char *argv[])
         if (!promoted && (k + 1) % CHALLENGE_EVERY == 0
             && stall_batches >= STALL_WINDOW && restarts < MAX_RESTARTS)
         {
+            restart_origin = k + 1;
             std::memcpy(theta, best_theta, sizeof(best_theta));
             for (size_t i = 0; i < NUM_PARAMS; ++i)
             {
@@ -1880,8 +1446,8 @@ int main(int argc, char *argv[])
             es_sigma = RESTART_SIGMA;
             stall_batches = 0;
             ++restarts;
-            std::println("[ES]   STALL: {} batches without promotion; rolled back to incumbent, reset Adam, sigma={:.3f} (restart {}/{})",
-                         STALL_WINDOW, RESTART_SIGMA, restarts, MAX_RESTARTS);
+            std::println("[ES]   STALL: {} campaigns without promotion; rolled back to incumbent, reset Adam, sigma={:.3f} re-annealing from iter {} (restart {}/{})",
+                         STALL_WINDOW, RESTART_SIGMA, restart_origin, restarts, MAX_RESTARTS);
         }
 
         double dist_inc_norm = 0;
@@ -1914,7 +1480,7 @@ int main(int argc, char *argv[])
 
     std::println("\n[TUNER] Done. {} iterations completed", num_iters);
     std::println("[TUNER] Current params saved to {}", "current_param.bin");
-    if (param::read(best_theta, NUM_PARAMS, ""))
+    if (tmatch::read_theta_strict(param::filename(""), best_theta))
     {
         std::println("[TUNER] Validated best saved to {}", param::filename(""));
     }
