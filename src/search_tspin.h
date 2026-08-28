@@ -22,6 +22,7 @@ namespace search_tspin
             bool allow_d = true;
             bool allow_D = true;
             bool allow_LR = true;
+            bool allow_nont_d = false;
             bool is_20g = false;
             bool last_rotate = false;
         };

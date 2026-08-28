@@ -53,6 +53,7 @@ namespace search_tspin
         bool allow_180 = config_->allow_180;
         bool allow_LR = config_->allow_LR;
         bool allow_D = config_->allow_D;
+        bool allow_nont_d = config_->allow_nont_d;
         const int index = land_point.type == TSpinType::None || land_point.last == nullptr ? land_point->index_filtered : land_point.last->index_filtered;
         auto build_path = [&land_point, &map, allow_180, this](TetrisNode const *node, decltype(node_mark_) &node_mark)->std::vector<char>
         {
@@ -136,7 +137,7 @@ namespace search_tspin
             }
             return path;
         };
-        bool disable_d = land_point.type == TSpinType::None && node->land_point != nullptr && node->low >= map.roof && land_point->open(map);
+        bool disable_d = land_point.type == TSpinType::None && node->land_point != nullptr && node->low >= map.roof && land_point->open(map) && allow_nont_d;
         while (true)
         {
             node_mark_.clear();
@@ -463,6 +464,7 @@ namespace search_tspin
         bool allow_180 = config_->allow_180;
         bool is_20g = config_->is_20g;
         bool allow_LR = config_->allow_LR;
+        bool allow_nont_d = config_->allow_nont_d;
         if (is_20g)
         {
             node = node->drop(map);
@@ -474,7 +476,7 @@ namespace search_tspin
         {
             return search_t(map, node, depth);
         }
-        if (!is_20g && node->land_point != nullptr && node->low >= map.roof)
+        if (!is_20g && node->land_point != nullptr && node->low >= map.roof && !allow_nont_d)
         {
             for (auto const *land_point_node : *node->land_point)
             {
