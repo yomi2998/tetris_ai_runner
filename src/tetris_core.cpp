@@ -1,4 +1,4 @@
-﻿
+
 #include <map>
 #include <iostream>
 #include "tetris_core.h"
