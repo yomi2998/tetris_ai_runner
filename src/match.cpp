@@ -379,6 +379,7 @@ namespace
                 return false;
             }
             bool last_rotate = false;
+            bool hd = false;
             for (char const *p = path; *p != '\0'; ++p)
             {
                 switch (*p)
@@ -455,8 +456,13 @@ namespace
                     break;
                 case 'V': // hard drop + lock
                     node = node->drop(map);
+                    hd = true;
                     break;
                 default:
+                    break;
+                }
+                if (hd)
+                {
                     break;
                 }
             }
