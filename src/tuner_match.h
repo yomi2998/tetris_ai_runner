@@ -194,7 +194,7 @@ namespace tuner_match
 
             char current = next.front();
             bool is_hold_piece = hold != ' ' && current == hold;
-            auto result = ai.run_hold(map, ai.spawn_node(current, last_clear, is_hold_piece), hold, true,
+            auto result = ai.run_hold(map, ai.spawn_node(current, last_clear, is_hold_piece, map), hold, true,
                                       next.data() + 1, next_length, search_budget);
             if (result.target == nullptr || result.target->row >= 20)
             {
