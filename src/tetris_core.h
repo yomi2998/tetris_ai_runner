@@ -256,7 +256,9 @@ namespace m_tetris
     };
 
     //节点标记.广搜的时候使用
-    class TetrisNodeMark
+    //Filtered为true时按方块位置去重,使用index_filtered;否则使用index
+    template<bool Filtered>
+    class TetrisNodeMarkTemplate
     {
     private:
         struct Mark
@@ -280,30 +282,8 @@ namespace m_tetris
         bool mark(TetrisNode const *key);
     };
 
-    //节点标记.过滤了位置相同的节点
-    class TetrisNodeMarkFiltered
-    {
-    private:
-        struct Mark
-        {
-            Mark() : version(0)
-            {
-            }
-            size_t version;
-            std::pair<TetrisNode const *, char> data;
-        };
-        size_t version_;
-        std::vector<Mark> data_;
-
-    public:
-        void init(size_t size);
-        void clear();
-        std::pair<TetrisNode const *, char> get(size_t index);
-        std::pair<TetrisNode const *, char> get(TetrisNode const *key);
-        bool set(TetrisNode const *key, TetrisNode const *node, char op);
-        bool cover_if(TetrisNode const *key, TetrisNode const *node, char ck, char op);
-        bool mark(TetrisNode const *key);
-    };
+    using TetrisNodeMark = TetrisNodeMarkTemplate<false>;
+    using TetrisNodeMarkFiltered = TetrisNodeMarkTemplate<true>;
 
     template<class TetrisRule, class AI, class Search>
     struct TetrisContextBuilder;
