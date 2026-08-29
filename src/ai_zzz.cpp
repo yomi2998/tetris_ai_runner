@@ -1029,6 +1029,16 @@ namespace ai_zzz
         return result;
     }
 
+    TetrisBlockStatus TOJ::spawn(char t, int clear, int spawn_w, int spawn_h, bool is_hold, m_tetris::TetrisMap const &map, Status const &status) const
+    {
+        TetrisBlockStatus result;
+        result.t = t;
+        result.x = spawn_w;
+        result.y = spawn_h;
+        result.r = 0;
+        return result;
+    }
+
     size_t TOJ::map_in_danger_(m_tetris::TetrisMap const &map, size_t t, size_t up) const
     {
         if (up >= 19)

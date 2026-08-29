@@ -137,7 +137,7 @@ namespace search_tspin
             }
             return path;
         };
-        bool disable_d = land_point.type == TSpinType::None && node->land_point != nullptr && node->low >= map.roof && land_point->open(map) && allow_nont_d;
+        bool disable_d = land_point.type == TSpinType::None && node->land_point != nullptr && node->low >= map.roof && land_point->open(map);
         while (true)
         {
             node_mark_.clear();

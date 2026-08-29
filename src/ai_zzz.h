@@ -339,6 +339,7 @@ namespace ai_zzz
         }
         Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const;
         Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const & status, m_tetris::TetrisContext::Env const &env) const;
+        m_tetris::TetrisBlockStatus spawn(char t, int clear, int spawn_w, int spawn_h, bool is_hold, m_tetris::TetrisMap const &map, Status const &status) const;
     private:
         m_tetris::TetrisContext const *context_;
         Config const *config_;
