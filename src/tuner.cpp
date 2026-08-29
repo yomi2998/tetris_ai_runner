@@ -1513,7 +1513,7 @@ int main(int argc, char *argv[])
                 double const phat = wins_equiv / static_cast<double>(played);
                 double const p_lo = stat_util::wilson_lower_bound(wins_equiv, played, z);
                 std::println("[ES]   challenge @ iter {}: stage={:+.3f} (pairs {}..{}), games={}, win-equiv={:.1f}, win={:.1f}%, LB={:.1f}% (z={:.2f}, need > {:.0f}%)",
-                             k + 1, stage, pairs + 1, pairs + CHALLENGE_PAIRS, played,
+                             k, stage, pairs + 1, pairs + CHALLENGE_PAIRS, played,
                              wins_equiv, 100.0 * phat, 100.0 * p_lo, z, 100.0 * CHALLENGE_PROMOTE_LB);
                 if (p_lo > CHALLENGE_PROMOTE_LB)
                 {
