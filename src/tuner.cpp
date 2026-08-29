@@ -103,7 +103,7 @@ static double const ES_EPS = 1e-8;
 static double const ES_DX_MAX = 0.04;
 static double const ES_DX_L2_MAX = 0.10;
 
-static double const ES_RELATIVE_PARAM_SCALE = 0.10;
+static double const ES_RELATIVE_PARAM_SCALE = 0.025;
 
 static uint64_t const CHALLENGE_SEED_BASE = 0x123456789ABCDEF0ULL;
 static int const CHALLENGE_EVERY = 50;
@@ -115,12 +115,13 @@ static int const CHALLENGE_TOTAL_LOOKS = CHALLENGE_MAX_PAIRS / CHALLENGE_PAIRS;
 
 static int const STALL_WINDOW = 200;
 static int const MAX_RESTART_LEVEL = 4;
-static double const RESTART_SIGMA0 = 0.45;
-static double const RESTART_SIGMA_GROWTH = 1.60;
-static double const RESTART_SIGMA_MAX = 1.20;
-static double const RESTART_KICK_L2_0 = 1.00;
+static double const RESTART_SIGMA0 = 0.40;
+static double const RESTART_SIGMA_GROWTH = 1.25;
+static double const RESTART_SIGMA_MAX = 0.65;
+static double const RESTART_SIGMA_TAU = 500.0;
+static double const RESTART_KICK_L2_0 = 0.50;
 static double const RESTART_KICK_GROWTH = 1.50;
-static double const RESTART_KICK_L2_MAX = 3.00;
+static double const RESTART_KICK_L2_MAX = 1.50;
 
 namespace tmatch = tuner_match;
 
@@ -193,6 +194,12 @@ static double restart_kick_l2_for_level(int level)
     int const exponent = std::max(0, level - 1);
     return std::min(RESTART_KICK_L2_MAX,
                     RESTART_KICK_L2_0 * std::pow(RESTART_KICK_GROWTH, exponent));
+}
+
+static bool restart_state_needs_rebase(double saved_sigma, int level)
+{
+    return level > 0
+        && saved_sigma > restart_sigma_for_level(level) * (1.0 + 1e-9);
 }
 
 static void apply_restart_kick(double const *incumbent, double const *scale,
@@ -975,6 +982,11 @@ static void check_promotion_statistics(SelfCheck &sc)
     double const lb_interim2 = stat_util::wilson_lower_bound(15.5, 16, stat_util::look_z(2, 7, CHALLENGE_ALPHA));
     sc.check(lb_interim2 > CHALLENGE_PROMOTE_LB, "a 15.5-0.5 interim lead does promote");
     sc.check(stat_util::wilson_lower_bound(0, 0, z_final) == 0.0, "zero-game bound is degenerate-safe");
+
+    double const impossible_final = stat_util::wilson_lower_bound(18 + 0, 64, z_final);
+    double const still_possible = stat_util::wilson_lower_bound(4 + 56, 64, z_final);
+    sc.check(impossible_final < CHALLENGE_PROMOTE_LB && still_possible > CHALLENGE_PROMOTE_LB,
+             "challenge futility bound distinguishes impossible and recoverable records");
 }
 
 static void check_crn_event_scope(SelfCheck &sc)
@@ -1017,7 +1029,7 @@ static void check_search_scale_and_restart_policy(SelfCheck &sc)
     sc.check(scale[0] > param_scale[0] * 10.0,
              "a large-magnitude parameter receives a meaningful relative search scale");
     sc.check(std::fabs(scale[0] - ES_RELATIVE_PARAM_SCALE * std::fabs(reference[0])) < 1e-9,
-             "relative search scale tracks ten percent of a large parameter");
+             "relative search scale tracks the configured fraction of a large parameter");
 
     double incumbent[NUM_PARAMS] = {};
     double theta[NUM_PARAMS] = {};
@@ -1033,6 +1045,9 @@ static void check_search_scale_and_restart_policy(SelfCheck &sc)
                  && restart_sigma_for_level(MAX_RESTART_LEVEL)
                      <= RESTART_SIGMA_MAX,
              "repeated stalls escalate sigma up to a bounded maximum");
+    sc.check(restart_state_needs_rebase(1.14, MAX_RESTART_LEVEL)
+                 && !restart_state_needs_rebase(0.60, MAX_RESTART_LEVEL),
+             "an oversized legacy restart state is detected without disturbing a valid one");
 
     int restart_level = MAX_RESTART_LEVEL;
     restart_level = 0;
@@ -1437,7 +1452,23 @@ int main(int argc, char *argv[])
         x[i] = theta[i] / effective_scale[i];
     }
 
-    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, sigma_tau={:.0f}, lr_horizon={:.0f}, relative_scale={:.0f}%",
+    if (load_result == CHECKPOINT_OK && restart_state_needs_rebase(es_sigma, restarts))
+    {
+        restart_origin = resume_k;
+        std::memcpy(theta, best_theta, sizeof(best_theta));
+        for (size_t i = 0; i < NUM_PARAMS; ++i)
+        {
+            x[i] = theta[i] / effective_scale[i];
+            es_m1[i] = 0.0;
+            es_m2[i] = 0.0;
+        }
+        es_sigma = restart_sigma_for_level(restarts);
+        stall_batches = 0;
+        std::println("[TUNER] rebased oversized legacy restart state to incumbent: level={}, sigma={:.3f}, Adam reset",
+                     restarts, es_sigma);
+    }
+
+    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, sigma_tau={:.0f}, lr_horizon={:.0f}, relative_scale={:.1f}%",
                 num_iters, 2 * q, q, max_rounds,
                 iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), seed, threads,
                 ES_SIGMA_TAU, ES_LR_HORIZON, 100.0 * ES_RELATIVE_PARAM_SCALE);
@@ -1479,8 +1510,10 @@ int main(int argc, char *argv[])
                 ? restart_sigma_for_level(restarts)
                 : ES_PROMOTION_SIGMA;
         }
+        double const phase_sigma_tau = restart_origin >= 0 && restarts > 0
+            ? RESTART_SIGMA_TAU : ES_SIGMA_TAU;
         es_sigma = std::max(ES_SIGMA_FLOOR,
-                            phase_sigma0 * std::exp(-static_cast<double>(schedule_iter) / ES_SIGMA_TAU));
+                            phase_sigma0 * std::exp(-static_cast<double>(schedule_iter) / phase_sigma_tau));
         double step = es_sigma;
         std::vector<MatchJob> jobs;
         jobs.reserve(2 * q);
@@ -1620,6 +1653,19 @@ int main(int argc, char *argv[])
                                  played, 100.0 * phat, 100.0 * p_lo);
                     promoted = true;
                     break;
+                }
+                if (look < CHALLENGE_TOTAL_LOOKS)
+                {
+                    int const remaining_games = 2 * (CHALLENGE_MAX_PAIRS - pairs - CHALLENGE_PAIRS);
+                    double const max_final_lb = stat_util::wilson_lower_bound(
+                        wins_equiv + remaining_games, played + remaining_games,
+                        stat_util::normal_quantile_upper(CHALLENGE_ALPHA));
+                    if (max_final_lb <= CHALLENGE_PROMOTE_LB)
+                    {
+                        std::println("[ES]   challenge stopped for futility after {} games (even winning all {} remaining games cannot promote)",
+                                     played, remaining_games);
+                        break;
+                    }
                 }
             }
             if (!promoted)
