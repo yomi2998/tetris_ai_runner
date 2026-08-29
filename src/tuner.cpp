@@ -93,6 +93,7 @@ namespace stat_util
 static double const ES_SIGMA0 = 0.30;
 static double const ES_SIGMA_FLOOR = 0.08;
 static double const ES_SIGMA_TAU = 2000.0;
+static double const ES_PROMOTION_SIGMA = ES_SIGMA0;
 static double const ES_LR0 = 0.025;
 static double const ES_LR1 = 0.004;
 static double const ES_LR_HORIZON = 5000.0;
@@ -101,6 +102,8 @@ static double const ES_BETA2 = 0.999;
 static double const ES_EPS = 1e-8;
 static double const ES_DX_MAX = 0.04;
 static double const ES_DX_L2_MAX = 0.10;
+
+static double const ES_RELATIVE_PARAM_SCALE = 0.10;
 
 static uint64_t const CHALLENGE_SEED_BASE = 0x123456789ABCDEF0ULL;
 static int const CHALLENGE_EVERY = 50;
@@ -111,8 +114,13 @@ static double const CHALLENGE_ALPHA = 0.05;
 static int const CHALLENGE_TOTAL_LOOKS = CHALLENGE_MAX_PAIRS / CHALLENGE_PAIRS;
 
 static int const STALL_WINDOW = 200;
-static int const MAX_RESTARTS = 4;
-static double const RESTART_SIGMA = 0.20;
+static int const MAX_RESTART_LEVEL = 4;
+static double const RESTART_SIGMA0 = 0.45;
+static double const RESTART_SIGMA_GROWTH = 1.60;
+static double const RESTART_SIGMA_MAX = 1.20;
+static double const RESTART_KICK_L2_0 = 1.00;
+static double const RESTART_KICK_GROWTH = 1.50;
+static double const RESTART_KICK_L2_MAX = 3.00;
 
 namespace tmatch = tuner_match;
 
@@ -163,6 +171,52 @@ static void default_params(double *out)
     ai_zzz::TOJ::production_default_theta(out);
 }
 
+static void compute_effective_scale(double const *reference_theta, double *out)
+{
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        double const base_scale = param_scale[i];
+        double const relative_scale = ES_RELATIVE_PARAM_SCALE * std::fabs(reference_theta[i]);
+        out[i] = std::max(base_scale, relative_scale);
+    }
+}
+
+static double restart_sigma_for_level(int level)
+{
+    int const exponent = std::max(0, level - 1);
+    return std::min(RESTART_SIGMA_MAX,
+                    RESTART_SIGMA0 * std::pow(RESTART_SIGMA_GROWTH, exponent));
+}
+
+static double restart_kick_l2_for_level(int level)
+{
+    int const exponent = std::max(0, level - 1);
+    return std::min(RESTART_KICK_L2_MAX,
+                    RESTART_KICK_L2_0 * std::pow(RESTART_KICK_GROWTH, exponent));
+}
+
+static void apply_restart_kick(double const *incumbent, double const *scale,
+                               unsigned seed, int iteration, int level,
+                               double *theta, double *x)
+{
+    double direction[NUM_PARAMS];
+    double norm = 0.0;
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        direction[i] = static_cast<double>(rademacher(
+            seed ^ 0xD1B54A32D192ED03ULL, iteration, level, static_cast<int>(i)));
+        norm += direction[i] * direction[i];
+    }
+    norm = std::sqrt(norm);
+    double const kick_l2 = restart_kick_l2_for_level(level);
+    for (size_t i = 0; i < NUM_PARAMS; ++i)
+    {
+        double const incumbent_x = incumbent[i] / scale[i];
+        x[i] = incumbent_x + kick_l2 * direction[i] / norm;
+        theta[i] = x[i] * scale[i];
+    }
+}
+
 
 static void adam_update(double const *grad, int q, double es_sigma, int k, int schedule_iter,
                         double *es_m1, double *es_m2, double *dx, double &grad_norm)
@@ -174,11 +228,12 @@ static void adam_update(double const *grad, int q, double es_sigma, int k, int s
         grad_norm += g[i] * g[i];
     }
     grad_norm = std::sqrt(grad_norm);
-    double const ptk = static_cast<double>(k);
+    (void)k;
     double t = std::min(1.0, static_cast<double>(schedule_iter) / ES_LR_HORIZON);
     double lr = ES_LR1 + 0.5 * (ES_LR0 - ES_LR1) * (1.0 + std::cos(std::numbers::pi * t));
-    double beta1t = std::pow(ES_BETA1, k + 1);
-    double beta2t = std::pow(ES_BETA2, k + 1);
+    int const adam_step = std::max(1, schedule_iter + 1);
+    double beta1t = std::pow(ES_BETA1, adam_step);
+    double beta2t = std::pow(ES_BETA2, adam_step);
     for (size_t i = 0; i < NUM_PARAMS; ++i)
     {
         es_m1[i] = ES_BETA1 * es_m1[i] + (1 - ES_BETA1) * g[i];
@@ -783,8 +838,10 @@ static int run_probe(int argc, char *argv[])
     {
         theta[i] = std::isfinite(theta[i]) ? theta[i] : 0.0;
     }
+    double effective_scale[NUM_PARAMS];
+    compute_effective_scale(theta, effective_scale);
     double x[NUM_PARAMS];
-    for (size_t i = 0; i < NUM_PARAMS; ++i) x[i] = theta[i] / param_scale[i];
+    for (size_t i = 0; i < NUM_PARAMS; ++i) x[i] = theta[i] / effective_scale[i];
 
     double gradient_sum[NUM_PARAMS] = { 0 };
     double gradient_square_sum[NUM_PARAMS] = { 0 };
@@ -813,10 +870,10 @@ static int run_probe(int argc, char *argv[])
                 int eps = rademacher(seed, k, j, static_cast<int>(i));
                 double xp = x[i] + step * eps;
                 double xm = x[i] - step * eps;
-                a.p1[i] = xp * param_scale[i];
-                a.p2[i] = xm * param_scale[i];
-                b.p1[i] = xm * param_scale[i];
-                b.p2[i] = xp * param_scale[i];
+                a.p1[i] = xp * effective_scale[i];
+                a.p2[i] = xm * effective_scale[i];
+                b.p1[i] = xm * effective_scale[i];
+                b.p2[i] = xp * effective_scale[i];
             }
             a.scenario_seed_p1 = scenario_seed_a;
             a.scenario_seed_p2 = scenario_seed_b;
@@ -951,6 +1008,48 @@ static void check_crn_event_scope(SelfCheck &sc)
     sc.check(differs, "rounds are distinguished inside the CRN hash");
 }
 
+static void check_search_scale_and_restart_policy(SelfCheck &sc)
+{
+    double reference[NUM_PARAMS] = {};
+    double scale[NUM_PARAMS];
+    reference[0] = 123.45678;
+    compute_effective_scale(reference, scale);
+    sc.check(scale[0] > param_scale[0] * 10.0,
+             "a large-magnitude parameter receives a meaningful relative search scale");
+    sc.check(std::fabs(scale[0] - ES_RELATIVE_PARAM_SCALE * std::fabs(reference[0])) < 1e-9,
+             "relative search scale tracks ten percent of a large parameter");
+
+    double incumbent[NUM_PARAMS] = {};
+    double theta[NUM_PARAMS] = {};
+    double x[NUM_PARAMS] = {};
+    compute_effective_scale(incumbent, scale);
+    apply_restart_kick(incumbent, scale, 12345, 2000, 1, theta, x);
+    double kick_norm = 0.0;
+    for (double v : x) { kick_norm += v * v; }
+    kick_norm = std::sqrt(kick_norm);
+    sc.check(std::fabs(kick_norm - restart_kick_l2_for_level(1)) < 1e-9,
+             "stall restart applies the declared normalized kick");
+    sc.check(restart_sigma_for_level(2) > restart_sigma_for_level(1)
+                 && restart_sigma_for_level(MAX_RESTART_LEVEL)
+                     <= RESTART_SIGMA_MAX,
+             "repeated stalls escalate sigma up to a bounded maximum");
+
+    int restart_level = MAX_RESTART_LEVEL;
+    restart_level = 0;
+    sc.check(restart_level == 0,
+             "promotion resets the restart escalation level");
+
+    int stall = 150;
+    bool challenge_due = false;
+    if (challenge_due) { stall += CHALLENGE_EVERY; }
+    sc.check(stall == 150,
+             "non-challenge training iterations do not advance the stall clock");
+    challenge_due = true;
+    if (challenge_due) { stall += CHALLENGE_EVERY; }
+    sc.check(stall == STALL_WINDOW,
+             "a failed challenge advances the stall clock by its interval");
+}
+
 static void check_warm_start_identity(SelfCheck &sc)
 {
     double prod[NUM_PARAMS], weak[NUM_PARAMS];
@@ -1055,6 +1154,7 @@ static int run_selfcheck()
     SelfCheck sc;
     check_promotion_statistics(sc);
     check_crn_event_scope(sc);
+    check_search_scale_and_restart_policy(sc);
     check_warm_start_identity(sc);
     check_checkpoint_formats(sc);
     std::println("");
@@ -1278,8 +1378,8 @@ int main(int argc, char *argv[])
                         "       Delete {} for a fresh start.", resume_k, num_iters, data_file);
             return 0;
         }
-        std::println("[TUNER] Resumed from iteration {} (overrides best_param); stall={} restarts={}/{} restart_origin={}",
-                     resume_k, stall_batches, restarts, MAX_RESTARTS, restart_origin);
+        std::println("[TUNER] Resumed from iteration {} (overrides best_param); stall={} restart_level={}/{} restart_origin={}",
+                     resume_k, stall_batches, restarts, MAX_RESTART_LEVEL, restart_origin);
     }
     else
     {
@@ -1329,16 +1429,18 @@ int main(int argc, char *argv[])
         std::println("[TUNER] No incumbent; best_param.bin will be written after the first successful challenge");
     }
 
+    double effective_scale[NUM_PARAMS];
+    compute_effective_scale(best_theta, effective_scale);
     double x[NUM_PARAMS];
     for (size_t i = 0; i < NUM_PARAMS; ++i)
     {
-        x[i] = theta[i] / param_scale[i];
+        x[i] = theta[i] / effective_scale[i];
     }
 
-    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, sigma_tau={:.0f}, lr_horizon={:.0f}",
+    std::println("[TUNER] paired mirrored ES: {} iters, {} games/batch ({} directions), {} rounds/match, {} search, seed {}, threads={}, sigma_tau={:.0f}, lr_horizon={:.0f}, relative_scale={:.0f}%",
                 num_iters, 2 * q, q, max_rounds,
                 iters_per_move > 0 ? (std::to_string(iters_per_move) + " iters") : (std::to_string(search_ms) + "ms"), seed, threads,
-                ES_SIGMA_TAU, ES_LR_HORIZON);
+                ES_SIGMA_TAU, ES_LR_HORIZON, 100.0 * ES_RELATIVE_PARAM_SCALE);
     std::fflush(stdout);
 
     std::atomic<bool> view{ false };
@@ -1370,7 +1472,13 @@ int main(int argc, char *argv[])
     for (int k = resume_k; k < num_iters; ++k)
     {
         int const schedule_iter = restart_origin >= 0 ? std::max(0, k - restart_origin) : k;
-        double const phase_sigma0 = restart_origin >= 0 ? RESTART_SIGMA : ES_SIGMA0;
+        double phase_sigma0 = ES_SIGMA0;
+        if (restart_origin >= 0)
+        {
+            phase_sigma0 = restarts > 0
+                ? restart_sigma_for_level(restarts)
+                : ES_PROMOTION_SIGMA;
+        }
         es_sigma = std::max(ES_SIGMA_FLOOR,
                             phase_sigma0 * std::exp(-static_cast<double>(schedule_iter) / ES_SIGMA_TAU));
         double step = es_sigma;
@@ -1388,10 +1496,10 @@ int main(int argc, char *argv[])
                 int eps = rademacher(seed, k, j, static_cast<int>(i));
                 double xp = x[i] + step * eps;
                 double xm = x[i] - step * eps;
-                a.p1[i] = xp * param_scale[i];
-                a.p2[i] = xm * param_scale[i];
-                b.p1[i] = xm * param_scale[i];
-                b.p2[i] = xp * param_scale[i];
+                a.p1[i] = xp * effective_scale[i];
+                a.p2[i] = xm * effective_scale[i];
+                b.p1[i] = xm * effective_scale[i];
+                b.p2[i] = xp * effective_scale[i];
             }
             a.scenario_seed_p1 = scenario_seed_a;
             a.scenario_seed_p2 = scenario_seed_b;
@@ -1478,15 +1586,8 @@ int main(int argc, char *argv[])
             {
                 x[i] = 0.0;
             }
-            theta[i] = x[i] * param_scale[i];
+            theta[i] = x[i] * effective_scale[i];
         }
-
-        if (!save_state(data_file, k + 1, theta, es_sigma, es_m1, es_m2, cfg,
-                        stall_batches, restarts, restart_origin))
-        {
-            std::println(stderr, "[TUNER] warning: failed to write checkpoint {}", data_file);
-        }
-        durable_write_doubles("current_param.bin", theta, NUM_PARAMS);
 
         bool promoted = false;
         if ((k + 1) % CHALLENGE_EVERY == 0)
@@ -1530,34 +1631,55 @@ int main(int argc, char *argv[])
         if (promoted)
         {
             stall_batches = 0;
-        }
-        else
-        {
-            ++stall_batches;
-        }
-        if (!promoted && (k + 1) % CHALLENGE_EVERY == 0
-            && stall_batches >= STALL_WINDOW && restarts < MAX_RESTARTS)
-        {
+            restarts = 0;
             restart_origin = k + 1;
-            std::memcpy(theta, best_theta, sizeof(best_theta));
+            compute_effective_scale(best_theta, effective_scale);
             for (size_t i = 0; i < NUM_PARAMS; ++i)
             {
-                x[i] = theta[i] / param_scale[i];
+                x[i] = theta[i] / effective_scale[i];
                 es_m1[i] = 0.0;
                 es_m2[i] = 0.0;
             }
-            es_sigma = RESTART_SIGMA;
-            stall_batches = 0;
-            ++restarts;
-            std::println("[ES]   STALL: {} iterations without promotion; rolled back to incumbent, reset Adam, sigma={:.3f} re-annealing from iter {} (restart {}/{})",
-                         STALL_WINDOW, RESTART_SIGMA, restart_origin, restarts, MAX_RESTARTS);
+            es_sigma = ES_PROMOTION_SIGMA;
+            std::println("[ES]   new campaign: reset restart level, Adam, and schedule; sigma={:.3f}",
+                         ES_PROMOTION_SIGMA);
         }
+        else if ((k + 1) % CHALLENGE_EVERY == 0)
+        {
+            stall_batches += CHALLENGE_EVERY;
+        }
+        if (!promoted && (k + 1) % CHALLENGE_EVERY == 0
+            && stall_batches >= STALL_WINDOW)
+        {
+            restart_origin = k + 1;
+            restarts = std::min(MAX_RESTART_LEVEL, restarts + 1);
+            compute_effective_scale(best_theta, effective_scale);
+            for (size_t i = 0; i < NUM_PARAMS; ++i)
+            {
+                es_m1[i] = 0.0;
+                es_m2[i] = 0.0;
+            }
+            apply_restart_kick(best_theta, effective_scale, seed, k + 1, restarts,
+                               theta, x);
+            es_sigma = restart_sigma_for_level(restarts);
+            stall_batches = 0;
+            std::println("[ES]   STALL: {} iterations without promotion; restart level {}/{} from incumbent, kick_l2={:.3f}, sigma={:.3f}, Adam reset, re-annealing from iter {}",
+                         STALL_WINDOW, restarts, MAX_RESTART_LEVEL,
+                         restart_kick_l2_for_level(restarts), es_sigma, restart_origin);
+        }
+
+        if (!save_state(data_file, k + 1, theta, es_sigma, es_m1, es_m2, cfg,
+                        stall_batches, restarts, restart_origin))
+        {
+            std::println(stderr, "[TUNER] warning: failed to write checkpoint {}", data_file);
+        }
+        durable_write_doubles("current_param.bin", theta, NUM_PARAMS);
 
         double dist_inc_norm = 0;
         double dist_inc_phys = 0;
         for (size_t i = 0; i < NUM_PARAMS; ++i)
         {
-            double d = x[i] - best_theta[i] / param_scale[i];
+            double d = x[i] - best_theta[i] / effective_scale[i];
             dist_inc_norm += d * d;
             double dp = theta[i] - best_theta[i];
             dist_inc_phys = std::max(dist_inc_phys, std::fabs(dp));
