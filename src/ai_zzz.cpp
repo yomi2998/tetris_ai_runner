@@ -634,12 +634,12 @@ namespace ai_zzz
         return value;
     }
 
-    int TOJ::Status::t3b_readiness(uint32_t const *rows, int y, int x, int qualifying, int total)
+    int TOJ::Status::t3b_readiness(uint32_t const *rows, uint8_t const *counts, int y, int x, int qualifying, int total)
     {
         int value = total * qualifying;
-        if ((rows[y + 2] >> x) & 2)
+        if ((rows[y + 4] >> (x + 2)) & 1)
         {
-            value += total;
+            value += total + counts[y + 3];
         }
         else if (((rows[y + 4] >> x) & 7) == 4 && ((rows[y + 5] >> x) & 7) == 4 && ((rows[y + 6] >> x) & 7) == 4)
         {
@@ -647,9 +647,9 @@ namespace ai_zzz
         }
         else
         {
-            value /= 4;
+            value /= 2;
         }
-        if (((rows[y + 3] >> x) & 1) != ((rows[y + 4] >> x) & 1))
+        if (x >= 1 && (((rows[y + 3] >> (x - 1)) & 1) != ((rows[y + 4] >> (x - 1)) & 1)))
         {
             value = 0;
         }
@@ -716,6 +716,19 @@ namespace ai_zzz
                     if (out_map != nullptr)
                     {
                         apply_overlay(Kind::T3A, x, y, value, *out_map);
+                    }
+                    y += 2;
+                    continue;
+                }
+                candidates = ~(rows[0] >> 2) & ~((rows[1] >> 1) | (rows[1] >> 2)) & ~(rows[2] >> 2) & ~(rows[3] | (rows[3] >> 1) | (rows[3] >> 2)) & ~(rows[4] | (rows[4] >> 1)) & 0x7fu;
+                if (candidates != 0)
+                {
+                    int x = std::countr_zero(candidates);
+                    int value = t3b_readiness(map.row, counts, y, x, qualifying, total3);
+                    values.t3 += static_cast<int16_t>(value);
+                    if (out_map != nullptr)
+                    {
+                        apply_overlay(Kind::T3B, x, y, value, *out_map);
                     }
                     y += 2;
                     continue;
@@ -789,7 +802,7 @@ namespace ai_zzz
             {
                 int x = std::countr_zero(t3b);
                 t3b &= t3b - 1;
-                int value = t3b_readiness(map.row, y, x, qualifying, total);
+                int value = t3b_readiness(map.row, counts, y, x, qualifying, total);
                 result.data[result.count++] = pack(x, y, Kind::T3B, value);
             }
         }

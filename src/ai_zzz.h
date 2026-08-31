@@ -360,7 +360,7 @@ namespace ai_zzz
             static uint8_t descriptor_readiness(uint32_t descriptor);
             static int t2_readiness(uint32_t row0, uint32_t row1, uint32_t row2, int count0, int count1, int x);
             static int t3a_readiness(uint32_t const *rows, uint8_t const *counts, int y, int x, int qualifying, int total);
-            static int t3b_readiness(uint32_t const *rows, int y, int x, int qualifying, int total);
+            static int t3b_readiness(uint32_t const *rows, uint8_t const *counts, int y, int x, int qualifying, int total);
             static void apply_overlay(Kind kind, int x, int y, int readiness, m_tetris::TetrisMap &map);
             static void fill_counts(m_tetris::TetrisMap const &map, uint8_t *counts);
             static Values reduce_legacy_with_counts(m_tetris::TetrisMap const &map, m_tetris::TetrisMap *out_map, uint8_t const *counts);
