@@ -333,8 +333,7 @@ namespace ai_zzz
             enum class Kind : uint8_t
             {
                 T2,
-                T3A,
-                T3B
+                T3
             };
             struct Values
             {
@@ -346,28 +345,20 @@ namespace ai_zzz
                 std::array<uint32_t, 120> data;
                 uint8_t count = 0;
             };
-            struct SlotAnalysis
-            {
-                DescriptorSet slots;
-                Values legacy;
-            };
 
             static void init_t_value(m_tetris::TetrisMap const &m, int16_t &t2_value_ref, int16_t &t3_value_ref, m_tetris::TetrisMap *out_map = nullptr);
-            static uint32_t pack(uint8_t x, uint8_t y, Kind kind, uint8_t readiness);
+            static uint32_t pack(uint8_t x, uint8_t y, Kind kind, uint8_t readiness, bool mirrored = false);
             static uint8_t descriptor_x(uint32_t descriptor);
             static uint8_t descriptor_y(uint32_t descriptor);
             static Kind descriptor_kind(uint32_t descriptor);
             static uint8_t descriptor_readiness(uint32_t descriptor);
+            static bool descriptor_mirrored(uint32_t descriptor);
             static int t2_readiness(uint32_t row0, uint32_t row1, uint32_t row2, int count0, int count1, int x);
-            static int t3a_readiness(uint32_t const *rows, uint8_t const *counts, int y, int x, int qualifying, int total);
-            static int t3b_readiness(uint32_t const *rows, uint8_t const *counts, int y, int x, int qualifying, int total);
-            static void apply_overlay(Kind kind, int x, int y, int readiness, m_tetris::TetrisMap &map);
+            static int t3a_readiness(uint32_t const *rows, uint8_t const *counts, int y, int hole, int qualifying, int total);
+            static int t3b_readiness(uint32_t const *rows, uint8_t const *counts, int y, int hole, int qualifying, int total);
+            static void apply_overlay(Kind kind, bool mirrored, int x, int y, int readiness, m_tetris::TetrisMap &map);
             static void fill_counts(m_tetris::TetrisMap const &map, uint8_t *counts);
-            static Values reduce_legacy_with_counts(m_tetris::TetrisMap const &map, m_tetris::TetrisMap *out_map, uint8_t const *counts);
-            static Values reduce_legacy(m_tetris::TetrisMap const &map, m_tetris::TetrisMap *out_map);
-            static DescriptorSet enumerate_descriptors_with_counts(m_tetris::TetrisMap const &map, uint8_t const *counts);
             static DescriptorSet enumerate_descriptors(m_tetris::TetrisMap const &map);
-            static SlotAnalysis analyze(m_tetris::TetrisMap const &map, m_tetris::TetrisMap *out_map);
             static Values decode(DescriptorSet const &slots, m_tetris::TetrisMap *out_map);
         };
     public:
