@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -121,6 +122,7 @@ namespace tuner_match
         std::vector<char> next;
         std::deque<int> recv_attack;
         int send_attack = 0;
+        std::chrono::steady_clock::time_point start_time{};
         int combo = 0;
         int b2b = 0;
         char hold = ' ';
@@ -146,6 +148,7 @@ namespace tuner_match
 
         void init(double const *params)
         {
+            start_time = std::chrono::steady_clock::now();
             map = m_tetris::TetrisMap(10, 40);
             array_to_param(params, ai.ai_config()->param);
             next.clear();
@@ -368,17 +371,22 @@ namespace tuner_match
         std::print("\x1b[H\x1b[2J");
         int up1 = std::accumulate(b1.recv_attack.begin(), b1.recv_attack.end(), 0);
         int up2 = std::accumulate(b2.recv_attack.begin(), b2.recv_attack.end(), 0);
+        double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now()
+                                                       - std::min(b1.start_time, b2.start_time))
+                             .count();
+        double pps1 = elapsed > 0.0 ? static_cast<double>(b1.total_block) / elapsed : 0.0;
+        double pps2 = elapsed > 0.0 ? static_cast<double>(b2.total_block) / elapsed : 0.0;
         std::println(
-            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {}\n"
-            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {}",
+            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} PPS={:.2f} {}\n"
+            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} PPS={:.2f} {}",
             b1.hold, std::string(b1.next.begin() + 1, b1.next.begin() + 1 + next_length),
             b1.combo, b1.b2b, up1, b1.total_block, b1.total_clear, b1.total_attack,
             b1.total_clear ? static_cast<double>(b1.total_attack) / b1.total_clear : 0.0,
-            b1.total_block ? static_cast<double>(b1.total_attack) / b1.total_block : 0.0, name1,
+            b1.total_block ? static_cast<double>(b1.total_attack) / b1.total_block : 0.0, pps1, name1,
             b2.hold, std::string(b2.next.begin() + 1, b2.next.begin() + 1 + next_length),
             b2.combo, b2.b2b, up2, b2.total_block, b2.total_clear, b2.total_attack,
             b2.total_clear ? static_cast<double>(b2.total_attack) / b2.total_clear : 0.0,
-            b2.total_block ? static_cast<double>(b2.total_attack) / b2.total_block : 0.0, name2);
+            b2.total_block ? static_cast<double>(b2.total_attack) / b2.total_block : 0.0, pps2, name2);
         for (int y = 21; y >= 0; --y)
         {
             for (int x = 0; x < 10; ++x)
