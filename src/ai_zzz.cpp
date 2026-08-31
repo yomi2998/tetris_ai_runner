@@ -550,205 +550,299 @@ namespace ai_zzz
         return "ZZZ TOJ v0.12";
     }
 
-    void TOJ::Status::init_t_value(TetrisMap const &map, int16_t &t2_value_ref, int16_t &t3_value_ref, TetrisMap *out_map)
+    void TOJ::Status::init_t_value(m_tetris::TetrisMap const &m, int16_t &t2_value_ref, int16_t &t3_value_ref, m_tetris::TetrisMap *out_map)
     {
-        int row_bit_count_global[40];
-        for (int y = 0; y < map.roof; ++y)
+        Values const values = reduce_legacy(m, out_map);
+        t2_value_ref = values.t2;
+        t3_value_ref = values.t3;
+    }
+
+    uint32_t TOJ::Status::pack(uint8_t x, uint8_t y, Kind kind, uint8_t readiness)
+    {
+        return uint32_t(x) | uint32_t(y) << 4 | uint32_t(kind) << 9 | uint32_t(readiness) << 11;
+    }
+
+    uint8_t TOJ::Status::descriptor_x(uint32_t descriptor)
+    {
+        return static_cast<uint8_t>(descriptor & 15);
+    }
+
+    uint8_t TOJ::Status::descriptor_y(uint32_t descriptor)
+    {
+        return static_cast<uint8_t>((descriptor >> 4) & 31);
+    }
+
+    TOJ::Status::Kind TOJ::Status::descriptor_kind(uint32_t descriptor)
+    {
+        return static_cast<Kind>((descriptor >> 9) & 3);
+    }
+
+    uint8_t TOJ::Status::descriptor_readiness(uint32_t descriptor)
+    {
+        return static_cast<uint8_t>((descriptor >> 11) & 255);
+    }
+
+    int TOJ::Status::t2_readiness(uint32_t row0, uint32_t row1, uint32_t row2, int count0, int count1, int x)
+    {
+        int total = count0 + count1;
+        int value = total;
+        if (total <= 10)
         {
-            row_bit_count_global[y] = zzz::BitCount(map.row[y]);
+            return value;
         }
-        memset(row_bit_count_global + map.roof, 0, sizeof(int) * (40 - map.roof));
-        t2_value_ref = 0;
-        t3_value_ref = 0;
-        uint32_t const mask1 = (map.width >= 3) ? ((1u << (map.width - 2)) - 2) : 0;
-        uint32_t const mask2 = (map.width >= 3) ? ((1u << (map.width - 3)) - 1) : 0;
-        uint32_t const mask3 = (map.width >= 2) ? ((1u << (map.width - 2)) - 1) : 0;
-        for (int y = 0, ey = std::min(20, map.roof - 2); y < ey; ++y)
+        value += (count0 == 9) * total;
+        value += (count1 == 7) * total;
+        switch ((row2 >> x) & 7)
         {
-            int new_y = y;
-            int row0 = map.row[y];
-            int row1 = map.row[y + 1];
-            int row2 = map.row[y + 2];
-            int row3 = map.row[y + 3];
-            int row4 = map.row[y + 4];
-            int row5 = map.row[y + 5];
-            int row6 = map.row[y + 6];
-            int *row_bit_count = row_bit_count_global + y;
-            uint32_t m = ~static_cast<uint32_t>(row0) & ~(static_cast<uint32_t>(row1) | (static_cast<uint32_t>(row1) >> 1)) & ~static_cast<uint32_t>(row2)
-                & ~(static_cast<uint32_t>(row3) | (static_cast<uint32_t>(row3) >> 1) | (static_cast<uint32_t>(row3) >> 2))
-                & ~((static_cast<uint32_t>(row4) >> 1) | (static_cast<uint32_t>(row4) >> 2)) & mask1;
-            while (m != 0)
+        case 1:
+        case 4:
+            value += total * 3;
+            break;
+        case 2:
+        case 3:
+        case 5:
+        case 6:
+        case 7:
+            value = 0;
+            break;
+        default:
+            value /= 2;
+            break;
+        }
+        return value;
+    }
+
+    int TOJ::Status::t3a_readiness(uint32_t const *rows, uint8_t const *counts, int y, int x, int qualifying, int total)
+    {
+        int value = total * qualifying;
+        if ((rows[y + 4] >> x) & 1)
+        {
+            value += total + counts[y + 3];
+        }
+        else if (((rows[y + 4] >> x) & 7) == 1 && ((rows[y + 5] >> x) & 7) == 1 && ((rows[y + 6] >> x) & 7) == 1)
+        {
+            value = 0;
+        }
+        else
+        {
+            value /= 2;
+        }
+        if (((rows[y + 3] >> x) & 8) != ((rows[y + 4] >> x) & 8))
+        {
+            value = 0;
+        }
+        return value;
+    }
+
+    int TOJ::Status::t3b_readiness(uint32_t const *rows, int y, int x, int qualifying, int total)
+    {
+        int value = total * qualifying;
+        if ((rows[y + 2] >> x) & 2)
+        {
+            value += total;
+        }
+        else if (((rows[y + 4] >> x) & 7) == 4 && ((rows[y + 5] >> x) & 7) == 4 && ((rows[y + 6] >> x) & 7) == 4)
+        {
+            value = 0;
+        }
+        else
+        {
+            value /= 4;
+        }
+        if (((rows[y + 3] >> x) & 1) != ((rows[y + 4] >> x) & 1))
+        {
+            value = 0;
+        }
+        return value;
+    }
+
+    void TOJ::Status::apply_overlay(Kind kind, int x, int y, int readiness, m_tetris::TetrisMap &map)
+    {
+        if (readiness == 0)
+        {
+            return;
+        }
+        if (kind == Kind::T2)
+        {
+            map.row[y] |= 2u << x;
+            map.row[y + 1] |= 7u << x;
+        }
+        else if (kind == Kind::T3A)
+        {
+            map.row[y] |= 1u << x;
+            map.row[y + 1] |= 3u << x;
+            map.row[y + 2] |= 1u << x;
+            map.row[y + 3] |= 1u << x;
+        }
+        else
+        {
+            map.row[y] |= 4u << x;
+            map.row[y + 1] |= 6u << x;
+            map.row[y + 2] |= 4u << x;
+            map.row[y + 3] |= 4u << x;
+        }
+    }
+
+    void TOJ::Status::fill_counts(m_tetris::TetrisMap const &map, uint8_t *counts)
+    {
+        std::fill_n(counts, 23, uint8_t(0));
+        int end = std::min(map.roof, 23);
+        for (int y = 0; y < end; ++y)
+        {
+            counts[y] = static_cast<uint8_t>(zzz::BitCount(map.row[y]));
+        }
+    }
+
+    TOJ::Status::Values TOJ::Status::reduce_legacy_with_counts(m_tetris::TetrisMap const &map, m_tetris::TetrisMap *out_map, uint8_t const *counts)
+    {
+        Values values;
+        for (int y = 0, end = std::min(20, map.roof - 2); y < end; ++y)
+        {
+            uint32_t rows[7];
+            for (int i = 0; i < 7; ++i)
             {
-                int x = std::countr_zero(m);
-                m &= m - 1;
-                if (((~row0 >> x) & 1) & (((~row1 >> x) & 3) == 3) & ((~row2 >> x) & 1) & !((row3 >> x) & 7) & (((~row4 >> x) & 6) == 6))
+                rows[i] = map.row[y + i];
+            }
+            int qualifying = (counts[y] == 9) + (counts[y + 1] == 8) + (counts[y + 2] == 9);
+            int total3 = counts[y] + counts[y + 1] + counts[y + 2];
+            if (counts[y + 2] == 9 && qualifying >= 2 && total3 > 20)
+            {
+                uint32_t candidates = ~rows[0] & ~(rows[1] | (rows[1] >> 1)) & ~rows[2] & ~(rows[3] | (rows[3] >> 1) | (rows[3] >> 2)) & ~((rows[4] >> 1) | (rows[4] >> 2)) & 0xfeu;
+                if (candidates != 0)
                 {
-                    int t3_count = 0;
-                    if (row_bit_count[0] == map.width - 1)
+                    int x = std::countr_zero(candidates);
+                    int value = t3a_readiness(map.row, counts, y, x, qualifying, total3);
+                    values.t3 += static_cast<int16_t>(value);
+                    if (out_map != nullptr)
                     {
-                        t3_count += 1;
+                        apply_overlay(Kind::T3A, x, y, value, *out_map);
                     }
-                    if (row_bit_count[1] == map.width - 2)
-                    {
-                        t3_count += 1;
-                    }
-                    if (row_bit_count[2] == map.width - 1)
-                    {
-                        t3_count += 1;
-                    }
-                    else
-                    {
-                        continue;
-                    }
-                    int t3_bit_count = row_bit_count[0] + row_bit_count[1] + row_bit_count[2];
-                    if (t3_count >= 2 && t3_bit_count > map.width * 2)
-                    {
-                        int t3_value = t3_bit_count * t3_count;
-                        if ((row4 >> x) & 1)
-                        {
-                            t3_value += t3_bit_count + row_bit_count[3];
-                        }
-                        else if (((row4 >> x) & 7) == 1 && ((row5 >> x) & 7) == 1 && ((row6 >> x) & 7) == 1)
-                        {
-                            t3_value = 0;
-                        }
-                        else
-                        {
-                            t3_value /= 2;
-                        }
-                        if (((row3 >> x) & 8) != ((row4 >> x) & 8))
-                        {
-                            t3_value = 0;
-                        }
-                        if (t3_value > 0 && out_map != nullptr)
-                        {
-                            out_map->row[y + 0] |= 1 << x;
-                            out_map->row[y + 1] |= 3 << x;
-                            out_map->row[y + 2] |= 1 << x;
-                            out_map->row[y + 3] |= 1 << x;
-                        }
-                        t3_value_ref += t3_value;
-                        new_y += 2;
-                        break;
-                    }
+                    y += 2;
+                    continue;
                 }
             }
-            if (new_y != y)
+            uint32_t candidates = (rows[0] & (rows[0] >> 2)) & ~(rows[0] >> 1) & ~(rows[1] | (rows[1] >> 1) | (rows[1] >> 2)) & 0xffu;
+            if (candidates == 0)
             {
-                y = new_y;
                 continue;
             }
-            m = ~(static_cast<uint32_t>(row0) >> 2) & ~((static_cast<uint32_t>(row1) >> 1) | (static_cast<uint32_t>(row1) >> 2)) & ~(static_cast<uint32_t>(row2) >> 2)
-                & ~(static_cast<uint32_t>(row3) | (static_cast<uint32_t>(row3) >> 1) | (static_cast<uint32_t>(row3) >> 2))
-                & ~(static_cast<uint32_t>(row4) | (static_cast<uint32_t>(row4) >> 1)) & mask2;
-            while (m != 0)
+            int total2 = counts[y] + counts[y + 1];
+            if (total2 <= 10)
             {
-                int x = std::countr_zero(m);
-                m &= m - 1;
-                if (((~row0 >> x) & 4) & (((~row1 >> x) & 6) == 6) & ((~row2 >> x) & 4) & !((row3 >> x) & 7) & (((~row4 >> x) & 3) == 3))
-                {
-                    int t3_count = 0;
-                    if (row_bit_count[0] == map.width - 1)
-                    {
-                        t3_count += 1;
-                    }
-                    if (row_bit_count[1] == map.width - 2)
-                    {
-                        t3_count += 1;
-                    }
-                    if (row_bit_count[2] == map.width - 1)
-                    {
-                        t3_count += 1;
-                    }
-                    else
-                    {
-                        continue;
-                    }
-                    int t3_bit_count = row_bit_count[0] + row_bit_count[1] + row_bit_count[2];
-                    if (t3_count >= 2 && t3_bit_count > map.width * 2)
-                    {
-                        int t3_value = t3_bit_count * t3_count;
-                        if ((row2 >> x) & 2)
-                        {
-                            t3_value += t3_bit_count;
-                        }
-                        else if (((row4 >> x) & 7) == 4 && ((row5 >> x) & 7) == 4 && ((row6 >> x) & 7) == 4)
-                        {
-                            t3_value = 0;
-                        }
-                        else
-                        {
-                            t3_value /= 4;
-                        }
-                        if (((row3 >> x) & 1) != ((row4 >> x) & 1))
-                        {
-                            t3_value = 0;
-                        }
-                        if (t3_value > 0 && out_map != nullptr)
-                        {
-                            out_map->row[y + 0] |= 4 << x;
-                            out_map->row[y + 1] |= 6 << x;
-                            out_map->row[y + 2] |= 4 << x;
-                            out_map->row[y + 3] |= 4 << x;
-                        }
-                        t3_value_ref += t3_value;
-                        new_y += 2;
-                        break;
-                    }
-                }
-            }
-            if (new_y != y)
-            {
-                y = new_y;
+                values.t2 += static_cast<int16_t>(std::popcount(candidates) * total2);
                 continue;
             }
-            m = (static_cast<uint32_t>(row0) & (static_cast<uint32_t>(row0) >> 2)) & ~(static_cast<uint32_t>(row0) >> 1)
-                & ~(static_cast<uint32_t>(row1) | (static_cast<uint32_t>(row1) >> 1) | (static_cast<uint32_t>(row1) >> 2)) & mask3;
-            while (m != 0)
+            int x = std::countr_zero(candidates);
+            int value = t2_readiness(rows[0], rows[1], rows[2], counts[y], counts[y + 1], x);
+            values.t2 += static_cast<int16_t>(value);
+            if (out_map != nullptr)
             {
-                int x = std::countr_zero(m);
-                m &= m - 1;
-                if ((((row0 >> x) & 7) == 5) & !((row1 >> x) & 7))
-                {
-                    int row01_count = row_bit_count[0] + row_bit_count[1];
-                    int t2_value = row01_count;
-                    if (row01_count > map.width)
-                    {
-                        if (row_bit_count[0] == map.width - 1)
-                        {
-                            t2_value += row01_count;
-                        }
-                        if (row_bit_count[1] == map.width - 3)
-                        {
-                            t2_value += row01_count;
-                        }
-                        int row2_check = (row2 >> x) & 7;
-                        switch (row2_check)
-                        {
-                        case 1: case 4:
-                            t2_value += row01_count * 3;
-                            break;
-                        case 2: case 3: case 5: case 6: case 7:
-                            t2_value = 0;
-                            break;
-                        default:
-                            t2_value = t2_value / 2;
-                            break;
-                        }
-                        if (t2_value > 0 && out_map != nullptr)
-                        {
-                            out_map->row[y + 0] |= 2 << x;
-                            out_map->row[y + 1] |= 7 << x;
-                        }
-                        t2_value_ref += t2_value;
-                        ++new_y;
-                        break;
-                    }
-                    t2_value_ref += t2_value;
-                }
+                apply_overlay(Kind::T2, x, y, value, *out_map);
             }
-            y = new_y;
+            ++y;
         }
+        return values;
+    }
+
+    TOJ::Status::Values TOJ::Status::reduce_legacy(m_tetris::TetrisMap const &map, m_tetris::TetrisMap *out_map)
+    {
+        if (map.width != 10)
+        {
+            return Values{};
+        }
+        uint8_t counts[23];
+        fill_counts(map, counts);
+        return reduce_legacy_with_counts(map, out_map, counts);
+    }
+
+    TOJ::Status::DescriptorSet TOJ::Status::enumerate_descriptors_with_counts(m_tetris::TetrisMap const &map, uint8_t const *counts)
+    {
+        DescriptorSet result;
+        int end = std::min(20, map.roof - 2);
+        for (int y = 0; y < end; ++y)
+        {
+            uint32_t const *rows = map.row + y;
+            uint32_t t2 = (rows[0] & (rows[0] >> 2)) & ~(rows[0] >> 1) & ~(rows[1] | (rows[1] >> 1) | (rows[1] >> 2)) & 0xffu;
+            while (t2 != 0)
+            {
+                int x = std::countr_zero(t2);
+                t2 &= t2 - 1;
+                int value = t2_readiness(rows[0], rows[1], rows[2], counts[y], counts[y + 1], x);
+                result.data[result.count++] = pack(x, y, Kind::T2, value);
+            }
+            int qualifying = (counts[y] == 9) + (counts[y + 1] == 8) + (counts[y + 2] == 9);
+            int total = counts[y] + counts[y + 1] + counts[y + 2];
+            if (counts[y + 2] != 9 || qualifying < 2 || total <= 20)
+            {
+                continue;
+            }
+            uint32_t t3a = ~rows[0] & ~(rows[1] | (rows[1] >> 1)) & ~rows[2] & ~(rows[3] | (rows[3] >> 1) | (rows[3] >> 2)) & ~((rows[4] >> 1) | (rows[4] >> 2)) & 0xfeu;
+            while (t3a != 0)
+            {
+                int x = std::countr_zero(t3a);
+                t3a &= t3a - 1;
+                int value = t3a_readiness(map.row, counts, y, x, qualifying, total);
+                result.data[result.count++] = pack(x, y, Kind::T3A, value);
+            }
+            uint32_t t3b = ~(rows[0] >> 2) & ~((rows[1] >> 1) | (rows[1] >> 2)) & ~(rows[2] >> 2) & ~(rows[3] | (rows[3] >> 1) | (rows[3] >> 2)) & ~(rows[4] | (rows[4] >> 1)) & 0x7fu;
+            while (t3b != 0)
+            {
+                int x = std::countr_zero(t3b);
+                t3b &= t3b - 1;
+                int value = t3b_readiness(map.row, y, x, qualifying, total);
+                result.data[result.count++] = pack(x, y, Kind::T3B, value);
+            }
+        }
+        return result;
+    }
+
+    TOJ::Status::DescriptorSet TOJ::Status::enumerate_descriptors(m_tetris::TetrisMap const &map)
+    {
+        if (map.width != 10)
+        {
+            return DescriptorSet{};
+        }
+        uint8_t counts[23];
+        fill_counts(map, counts);
+        return enumerate_descriptors_with_counts(map, counts);
+    }
+
+    TOJ::Status::SlotAnalysis TOJ::Status::analyze(m_tetris::TetrisMap const &map, m_tetris::TetrisMap *out_map)
+    {
+        SlotAnalysis result;
+        if (map.width != 10)
+        {
+            return result;
+        }
+        uint8_t counts[23];
+        fill_counts(map, counts);
+        result.slots = enumerate_descriptors_with_counts(map, counts);
+        result.legacy = reduce_legacy_with_counts(map, out_map, counts);
+        return result;
+    }
+
+    TOJ::Status::Values TOJ::Status::decode(DescriptorSet const &slots, m_tetris::TetrisMap *out_map)
+    {
+        Values result;
+        for (int i = 0; i < slots.count; ++i)
+        {
+            uint32_t descriptor = slots.data[i];
+            Kind kind = descriptor_kind(descriptor);
+            int readiness = descriptor_readiness(descriptor);
+            if (kind == Kind::T2)
+            {
+                result.t2 += static_cast<int16_t>(readiness);
+            }
+            else
+            {
+                result.t3 += static_cast<int16_t>(readiness);
+            }
+            if (out_map != nullptr)
+            {
+                apply_overlay(kind, descriptor_x(descriptor), descriptor_y(descriptor), readiness, *out_map);
+            }
+        }
+        return result;
     }
 
     TOJ::Result TOJ::eval(TetrisNodeEx const &node, TetrisMap const &map, TetrisMap const &src_map) const
@@ -759,7 +853,9 @@ namespace ai_zzz
         memset(&result, 0, sizeof result);
 
         TetrisMap t_map = map;
-        Status::init_t_value(t_map, result.t2_value, result.t3_value, &t_map);
+        Status::SlotAnalysis const analysis = Status::analyze(t_map, &t_map);
+        result.t2_value = analysis.legacy.t2;
+        result.t3_value = analysis.legacy.t3;
 
         size_t ColTrans = 2 * (t_map.height - t_map.roof);
         size_t RowTrans = t_map.roof == t_map.height ? 0 : t_map.width;
