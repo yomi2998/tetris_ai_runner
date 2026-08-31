@@ -1031,11 +1031,15 @@ namespace m_tetris
                 {
                     return;
                 }
-                for (size_t i = 1; i < tt.size(); ++i)
+                std::rotate(tt.begin(), tt.begin() + 1, tt.end());
+                if (tt.back() == nullptr)
                 {
-                    tt[i - 1] = std::move(tt[i]);
+                    tt.back() = std::make_unique<Table>();
                 }
-                tt.back() = std::make_unique<Table>();
+                else
+                {
+                    tt.back()->clear();
+                }
                 for (auto &p : tt)
                 {
                     if (p == nullptr)

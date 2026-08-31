@@ -10,10 +10,12 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <print>
 #include <random>
+#include <semaphore>
 #include <string>
 #include <thread>
 #include <vector>
@@ -416,10 +418,43 @@ namespace tuner_match
         double apl1, apl2;
     };
 
+    inline void run_round(BotInstance &b1, BotInstance &b2)
+    {
+        b1.run();
+        b2.run();
+    }
+
+    template<class F1, class F2>
+    inline void run_pair_parallel(F1 &&f1, F2 &&f2, std::counting_semaphore<> &permits)
+    {
+        if (permits.try_acquire())
+        {
+            std::thread helper(std::forward<F2>(f2));
+            f1();
+            helper.join();
+            permits.release();
+        }
+        else
+        {
+            f1();
+            f2();
+        }
+    }
+
+    inline void run_round_parallel(BotInstance &b1, BotInstance &b2, std::counting_semaphore<> &permits)
+    {
+        run_pair_parallel([&b1] { b1.run(); }, [&b2] { b2.run(); }, permits);
+    }
+
     inline MatchResult play_match(BotInstance &b1, BotInstance &b2, int max_rounds = 1000,
-                                  std::function<void()> view_cb = nullptr)
+                                  std::function<void()> view_cb = nullptr,
+                                  std::counting_semaphore<> *bot_permits = nullptr)
     {
         int played_rounds = 0;
+        if (bot_permits != nullptr)
+        {
+            bot_permits->acquire();
+        }
         for (int round = 1; round <= max_rounds; ++round)
         {
             begin_round(*b1.scenario, *b2.scenario, round);
@@ -429,8 +464,14 @@ namespace tuner_match
             {
                 view_cb();
             }
-            b1.run();
-            b2.run();
+            if (bot_permits != nullptr)
+            {
+                run_round_parallel(b1, b2, *bot_permits);
+            }
+            else
+            {
+                run_round(b1, b2);
+            }
             ++played_rounds;
             if (b1.dead || b2.dead)
             {
@@ -442,6 +483,10 @@ namespace tuner_match
             b2.send_attack -= min_attack;
             b1.under_attack(b2.send_attack);
             b2.under_attack(b1.send_attack);
+        }
+        if (bot_permits != nullptr)
+        {
+            bot_permits->release();
         }
 
         MatchResult r;
@@ -518,6 +563,14 @@ namespace tuner_match
     {
         std::vector<MatchOutcome> out(jobs.size());
         std::atomic<size_t> next_job{ 0 };
+        size_t const batch_threads = std::min<size_t>(std::max(1, threads), jobs.size());
+        size_t const cpus = std::max(1u, std::thread::hardware_concurrency());
+        size_t const slots = std::min(cpus, 2 * batch_threads);
+        std::unique_ptr<std::counting_semaphore<>> permits;
+        if (slots >= 2)
+        {
+            permits = std::make_unique<std::counting_semaphore<>>(static_cast<int>(slots));
+        }
         auto worker = [&]()
         {
             for (;;)
@@ -571,7 +624,7 @@ namespace tuner_match
                     }
                     render_view(b1, b2, "PLUS", "MINUS");
                 };
-                MatchResult r = play_match(b1, b2, max_rounds, view_cb);
+                MatchResult r = play_match(b1, b2, max_rounds, view_cb, permits.get());
                 {
                     std::lock_guard<std::mutex> lock(view_mutex);
                     if (view_index.load(std::memory_order_relaxed) == claim)
@@ -591,10 +644,9 @@ namespace tuner_match
                 out[idx].apl2 = r.apl2;
             }
         };
-        size_t nthreads = std::min<size_t>(std::max(1, threads), jobs.size());
         std::vector<std::thread> pool;
-        pool.reserve(nthreads);
-        for (size_t t = 0; t < nthreads; ++t)
+        pool.reserve(batch_threads);
+        for (size_t t = 0; t < batch_threads; ++t)
         {
             pool.emplace_back(worker);
         }

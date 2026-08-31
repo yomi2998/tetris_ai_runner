@@ -1020,6 +1020,70 @@ static void check_crn_event_scope(SelfCheck &sc)
     sc.check(differs, "rounds are distinguished inside the CRN hash");
 }
 
+static void check_parallel_bot_slots(SelfCheck &sc)
+{
+    std::atomic<int> live{ 0 }, peak{ 0 };
+    auto busy = [&]()
+    {
+        int const now = ++live;
+        int prev = peak.load();
+        while (now > prev && !peak.compare_exchange_weak(prev, now))
+        {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        --live;
+    };
+
+    std::counting_semaphore<> roomy(4);
+    for (int i = 0; i < 6; ++i)
+    {
+        tmatch::run_pair_parallel(busy, busy, roomy);
+    }
+    sc.check(peak == 2, "a match runs its two bots at once while slots are free");
+
+    std::counting_semaphore<> tight(2);
+    std::vector<std::thread> racers;
+    for (int i = 0; i < 3; ++i)
+    {
+        racers.emplace_back([&]
+        {
+            for (int r = 0; r < 4; ++r)
+            {
+                tmatch::run_pair_parallel(busy, busy, tight);
+            }
+        });
+    }
+    for (auto &th : racers)
+    {
+        th.join();
+    }
+    sc.check(peak <= 2, "concurrent matches never exceed the free-thread budget");
+
+    std::counting_semaphore<> single(1);
+    live = 0;
+    peak = 0;
+    tmatch::run_pair_parallel(busy, busy, single);
+    sc.check(peak == 1, "with no spare slot the bots are played one after the other");
+
+    std::counting_semaphore<> drained(3);
+    live = 0;
+    peak = 0;
+    std::vector<std::thread> five;
+    for (int i = 0; i < 5; ++i)
+    {
+        five.emplace_back([&]
+        {
+            tmatch::run_pair_parallel(busy, busy, drained);
+        });
+    }
+    for (auto &th : five)
+    {
+        th.join();
+    }
+    sc.check(peak <= 3 && drained.try_acquire() && drained.try_acquire() && drained.try_acquire(),
+             "permits are returned even when a worker cannot pair up");
+}
+
 static void check_search_scale_and_restart_policy(SelfCheck &sc)
 {
     double reference[NUM_PARAMS] = {};
@@ -1169,6 +1233,7 @@ static int run_selfcheck()
     SelfCheck sc;
     check_promotion_statistics(sc);
     check_crn_event_scope(sc);
+    check_parallel_bot_slots(sc);
     check_search_scale_and_restart_policy(sc);
     check_warm_start_identity(sc);
     check_checkpoint_formats(sc);
