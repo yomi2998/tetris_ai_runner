@@ -144,3 +144,37 @@ The Phase 1 review (blockers 1-3, high 4-5, follow-ups 6-7) was applied:
 
 Revert the instrumentation commits. No production architecture has changed;
 the frozen baseline artifacts remain valid.
+
+## Phase 2 status (in progress)
+
+Implemented in the submodule (commit 0082e88, root pointer updated) and root tests:
+
+- Two-channel (normal versus rotation) bit-parallel arrival propagation
+  (`arrival_bfs`, `arrival_fixpoint`, `arrival_search`) sharing binary_bfs's
+  usable masks, ordered kick application, and fixpoint structure.
+- `search_workspace` with caller-ownable usable positions and a legality
+  checker backed by the same data (`move_checker` gained a from-usable
+  constructor).
+- `dispatch_with_height` implementing the perft.hpp height and
+  check_consecutive selection rule with the pinned cutoffs 6/12/24/48 and the
+  +3 margin.
+- Test-only scalar arrival oracle (`tests/scalar_arrival_oracle.h`) over
+  (orientation, x, y, arrival) with per-piece geometry extraction, compared
+  against the bit-parallel result across 7 pieces x 26 boards x 8 movement
+  configurations x 2 check_consecutive settings.
+- Perft vectors remain exact with the kernel additions.
+
+Kernel defect found and fixed during oracle bring-up: the kick cascade guarded
+180 transitions out of the cascade entirely (the allow_180 flag was dead in
+binary_bfs), and `drop_to_bottom` early-breaks when its input contains
+vertically chained positions. `arrival_fixpoint` propagates 180 kicks when
+enabled (identity 180 tables are genuine SRS transitions) and uses the new
+`settle_positions` (correct set gravity) instead of `drop_to_bottom`.
+
+Known issue (active work): 133 of 3073 checks fail, exclusively the T piece
+in sonic-drop configurations on higher boards: the bit-parallel result
+contains a small number of normal-arrival positions (for example (5,5) in
+orientation 1 of board 6) that the scalar oracle derives as unreachable.
+Non-T pieces match the oracle on every board and configuration. The
+discrepancy is in the settle/gravity interaction between shifted states and
+is the immediate next work item before the Phase 2 gate can run.

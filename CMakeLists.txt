@@ -113,3 +113,10 @@ add_executable(tetris_board_tests
 target_link_libraries(tetris_board_tests PRIVATE fast_reachability)
 target_include_directories(tetris_board_tests PRIVATE src tests)
 add_test(NAME tetris_board_tests COMMAND tetris_board_tests)
+
+add_executable(fast_reachability_tests
+    tests/fast_reachability_tests.cpp
+)
+target_link_libraries(fast_reachability_tests PRIVATE fast_reachability)
+target_include_directories(fast_reachability_tests PRIVATE src tests src/fast-reachability)
+add_test(NAME fast_reachability_tests COMMAND fast_reachability_tests)
