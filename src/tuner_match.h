@@ -132,6 +132,11 @@ namespace tuner_match
         int total_clear = 0;
         int total_attack = 0;
         int total_receive = 0;
+        int tspin_mini = 0;
+        int tspin_single = 0;
+        int tspin_double = 0;
+        int tspin_triple = 0;
+        int perfect_clears = 0;
 
         BotInstance()
         {
@@ -162,6 +167,11 @@ namespace tuner_match
             total_clear = 0;
             total_attack = 0;
             total_receive = 0;
+            tspin_mini = 0;
+            tspin_single = 0;
+            tspin_double = 0;
+            tspin_triple = 0;
+            perfect_clears = 0;
             last_clear = 0;
         }
 
@@ -234,11 +244,13 @@ namespace tuner_match
                 {
                     attack += 1 + b2b;
                     b2b = 1;
+                    ++tspin_mini;
                 }
                 else if (result.target.type == ai_zzz::TOJ::TSpinType::TSpin)
                 {
                     attack += 2 + b2b;
                     b2b = 1;
+                    ++tspin_single;
                 }
                 else
                 {
@@ -251,6 +263,7 @@ namespace tuner_match
                 {
                     attack += 4 + b2b;
                     b2b = 1;
+                    ++tspin_double;
                 }
                 else
                 {
@@ -264,6 +277,7 @@ namespace tuner_match
                 {
                     attack += 6 + b2b * 2;
                     b2b = 1;
+                    ++tspin_triple;
                 }
                 else
                 {
@@ -280,6 +294,7 @@ namespace tuner_match
             if (map.count == 0)
             {
                 attack += 6;
+                ++perfect_clears;
             }
 
             ++total_block;
@@ -557,6 +572,15 @@ namespace tuner_match
         int rounds;
         double app1, app2;
         double apl1, apl2;
+        size_t attack1 = 0, attack2 = 0;
+        size_t pieces1 = 0, pieces2 = 0;
+        size_t lines1 = 0, lines2 = 0;
+        size_t tspin_mini1 = 0, tspin_mini2 = 0;
+        size_t tspin_single1 = 0, tspin_single2 = 0;
+        size_t tspin_double1 = 0, tspin_double2 = 0;
+        size_t tspin_triple1 = 0, tspin_triple2 = 0;
+        size_t perfect_clear1 = 0, perfect_clear2 = 0;
+        size_t replay_failures = 0;
     };
 
     inline double paired_reward(MatchOutcome const &a, MatchOutcome const &b)
@@ -650,6 +674,23 @@ namespace tuner_match
                 out[idx].app2 = r.app2;
                 out[idx].apl1 = r.apl1;
                 out[idx].apl2 = r.apl2;
+                out[idx].attack1 = static_cast<size_t>(b1.total_attack);
+                out[idx].attack2 = static_cast<size_t>(b2.total_attack);
+                out[idx].pieces1 = static_cast<size_t>(b1.total_block);
+                out[idx].pieces2 = static_cast<size_t>(b2.total_block);
+                out[idx].lines1 = static_cast<size_t>(b1.total_clear);
+                out[idx].lines2 = static_cast<size_t>(b2.total_clear);
+                out[idx].tspin_mini1 = static_cast<size_t>(b1.tspin_mini);
+                out[idx].tspin_mini2 = static_cast<size_t>(b2.tspin_mini);
+                out[idx].tspin_single1 = static_cast<size_t>(b1.tspin_single);
+                out[idx].tspin_single2 = static_cast<size_t>(b2.tspin_single);
+                out[idx].tspin_double1 = static_cast<size_t>(b1.tspin_double);
+                out[idx].tspin_double2 = static_cast<size_t>(b2.tspin_double);
+                out[idx].tspin_triple1 = static_cast<size_t>(b1.tspin_triple);
+                out[idx].tspin_triple2 = static_cast<size_t>(b2.tspin_triple);
+                out[idx].perfect_clear1 = static_cast<size_t>(b1.perfect_clears);
+                out[idx].perfect_clear2 = static_cast<size_t>(b2.perfect_clears);
+                out[idx].replay_failures = 0;
             }
         };
         std::vector<std::thread> pool;

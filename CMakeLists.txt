@@ -65,3 +65,33 @@ add_executable(tuner
     src/random.cpp
 )
 target_include_directories(tuner PRIVATE src)
+
+add_executable(migration_fixtures
+    src/migration_fixtures.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_include_directories(migration_fixtures PRIVATE src)
+
+add_executable(spec_oracle
+    src/spec_oracle.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_include_directories(spec_oracle PRIVATE src)
+
+add_executable(migration_compare
+    src/migration_compare.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_include_directories(migration_compare PRIVATE src)

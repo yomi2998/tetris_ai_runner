@@ -36,6 +36,7 @@ namespace
     struct ProfiledTOJ : ai_zzz::TOJ
     {
         static size_t evals, gets;
+        static bool enabled;
         static void reset()
         {
             evals = 0;
@@ -43,32 +44,35 @@ namespace
         }
         Result eval(TetrisNodeEx const &node, m_tetris::TetrisMap const &map, m_tetris::TetrisMap const &src_map) const
         {
-            ++evals;
+            if (enabled) ++evals;
             return ai_zzz::TOJ::eval(node, map, src_map);
         }
         Status get(TetrisNodeEx &node, Result const &eval_result, size_t clear, m_tetris::TetrisMap const &map, size_t depth, Status const &status, m_tetris::TetrisContext::Env const &env) const
         {
-            ++gets;
+            if (enabled) ++gets;
             return ai_zzz::TOJ::get(node, eval_result, clear, map, depth, status, env);
         }
     };
     size_t ProfiledTOJ::evals = 0;
     size_t ProfiledTOJ::gets = 0;
+    bool ProfiledTOJ::enabled = true;
 
     struct ProfiledSearch : search_tspin::Search
     {
         static size_t searches;
+        static bool enabled;
         static void reset()
         {
             searches = 0;
         }
         std::vector<TetrisNodeWithTSpinType> const *search(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth)
         {
-            ++searches;
+            if (enabled) ++searches;
             return search_tspin::Search::search(map, node, depth);
         }
     };
     size_t ProfiledSearch::searches = 0;
+    bool ProfiledSearch::enabled = true;
 
     using Engine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ProfiledTOJ, ProfiledSearch>;
 
@@ -103,6 +107,9 @@ namespace
         std::string param_file;
         bool quiet = false;
         size_t iters = 0;   // >0 => iteration-based deterministic search
+        size_t warmup_moves = 0;
+        int quiet_version = 1;
+        bool telemetry = true;
     };
 
     Options parse_args(int argc, char **argv)
@@ -128,6 +135,9 @@ namespace
             else if (a == "--no-hold") opt.hold = false;
             else if (a == "--param-file") opt.param_file = next(a);
             else if (a == "--iters") opt.iters = std::strtoull(next(a).c_str(), nullptr, 10);
+            else if (a == "--warmup-moves") opt.warmup_moves = std::strtoull(next(a).c_str(), nullptr, 10);
+            else if (a == "--quiet-version") opt.quiet_version = std::atoi(next(a).c_str());
+            else if (a == "--telemetry") opt.telemetry = std::string(next(a)) != "off";
             else if (a == "--quiet") opt.quiet = true;
             else
             {
@@ -191,6 +201,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    ProfiledTOJ::enabled = opt.telemetry;
+    ProfiledSearch::enabled = opt.telemetry;
+
     m_tetris::TetrisMap map(10, 40);
     std::mt19937 rng(opt.seed);
     std::vector<char> next;
@@ -206,10 +219,12 @@ int main(int argc, char **argv)
     std::vector<double> move_ms;
     std::vector<size_t> move_evals, move_gets, move_searches, move_nodes;
 
+    size_t const total_moves = opt.warmup_moves + opt.moves;
     steady_clock::time_point t_total0 = steady_clock::now();
 
-    while (moves_done < opt.moves)
+    while (moves_done < total_moves)
     {
+        bool const warming = moves_done < opt.warmup_moves;
         // refill the 7-bag queue
         if (!next.empty()) next.erase(next.begin());
         while (next.size() <= opt.maxdepth)
@@ -244,11 +259,14 @@ int main(int argc, char **argv)
         steady_clock::time_point t1 = steady_clock::now();
         double elapsed_ms = duration<double, std::milli>(t1 - t0).count();
         size_t nodes_alloc = engine.memory_usage() - mem_before;
-        move_ms.push_back(elapsed_ms);
-        move_evals.push_back(ProfiledTOJ::evals);
-        move_gets.push_back(ProfiledTOJ::gets);
-        move_searches.push_back(ProfiledSearch::searches);
-        move_nodes.push_back(nodes_alloc);
+        if (!warming)
+        {
+            move_ms.push_back(elapsed_ms);
+            move_evals.push_back(ProfiledTOJ::evals);
+            move_gets.push_back(ProfiledTOJ::gets);
+            move_searches.push_back(ProfiledSearch::searches);
+            move_nodes.push_back(nodes_alloc);
+        }
 
         bool dead = false;
         size_t clear = 0;
@@ -314,16 +332,40 @@ int main(int argc, char **argv)
             b2b = 0;
             ++games;
         }
+        if (warming && moves_done + 1 == opt.warmup_moves)
+        {
+            t_total0 = steady_clock::now();
+        }
         ++moves_done;
     }
 
     double total_sec = duration<double>(steady_clock::now() - t_total0).count();
     size_t total_evals = 0, total_gets = 0, total_searches = 0;
+    size_t node_sum = 0;
     for (size_t i = 0; i < move_ms.size(); ++i)
     {
         total_evals += move_evals[i];
         total_gets += move_gets[i];
         total_searches += move_searches[i];
+        node_sum += move_nodes[i];
+    }
+
+    if (opt.quiet && opt.quiet_version == 2)
+    {
+        std::string const mode = opt.iters > 0 ? "iters" : "ms";
+        std::println("PROFILE_V2 moves={} total_s={:.3f} min_ms={:.3f} median_ms={:.3f} p95_ms={:.3f} p99_ms={:.3f} max_ms={:.3f}"
+            " evals={} transitions={} searches={} dead_moves={} games={} node_pool_bytes={}"
+            " evals_per_s={:.0f} transitions_per_s={:.0f} searches_per_s={:.0f}"
+            " warmup_moves={} seed={} iters={} maxdepth={} budget_ms={} mode={} telemetry={}",
+            move_ms.size(), total_sec,
+            move_ms.empty() ? 0 : *std::min_element(move_ms.begin(), move_ms.end()),
+            move_ms.empty() ? 0 : pct(move_ms, 0.5), pct(move_ms, 0.95), pct(move_ms, 0.99),
+            move_ms.empty() ? 0 : *std::max_element(move_ms.begin(), move_ms.end()),
+            total_evals, total_gets, total_searches, dead_moves, games, node_sum,
+            total_evals / total_sec, total_gets / total_sec, total_searches / total_sec,
+            opt.warmup_moves, opt.seed, opt.iters, opt.maxdepth,
+            opt.ms > 0 ? opt.ms : 0.0, mode, opt.telemetry ? "on" : "off");
+        return 0;
     }
 
     if (opt.quiet)
@@ -355,9 +397,7 @@ int main(int argc, char **argv)
         total_gets, double(total_gets) / std::max<size_t>(1, move_ms.size()), total_gets / total_sec);
     std::println("search calls:total {} | per move avg {:.1f} | rate {:.0f}/s",
         total_searches, double(total_searches) / std::max<size_t>(1, move_ms.size()), total_searches / total_sec);
-    size_t node_sum = 0;
-    for (size_t n : move_nodes) node_sum += n;
-    std::println("tree node pool growth (new allocs): total {} | per move avg {:.1f}", node_sum, double(node_sum) / std::max<size_t>(1, move_nodes.size()));
+    std::println("tree node pool growth (bytes): total {} | per move avg {:.1f}", node_sum, double(node_sum) / std::max<size_t>(1, move_nodes.size()));
     std::println("engine memory usage: {} bytes ({:.1f} MB)",
         engine.memory_usage(), engine.memory_usage() / (1024.0 * 1024.0));
     std::println("game stats: clears {}, attack {}, final roof {}, b2b {}, combo {}",

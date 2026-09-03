@@ -1,0 +1,14 @@
+=== git ===
+82bed159f0301a0f03c7fb079129ed71791a3150
+ 0c35e130abb733caefababe0d08c8faf466740e7 src/fast-reachability (heads/avx512-perft)
+=== compiler ===
+gcc (GCC) 16.2.1 20260810
+clang version 22.1.8
+cmake version 4.4.3
+=== cpu ===
+model name	: AMD Ryzen 7 7700 8-Core Processor
+16
+=== governor ===
+powersave
+=== kernel ===
+7.2.2-1-cachyos

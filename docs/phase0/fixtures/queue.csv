@@ -1,0 +1,9 @@
+# input sequence
+IOSZLT T,I,O,S,Z,L,T,
+?IOSZLT T,I,O,S,Z,L,T,
+IO?SZLT T,I,O,S,Z,L,T,
+IO??SZLT T,I,O,S,Z,L,T,
+IOSZLT? T,I,O,S,Z,L,T,
+IOSZLT?? T,I,O,S,Z,L,T,
+?????? T,
+IOSZ T,I,O,S,Z,
