@@ -119,4 +119,22 @@ add_executable(fast_reachability_tests
 )
 target_link_libraries(fast_reachability_tests PRIVATE fast_reachability)
 target_include_directories(fast_reachability_tests PRIVATE src tests src/fast-reachability)
+target_compile_definitions(fast_reachability_tests PRIVATE
+    $<$<NOT:$<CONFIG:Debug>>:FAST_REACHABILITY_RUN_PERFT>)
 add_test(NAME fast_reachability_tests COMMAND fast_reachability_tests)
+
+add_executable(fast_reachability_perft
+    tests/fast_reachability_tests.cpp
+)
+target_link_libraries(fast_reachability_perft PRIVATE fast_reachability)
+target_include_directories(fast_reachability_perft PRIVATE src tests src/fast-reachability)
+target_compile_definitions(fast_reachability_perft PRIVATE FAST_REACHABILITY_PERFT_ONLY)
+target_compile_options(fast_reachability_perft PRIVATE -O3)
+add_test(NAME fast_reachability_perft COMMAND fast_reachability_perft)
+
+add_executable(reference_a_bench
+    src/reference_a_bench.cpp
+)
+target_link_libraries(reference_a_bench PRIVATE fast_reachability)
+target_include_directories(reference_a_bench PRIVATE src tests src/fast-reachability)
+target_compile_options(reference_a_bench PRIVATE -O3)

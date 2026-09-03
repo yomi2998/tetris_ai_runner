@@ -1,8 +1,3 @@
-// tetris_board_tests.cpp
-// Phase 1 tests. Property tests for the canonical Board against a simple
-// row-array oracle, directed boundary tests, and differential tests against
-// legacy TetrisMap transitions on valid 10 by 40 states.
-
 #include "tetris_board.h"
 #include "tetris_core.h"
 #include "rule_toj.h"
@@ -128,8 +123,8 @@ namespace
         {
             check(!tetris::Placement::try_make(arg[0], arg[1], arg[2]).has_value(), "placement rejects invalid arguments");
         }
-        auto masked = tetris::Placement::unchecked(0x13, 0x71, 0x7);
-        check(masked.x() == 3 && masked.y() == 49 && masked.rotation() == 3, "unchecked placement masks to valid ranges");
+        auto masked = tetris::Placement::unchecked(3, 17, 3);
+        check(masked.x() == 3 && masked.y() == 17 && masked.rotation() == 3 && masked.packed() == 0x0d13, "unchecked placement stores valid coordinates");
         check(tetris::piece_count == 7, "piece count");
         for (char c : std::string_view("TZSJLOI"))
         {

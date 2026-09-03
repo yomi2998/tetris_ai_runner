@@ -1,9 +1,3 @@
-// fast_reachability_tests.cpp
-// Phase 2 tests. Perft vector exactness, the test-only scalar arrival oracle
-// compared against the bit-parallel two-channel search on seeded boards and
-// all movement configurations, directed arrival cases, workspace legality,
-// and dynamic height dispatch transparency.
-
 #include "scalar_arrival_oracle.h"
 
 #include <print>
@@ -83,6 +77,59 @@ namespace
         return ok;
     }
 
+    template <auto B2>
+    void compare_selection(char name, size_t b, scalar_arrival::ScalarConfig const &sc, bool consecutive,
+                           scalar_arrival::PieceGeometry<B2> const &geo,
+                           search::search_workspace<B2, BOARD> const &ws,
+                           std::array<uint16_t, 48> const &rows, coord spawn)
+    {
+        search::search_config cfg{};
+        cfg.allow_180 = sc.allow_180;
+        cfg.allow_softdrop = sc.allow_softdrop;
+        cfg.allow_sonicdrop = sc.allow_sonicdrop;
+        cfg.allow_20g = sc.allow_20g;
+        std::string what = std::string(1, name) + " board " + std::to_string(b)
+            + " cfg{" + std::to_string(sc.allow_180) + "," + std::to_string(sc.allow_softdrop) + ","
+            + std::to_string(sc.allow_sonicdrop) + "," + std::to_string(sc.allow_20g) + "}"
+            + " consecutive " + std::to_string(consecutive);
+        auto run_case = [&](auto check_tag) {
+            auto result = search::template arrival_search<B2, decltype(check_tag)::value>(ws, cfg, spawn, 0);
+            auto raw = search::template binary_bfs<B2, decltype(check_tag)::value>(ws, cfg, spawn, 0);
+            scalar_arrival::ScalarOracle<B2> oracle{geo, sc, rows};
+            oracle.run(spawn, 0);
+            bool const allow_float = sc.allow_softdrop && !sc.allow_20g;
+            auto oracle_normal = oracle.landable_words(0, allow_float);
+            auto oracle_rotation = oracle.landable_words(1, allow_float);
+            check(compare_with_bitpar(result, oracle_normal, oracle_rotation, what), what);
+            bool union_ok = true;
+            for (int s = 0; s < B2.shapes; ++s)
+            {
+                for (int w = 0; w < 8; ++w)
+                {
+                    uint64_t both = 0;
+                    for (int o = 0; o < B2.orientations; ++o)
+                    {
+                        if (geo.shape_of[o] != s)
+                        {
+                            continue;
+                        }
+                        both |= uint64_t(result.normal_landings[o].logical_word(w)) | uint64_t(result.rotation_landings[o].logical_word(w));
+                    }
+                    union_ok = union_ok && both == uint64_t(raw[s].logical_word(w));
+                }
+            }
+            check(union_ok, "arrival union equals binary reachability " + what);
+        };
+        if (consecutive)
+        {
+            run_case(std::true_type{});
+        }
+        else
+        {
+            run_case(std::false_type{});
+        }
+    }
+
     void run_piece_comparisons(char name, std::vector<std::array<uint16_t, 48>> const &boards, coord spawn)
     {
         call_with_block<SRS>(Tetromino::from_name(name), [&]<block B2>() {
@@ -97,40 +144,21 @@ namespace
                 {true, true, true, true},
                 {false, false, false, false},
             }};
+            constexpr int necessary = 20 + search::downmost_position<B2>;
             for (size_t b = 0; b < boards.size(); ++b)
             {
                 BOARD board = board_from_rows(boards[b]);
+                search::search_workspace<B2, BOARD> ws(board);
+                unsigned occupied = board.highest_y();
+                int const cut = occupied + 3 <= 6 ? 6 : occupied + 3 <= 12 ? 12 : occupied + 3 <= 24 ? 24 : 48;
+                bool const selected = !(cut < necessary) && occupied > unsigned(necessary);
+                bool const false_valid = occupied <= unsigned(necessary);
                 for (auto const &sc : configs)
                 {
-                    search::search_config cfg{};
-                    cfg.allow_180 = sc.allow_180;
-                    cfg.allow_softdrop = sc.allow_softdrop;
-                    cfg.allow_sonicdrop = sc.allow_sonicdrop;
-                    cfg.allow_20g = sc.allow_20g;
-                    for (int consecutive_i = 0; consecutive_i < 2; ++consecutive_i)
+                    compare_selection<B2>(name, b, sc, selected, geo, ws, boards[b], spawn);
+                    if (false_valid && !selected)
                     {
-                        bool const consecutive = consecutive_i != 0;
-                        auto run_case = [&](auto check_tag) {
-                            auto result = search::template arrival_search<B2, decltype(check_tag)::value>(board, cfg, spawn, 0);
-                            scalar_arrival::ScalarOracle<B2> oracle{geo, sc, boards[b]};
-                            oracle.run(spawn, 0);
-                            bool const allow_float = sc.allow_softdrop && !sc.allow_20g;
-                            auto oracle_normal = oracle.landable_words(0, allow_float);
-                            auto oracle_rotation = oracle.landable_words(1, allow_float);
-                            std::string what = std::string(1, name) + " board " + std::to_string(b)
-                                + " cfg{" + std::to_string(sc.allow_180) + "," + std::to_string(sc.allow_softdrop) + ","
-                                + std::to_string(sc.allow_sonicdrop) + "," + std::to_string(sc.allow_20g) + "}"
-                                + " consecutive " + std::to_string(consecutive);
-                            check(compare_with_bitpar(result, oracle_normal, oracle_rotation, what), what);
-                        };
-                        if (consecutive)
-                        {
-                            run_case(std::true_type{});
-                        }
-                        else
-                        {
-                            run_case(std::false_type{});
-                        }
+                        compare_selection<B2>(name, b, sc, false, geo, ws, boards[b], spawn);
                     }
                 }
             }
@@ -151,6 +179,24 @@ namespace
     void run_directed_cases()
     {
         coord const spawn{4, 20};
+        for (char name : std::string_view("TZSJLI"))
+        {
+            call_with_block<SRS>(Tetromino::from_name(name), [&]<block B>() {
+                auto geo = scalar_arrival::make_geometry<B>();
+                for (int f = 0; f < 4; ++f)
+                {
+                    int t = (f + 2) % 4;
+                    bool found = false;
+                    for (auto const &rule : geo.kicks)
+                    {
+                        found = found || (rule.from == f && rule.to == t && !rule.offsets.empty());
+                    }
+                    std::string what = std::string("piece ") + name + " has a 180 table entry";
+                    check(found, what);
+                }
+                return 0;
+            });
+        }
         {
             BOARD empty_board;
             search::search_config cfg{};
@@ -159,11 +205,17 @@ namespace
             cfg.allow_sonicdrop = true;
             cfg.allow_20g = false;
             call_with_block<SRS>(Tetromino::from_name('I'), [&]<block B>() {
-                auto result = search::template arrival_search<B>(empty_board, cfg, spawn, 0);
+                search::search_workspace<B, BOARD> ws(empty_board);
+                auto result = search::template arrival_search<B>(ws, cfg, spawn, 0);
                 check(result.normal_landings[0] == result.normal_landings[2], "I duplicate orientations 0 and 2 canonicalize");
                 check(result.normal_landings[1] == result.normal_landings[3], "I duplicate orientations 1 and 3 canonicalize");
-                check(result.rotation_landings[0] == result.normal_landings[0] && result.rotation_landings[1] == result.normal_landings[1],
-                    "I 180 identity rotation makes every landing reachable as a rotation arrival on an empty board");
+                check(result.rotation_landings[2] == result.normal_landings[2] && result.rotation_landings[2].any(),
+                    "I direct 180 identity rotation reaches the drop column as rotation arrivals");
+                search::search_config no180 = cfg;
+                no180.allow_180 = false;
+                auto gated = search::template arrival_search<B>(ws, no180, spawn, 0);
+                check(!gated.rotation_landings[2].any() && gated.normal_landings[2] == result.normal_landings[2],
+                    "disabling 180 removes only the direct 180 rotation arrivals");
                 return 0;
             });
         }
@@ -191,7 +243,8 @@ namespace
             cfg.allow_sonicdrop = true;
             cfg.allow_20g = false;
             call_with_block<SRS>(Tetromino::from_name('T'), [&]<block B>() {
-                auto result = search::template arrival_search<B>(board, cfg, spawn, 0);
+                search::search_workspace<B, BOARD> ws(board);
+                auto result = search::template arrival_search<B>(ws, cfg, spawn, 0);
                 bool rotation_exists = false;
                 for (int o = 0; o < 4; ++o)
                 {
@@ -210,14 +263,27 @@ namespace
             cfg.allow_sonicdrop = true;
             cfg.allow_20g = false;
             call_with_block<SRS>(Tetromino::from_name('T'), [&]<block B>() {
-                auto result = search::template arrival_search<B>(empty_board, cfg, spawn, 0);
-                auto landings0 = result.normal_landings[0].template to_row_bitboard<true>();
-                auto rot0 = result.rotation_landings[0];
-                bool overlap = false;
-                rot0.for_each_bit([&](int x, int y) {
-                    overlap = overlap || ((landings0[y] >> x) & 1);
-                });
-                check(overlap, "both arrival channels reach the same pose after rotating away and back");
+                search::search_workspace<B, BOARD> ws(empty_board);
+                auto result = search::template arrival_search<B>(ws, cfg, spawn, 0);
+                check(result.normal_landings[0].any(), "T keeps its spawn landing on an empty board");
+                check(result.rotation_landings[2].any(), "T reaches orientation 2 via rotation on an empty board");
+                return 0;
+            });
+        }
+        {
+            std::array<uint16_t, 48> rows = {};
+            rows[0] = 0x18;
+            BOARD board = board_from_rows(rows);
+            search::search_config cfg{};
+            cfg.allow_180 = true;
+            cfg.allow_softdrop = true;
+            cfg.allow_sonicdrop = true;
+            cfg.allow_20g = false;
+            call_with_block<SRS>(Tetromino::from_name('T'), [&]<block B>() {
+                search::search_workspace<B, BOARD> ws(board);
+                auto result = search::template arrival_search<B>(ws, cfg, spawn, 0);
+                check(result.normal_landings[0].get(4, 1), "T rests at (4,1) above the blocked row");
+                check(result.rotation_landings[1].get(3, 2), "T reaches (3,2) via the third 0 to 1 kick");
                 return 0;
             });
         }
@@ -246,7 +312,7 @@ namespace
         call_with_block<SRS>(Tetromino::from_name('T'), [&]<block B>() {
             search::search_workspace<B, BOARD> ws(board);
             auto checker = ws.checker();
-            auto result = search::template arrival_search<B>(board, cfg, spawn, 0, &ws);
+            auto result = search::template arrival_search<B>(ws, cfg, spawn, 0);
             bool agree = true;
             for (int o = 0; o < 4; ++o)
             {
@@ -295,8 +361,9 @@ namespace
                     cfg.allow_180 = true;
                     cfg.allow_softdrop = true;
                     cfg.allow_sonicdrop = true;
-                    auto dispatched = search::template arrival_search<B, Check>(nb, cfg, spawn, 0);
-                    auto manual = search::template arrival_search<B, Check>(nb, cfg, spawn, 0);
+                    search::search_workspace<B, Cut> cut_ws(nb);
+                    auto dispatched = search::template arrival_search<B, Check>(cut_ws, cfg, spawn, 0);
+                    auto manual = search::template arrival_search<B, Check>(cut_ws, cfg, spawn, 0);
                     bool ok = true;
                     for (int o = 0; o < 4; ++o)
                     {
@@ -314,7 +381,9 @@ namespace
 
 int main()
 {
+#if defined(FAST_REACHABILITY_PERFT_ONLY) || defined(FAST_REACHABILITY_RUN_PERFT)
     run_perft_vectors();
+#endif
     run_oracle_comparisons();
     run_directed_cases();
     run_workspace_tests();

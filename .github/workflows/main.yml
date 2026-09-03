@@ -4,7 +4,7 @@ permissions: write-all
 
 on:
   push:
-    branches: [ botris, ci-*, master ]
+    branches: [ botris, ci-*, master, fast-reachability-migration ]
     tags: [ pre*, v* ]
   pull_request:
     branches: [ master ]
@@ -84,7 +84,7 @@ jobs:
       - name: CMake Configure and Build
         env:
           CC: ${{ matrix.compiler }}
-          CXX: ${{ matrix.compiler }}
+          CXX: ${{ matrix.compiler == 'gcc-14' && 'g++-14' || 'clang++-18' }}
         run: |
           cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}/build-tests" -DCMAKE_BUILD_TYPE=Debug
           cmake --build "${{ github.workspace }}/build-tests"

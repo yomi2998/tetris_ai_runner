@@ -1,16 +1,3 @@
-// migration_compare.cpp
-// Phase 0 temporary tool. Temporary migration comparison harness, removed
-// together with the legacy code after final acceptance.
-//
-// Runs seat-swapped pairs of games through the tuner simulator and writes one
-// machine-readable row per pair, frozen in docs/phase0/pair_output_schema.md.
-// At Phase 0 both seats use the legacy engine, so the harness validates its
-// own determinism and schema before a second engine exists. The final
-// comparison mode gains an explicit engine selector per seat at value-engine
-// cutover.
-//
-// usage: migration_compare <pairs> <out.csv> [threads] [seed] [iters] [max_rounds]
-
 #include "tuner_match.h"
 
 #include <print>

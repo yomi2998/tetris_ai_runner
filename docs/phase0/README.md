@@ -134,8 +134,9 @@ The Phase 1 review (blockers 1-3, high 4-5, follow-ups 6-7) was applied:
   successful legacy differential attachments (2,566 in the fixed seed), and
   value-type layout assertions. Total: 234,839 checks, 0 failures on GCC
   debug, Clang debug, GCC self-release, and under ASan/UBSan.
-- CI gained a `tests` job running CTest under GCC and Clang Debug on every
-  push and pull request.
+- CI gained a `tests` job running CTest under GCC and Clang Debug, triggered
+  on the same push branches and pull requests as the DLL jobs, with working
+  C++ drivers for both compilers.
 - Size watch item recorded: `sizeof(Board) == 128` (64-byte aligned SIMD
   occupancy plus roof); well under the 304-byte legacy `TetrisMap`, but the
   alignment cost matters for the Phase 6 node arena design.
@@ -145,36 +146,52 @@ The Phase 1 review (blockers 1-3, high 4-5, follow-ups 6-7) was applied:
 Revert the instrumentation commits. No production architecture has changed;
 the frozen baseline artifacts remain valid.
 
-## Phase 2 status (in progress)
+## Phase 2 status (complete, awaiting review)
 
-Implemented in the submodule (commit 0082e88, root pointer updated) and root tests:
+Implemented in the submodule and root tests:
 
+- One shared transition core (`seed_reachability`, `expand_channel`,
+  `cascade_kicks`, `settle_positions`, `run_fixpoint`) with a channel-routing
+  policy. Single-channel binary reachability and two-channel arrival
+  reachability use the same seeding, non-rotation expansion, first-valid kick
+  cascade, gravity operation, and fixpoint convergence. Only channel routing
+  differs.
 - Two-channel (normal versus rotation) bit-parallel arrival propagation
-  (`arrival_bfs`, `arrival_fixpoint`, `arrival_search`) sharing binary_bfs's
-  usable masks, ordered kick application, and fixpoint structure.
-- `search_workspace` with caller-ownable usable positions and a legality
-  checker backed by the same data (`move_checker` gained a from-usable
-  constructor).
+  (`arrival_bfs`, `arrival_search`) with per-result sonic-drop arrival
+  downgrading: kicked results that stay become rotation arrivals, results
+  that move during the drop enter the normal channel.
+- `search_workspace` owning both board data and usable masks. Searches take
+  the workspace only, so reachability, landing extraction, and legality
+  checking share the same data by construction.
 - `dispatch_with_height` implementing the perft.hpp height and
   check_consecutive selection rule with the pinned cutoffs 6/12/24/48 and the
   +3 margin.
-- Test-only scalar arrival oracle (`tests/scalar_arrival_oracle.h`) over
-  (orientation, x, y, arrival) with per-piece geometry extraction, compared
-  against the bit-parallel result across 7 pieces x 26 boards x 8 movement
-  configurations x 2 check_consecutive settings.
-- Perft vectors remain exact with the kernel additions.
+- Test-only scalar arrival oracle (`tests/scalar_arrival_oracle.h`) starting
+  from only the initial pose and modelling explicit legal commands and
+  first-valid kicks, compared against the bit-parallel result with the
+  dispatch-selected check mode everywhere (both modes where false is valid).
+- Arrival-channel union invariant: normal plus rotation landings equal
+  corrected `binary_bfs` reachability for every piece, board, and movement
+  configuration.
+- Reference A scalar-wrapper comparator and microbench
+  (`src/reference_a_bench.cpp`).
+- Submodule tests (`search_tests.cpp`) for set gravity, 180 propagation,
+  and height dispatch.
 
-Kernel defect found and fixed during oracle bring-up: the kick cascade guarded
-180 transitions out of the cascade entirely (the allow_180 flag was dead in
-binary_bfs), and `drop_to_bottom` early-breaks when its input contains
-vertically chained positions. `arrival_fixpoint` propagates 180 kicks when
-enabled (identity 180 tables are genuine SRS transitions) and uses the new
-`settle_positions` (correct set gravity) instead of `drop_to_bottom`.
+Kernel defects found and fixed during oracle bring-up: the kick cascade
+guarded 180 transitions out of the cascade entirely (the allow_180 flag was
+dead in binary_bfs); `drop_to_bottom` early-breaks on vertically chained
+multi-position sets (new `settle_positions` implements correct set gravity);
+the kernel allowed piece cells above row 47 (open sky, mirrored by the
+oracle).
 
-Known issue (active work): 133 of 3073 checks fail, exclusively the T piece
-in sonic-drop configurations on higher boards: the bit-parallel result
-contains a small number of normal-arrival positions (for example (5,5) in
-orientation 1 of board 6) that the scalar oracle derives as unreachable.
-Non-T pieces match the oracle on every board and configuration. The
-discrepancy is in the settle/gravity interaction between shifted states and
-is the immediate next work item before the Phase 2 gate can run.
+Verified results:
+
+- Root tests: 4669 checks, 0 failures (GCC/Clang Debug oracle tests,
+  self-release full suite, ASan/UBSan clean).
+- Perft vectors exact (8 vectors, dedicated optimized CTest).
+- Submodule tests: 10 checks, 0 failures.
+- Reference A matches on all pieces; T arrival 463 times faster than the
+  scalar wrapper (gate: 2 times).
+- Raw non-T BFS 26 to 35 percent faster than the frozen build (gate: no more
+  than 2 percent slower); J/L gain legitimate 180 placements.

@@ -1,9 +1,3 @@
-#pragma once
-
-// Test-only scalar arrival oracle and piece geometry extraction.
-// Independent of binary_bfs traversal; shares only the compile-time geometry
-// tables. Never linked into production targets.
-
 #include "perft.hpp"
 
 #include <print>
@@ -102,9 +96,13 @@ struct ScalarOracle
         {
             int cx = x + geo.cell_x[o][k];
             int cy = y + geo.cell_y[o][k];
-            if (cx < 0 || cx >= width || cy < 0 || cy >= height)
+            if (cx < 0 || cx >= width || cy < 0)
             {
                 return false;
+            }
+            if (cy >= height)
+            {
+                continue;
             }
             if ((rows[cy] >> cx) & 1)
             {
@@ -135,16 +133,10 @@ struct ScalarOracle
     void run(coord start, unsigned init_rot)
     {
         bool const allow_float = cfg.allow_softdrop && !cfg.allow_20g;
-        bool const sonicdrop_mode = cfg.allow_sonicdrop || cfg.allow_20g;
         auto spawn_pose = [&](int o) {
             return std::pair{start[0_szc] + geo.spawn_off[o].first,
                 std::min(start[1_szc] + geo.spawn_off[o].second, height - 1)};
         };
-        auto [init_sx, init_sy] = spawn_pose(static_cast<int>(init_rot));
-        if (!fits(static_cast<int>(init_rot), init_sx, init_sy))
-        {
-            return;
-        }
         auto seed = [&](int o) {
             auto [px, py] = spawn_pose(o);
             if (!fits(o, px, py))
@@ -157,7 +149,16 @@ struct ScalarOracle
             }
             visit(o, px, py, 0);
         };
+        auto [init_sx, init_sy] = spawn_pose(static_cast<int>(init_rot));
+        if (!fits(static_cast<int>(init_rot), init_sx, init_sy))
+        {
+            return;
+        }
         if (!cfg.allow_softdrop)
+        {
+            seed(static_cast<int>(init_rot));
+        }
+        else if (cfg.allow_20g)
         {
             for (int o = 0; o < orientations; ++o)
             {
@@ -166,28 +167,7 @@ struct ScalarOracle
         }
         else
         {
-            bool all_found = true;
-            for (int o = 0; o < orientations; ++o)
-            {
-                auto [px, py] = spawn_pose(o);
-                all_found = all_found && fits(o, px, py);
-            }
-            if (all_found)
-            {
-                for (int o = 0; o < orientations; ++o)
-                {
-                    seed(o);
-                }
-            }
-            else
-            {
-                seed(static_cast<int>(init_rot));
-            }
-        }
-
-        if (!allow_float && !sonicdrop_mode)
-        {
-            return;
+            seed(static_cast<int>(init_rot));
         }
 
         bool changed = true;
@@ -214,6 +194,11 @@ struct ScalarOracle
                             {
                                 int ny = yy;
                                 drop_to_rest(oo, ny, xx);
+                                if (channel == 1 && ny != yy)
+                                {
+                                    channel = 0;
+                                    bit = 1;
+                                }
                                 yy = ny;
                             }
                             if ((visited[oo][xx][yy] & bit) == 0)

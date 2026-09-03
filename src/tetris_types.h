@@ -3,6 +3,7 @@
 #include "fast-reachability/piece_tetromino.hpp"
 
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -61,8 +62,6 @@ namespace tetris
 
     struct Placement
     {
-        uint16_t data = 0;
-
         constexpr Placement() = default;
 
         static constexpr std::optional<Placement> try_make(int x, int y, int rotation)
@@ -71,12 +70,18 @@ namespace tetris
             {
                 return std::nullopt;
             }
-            return Placement{pack(x, y, rotation)};
+            return unchecked(x, y, rotation);
         }
 
         static constexpr Placement unchecked(int x, int y, int rotation)
         {
+            assert(x >= 0 && x < 10 && y >= 0 && y < 48 && rotation >= 0 && rotation <= 3);
             return Placement{pack(x, y, rotation)};
+        }
+
+        constexpr uint16_t packed() const
+        {
+            return data;
         }
 
         constexpr int x() const
@@ -97,6 +102,8 @@ namespace tetris
         constexpr bool operator==(Placement const &) const = default;
 
     private:
+        uint16_t data = 0;
+
         constexpr explicit Placement(uint16_t raw)
             : data(raw)
         {

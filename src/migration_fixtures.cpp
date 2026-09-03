@@ -1,20 +1,3 @@
-// migration_fixtures.cpp
-// Phase 0 temporary tool. Generates deterministic fixture corpora from the
-// legacy implementation and is removed together with the legacy code after
-// final acceptance.
-//
-// Corpora:
-//   geometry  occupied cells for every piece, rotation, x, and sampled y
-//   reach     legacy search placements with T-spin type and flags on seeded boards
-//   tspin     legacy classify() results for T placements on seeded boards
-//   policy    legacy TOJ eval/get results for placements on seeded boards
-//   selfplay  deterministic iteration-budget selfplay with hold, queue, and lockout
-//   garbage   match-simulator garbage insertion input/output pairs
-//   queue     process_next virtual-next marker parsing behavior
-//
-// Every mode writes one text file into the given output directory. Running the
-// same mode twice must produce byte-identical output.
-
 #include "tetris_core.h"
 #include "rule_toj.h"
 #include "ai_zzz.h"
