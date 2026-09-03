@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+add_library(fast_reachability INTERFACE)
+target_include_directories(fast_reachability INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_features(fast_reachability INTERFACE cxx_std_23)
+
+enable_testing()
+
 string(TOLOWER "${CMAKE_CXX_COMPILER}" _cxx_compiler_lower)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -95,3 +101,15 @@ add_executable(migration_compare
     src/random.cpp
 )
 target_include_directories(migration_compare PRIVATE src)
+
+add_executable(tetris_board_tests
+    tests/tetris_board_tests.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_link_libraries(tetris_board_tests PRIVATE fast_reachability)
+target_include_directories(tetris_board_tests PRIVATE src tests)
+add_test(NAME tetris_board_tests COMMAND tetris_board_tests)
