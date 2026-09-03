@@ -104,6 +104,42 @@ change; the winner encoding remains the tuner's native integer.
 - Artifact, parameter, combo-table, compiler, CPU, and schema hashes recorded
   before behavior changes: PASS
 
+## Phase 1 review fixes
+
+The Phase 1 review (blockers 1-3, high 4-5, follow-ups 6-7) was applied:
+
+- Board equality and hashing both operate on canonical logical words;
+  every mutation canonicalizes padding bits, with per-word masks derived from
+  the kernel's `mask`/`last_mask` through new generic `board_t` accessors
+  (`logical_word`, `set_logical_word`, `word_logical_mask`, `word_count`;
+  submodule commit `614c44d`).
+- `try_from_char` is the only piece character conversion; invalid bytes,
+  spaces, `?`, and lowercase return `std::nullopt` instead of reaching
+  `std::unreachable()`.
+- `Placement` gained a checked `try_make` factory and a clearly named
+  `unchecked`; invalid inputs are rejected, not masked into other placements.
+  Size, trivial-copyability, and standard-layout are statically asserted.
+- `Board::apply` returns `bool` and rejects overlap consistently in debug and
+  release; `apply_unchecked` is the trusted rule-layer path. `row`/`full`
+  assert bounds in debug. `add_garbage` defines counts 0, 1 to 47, 48, and
+  beyond 48, and its second parameter is `garbage_row` (a complete row
+  pattern).
+- `ClearResult` retains the kernel's cleared-row mask (`cleared_row(y)`).
+- Test surface extended to the full Phase 1 contract: word-boundary and
+  four-line clears (including rows 42-47 and clear-to-empty),
+  `column_tops()` oracle agreement, `row()`/`full()`/`occupancy()` agreement,
+  cross-construction-path equality and hashing, padding-bit canonicalization,
+  overlap rejection, garbage boundary counts, malformed masks, hand-authored
+  exported ordering, the legacy 23-slot field quirk, a minimum threshold on
+  successful legacy differential attachments (2,566 in the fixed seed), and
+  value-type layout assertions. Total: 234,839 checks, 0 failures on GCC
+  debug, Clang debug, GCC self-release, and under ASan/UBSan.
+- CI gained a `tests` job running CTest under GCC and Clang Debug on every
+  push and pull request.
+- Size watch item recorded: `sizeof(Board) == 128` (64-byte aligned SIMD
+  occupancy plus roof); well under the 304-byte legacy `TetrisMap`, but the
+  alignment cost matters for the Phase 6 node arena design.
+
 ## Rollback
 
 Revert the instrumentation commits. No production architecture has changed;

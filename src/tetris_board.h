@@ -28,6 +28,7 @@ namespace tetris
                 clipped[y] = static_cast<occupancy_t::row_t>(rows[y] & row_mask);
             }
             board.occupancy_.from_row_bitboard<true>(clipped);
+            board.canonicalize();
             board.refresh_roof();
             return board;
         }
@@ -58,13 +59,15 @@ namespace tetris
 
         uint16_t row(int y) const
         {
+            assert(y >= 0 && y < height);
             int const yi = y / occupancy_t::lines_per_under;
             int const off = (y % occupancy_t::lines_per_under) * width;
-            return static_cast<uint16_t>((occupancy_.raw()[yi] >> off) & row_mask);
+            return static_cast<uint16_t>((occupancy_.logical_word(yi) >> off) & row_mask);
         }
 
         constexpr bool full(int x, int y) const
         {
+            assert(x >= 0 && x < width && y >= 0 && y < height);
             return occupancy_.get(x, y) == 1;
         }
 
@@ -90,13 +93,40 @@ namespace tetris
 
         constexpr bool operator==(Board const &other) const
         {
-            return occupancy_ == other.occupancy_;
+            for (int i = 0; i < occupancy_t::word_count(); ++i)
+            {
+                if (occupancy_.logical_word(i) != other.occupancy_.logical_word(i))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
-        void apply(occupancy_t const &mask)
+        constexpr bool operator!=(Board const &other) const
         {
-            assert_valid_mask(mask);
-            occupancy_ |= mask;
+            return !(*this == other);
+        }
+
+        bool apply(occupancy_t const &mask)
+        {
+            for (int i = 0; i < occupancy_t::word_count(); ++i)
+            {
+                if (mask.logical_word(i) & occupancy_.logical_word(i))
+                {
+                    return false;
+                }
+            }
+            apply_unchecked(mask);
+            return true;
+        }
+
+        void apply_unchecked(occupancy_t const &mask)
+        {
+            for (int i = 0; i < occupancy_t::word_count(); ++i)
+            {
+                occupancy_.set_logical_word(i, occupancy_.logical_word(i) | mask.logical_word(i));
+            }
             refresh_roof();
             validate();
         }
@@ -105,22 +135,34 @@ namespace tetris
 
         ClearResult cleared() const;
 
-        void add_garbage(int lines, uint16_t hole_mask)
+        void add_garbage(int lines, uint16_t garbage_row)
         {
             if (lines <= 0)
             {
                 return;
             }
             auto rows = occupancy_.template to_row_bitboard<true>();
-            for (int y = height - 1; y >= lines; --y)
+            auto const fill = static_cast<occupancy_t::row_t>(garbage_row & row_mask);
+            if (lines >= height)
             {
-                rows[y] = rows[y - lines];
+                for (int y = 0; y < height; ++y)
+                {
+                    rows[y] = fill;
+                }
             }
-            for (int y = 0; y < lines && y < height; ++y)
+            else
             {
-                rows[y] = static_cast<occupancy_t::row_t>(hole_mask & row_mask);
+                for (int y = height - 1; y >= lines; --y)
+                {
+                    rows[y] = rows[y - lines];
+                }
+                for (int y = 0; y < lines; ++y)
+                {
+                    rows[y] = fill;
+                }
             }
             occupancy_.from_row_bitboard<true>(rows);
+            canonicalize();
             refresh_roof();
             validate();
         }
@@ -132,20 +174,19 @@ namespace tetris
 #else
             unsigned const exact = static_cast<unsigned>(occupancy_.highest_y());
             assert(roof_ == exact);
-            for (int i = 0; i < occupancy_t::num_of_under; ++i)
+            for (int i = 0; i < occupancy_t::word_count(); ++i)
             {
-                assert((occupancy_.raw()[i] & ~uint64_t(0x0fffffffffffffffull)) == 0);
+                assert(occupancy_.logical_word(i) == occupancy_.raw()[i]);
             }
 #endif
         }
 
-        size_t hash() const
+        constexpr size_t hash() const
         {
             uint64_t h = 1469598103934665603ull;
-            for (int i = 0; i < occupancy_t::num_of_under; ++i)
+            for (int i = 0; i < occupancy_t::word_count(); ++i)
             {
-                uint64_t word = occupancy_.raw()[i] & uint64_t(0x0fffffffffffffffull);
-                h ^= word;
+                h ^= occupancy_.logical_word(i);
                 h *= 1099511628211ull;
             }
             return static_cast<size_t>(h);
@@ -157,15 +198,12 @@ namespace tetris
             roof_ = static_cast<unsigned>(occupancy_.highest_y());
         }
 
-        void assert_valid_mask(occupancy_t const &mask)
+        constexpr void canonicalize()
         {
-#ifndef NDEBUG
-            mask.for_each_bit([&](int x, int y) {
-                assert(!full(x, y));
-            });
-#else
-            (void)mask;
-#endif
+            for (int i = 0; i < occupancy_t::word_count(); ++i)
+            {
+                occupancy_.set_logical_word(i, occupancy_.logical_word(i));
+            }
         }
 
         occupancy_t occupancy_{};
@@ -176,6 +214,12 @@ namespace tetris
     {
         Board board;
         int count;
+        Board::occupancy_t full_rows;
+
+        bool cleared_row(int y) const
+        {
+            return full_rows.get(Board::width - 1, y) == 1;
+        }
     };
 
     inline Board::ClearResult Board::cleared() const
@@ -183,8 +227,9 @@ namespace tetris
         auto result = occupancy_.clear_full_lines();
         Board board;
         board.occupancy_ = result.board;
+        board.canonicalize();
         board.refresh_roof();
         board.validate();
-        return {board, result.count};
+        return {board, result.count, result.full_rows};
     }
 }

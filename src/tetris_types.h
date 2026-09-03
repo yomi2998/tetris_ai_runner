@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <type_traits>
 
 namespace tetris
 {
@@ -18,9 +19,19 @@ namespace tetris
         return reachability::rules::Tetromino::name_of(piece);
     }
 
-    constexpr Piece from_char(char c)
+    constexpr std::optional<Piece> try_from_char(char c)
     {
-        return reachability::rules::Tetromino::from_name(c);
+        switch (c)
+        {
+        case 'T': return Piece::T;
+        case 'Z': return Piece::Z;
+        case 'S': return Piece::S;
+        case 'J': return Piece::J;
+        case 'L': return Piece::L;
+        case 'O': return Piece::O;
+        case 'I': return Piece::I;
+        default: return std::nullopt;
+        }
     }
 
     enum class ArrivalClass : uint8_t
@@ -54,9 +65,18 @@ namespace tetris
 
         constexpr Placement() = default;
 
-        constexpr Placement(int x, int y, int rotation)
-            : data(static_cast<uint16_t>((x & 0xf) | (y & 0x3f) << 4 | (rotation & 0x3) << 10))
+        static constexpr std::optional<Placement> try_make(int x, int y, int rotation)
         {
+            if (x < 0 || x >= 10 || y < 0 || y >= 48 || rotation < 0 || rotation > 3)
+            {
+                return std::nullopt;
+            }
+            return Placement{pack(x, y, rotation)};
+        }
+
+        static constexpr Placement unchecked(int x, int y, int rotation)
+        {
+            return Placement{pack(x, y, rotation)};
         }
 
         constexpr int x() const
@@ -75,6 +95,17 @@ namespace tetris
         }
 
         constexpr bool operator==(Placement const &) const = default;
+
+    private:
+        constexpr explicit Placement(uint16_t raw)
+            : data(raw)
+        {
+        }
+
+        static constexpr uint16_t pack(int x, int y, int rotation)
+        {
+            return static_cast<uint16_t>(x & 0xf | (y & 0x3f) << 4 | (rotation & 0x3) << 10);
+        }
     };
 
     struct Candidate
@@ -101,4 +132,10 @@ namespace tetris
         bool used_hold = false;
         size_t depth = 0;
     };
+
+    static_assert(sizeof(Placement) == 2);
+    static_assert(std::is_trivially_copyable_v<Placement>);
+    static_assert(std::is_standard_layout_v<Placement>);
+    static_assert(std::is_trivially_copyable_v<Candidate>);
+    static_assert(std::is_trivially_copyable_v<Outcome>);
 }
