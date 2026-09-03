@@ -6,7 +6,6 @@
 */
 
 #include <time.h>
-#include <cstdint>
 
 using uint32 = unsigned int;
 

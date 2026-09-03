@@ -1,7 +1,7 @@
+#include "ai_zzz.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <climits>
 #include <string>
 #include <vector>
 #include <deque>
@@ -9,7 +9,7 @@
 #include <thread>
 #include <fstream>
 #include <print>
-#include <nlohmann/json.hpp>
+#include <climits>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -20,9 +20,8 @@
 
 #include "tetris_core.h"
 #include "rule_toj.h"
-#include "search_simple.h"
 #include "search_tspin.h"
-#include "ai_easy.h"
+#include "nlohmann/json.hpp"
 
 namespace
 {
@@ -905,7 +904,7 @@ int main(int argc, char **argv)
             write_telemetry_header(telemetry);
     }
 
-    m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_easy::AI, search_simple::Search> global_ai;
+    m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_zzz::TOJ, search_tspin::Search> global_ai;
     if (!global_ai.prepare(10, 40))
     {
         std::println("engine prepare failed");

@@ -1,0 +1,4 @@
+[submodule "src/fast-reachability"]
+	path = src/fast-reachability
+	url = https://github.com/icly-dev/fast-reachability.git
+	branch = avx512-perft

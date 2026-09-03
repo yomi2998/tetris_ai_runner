@@ -20,10 +20,4 @@ namespace zzz
         return size_t(std::popcount(n));
 #endif
     }
-
-    // Trailing zero count; returns 32 for n == 0 (matching the old convention).
-    inline size_t NumberOfTrailingZeros(uint32_t i)
-    {
-        return i == 0 ? 32 : size_t(std::countr_zero(i));
-    }
 }
