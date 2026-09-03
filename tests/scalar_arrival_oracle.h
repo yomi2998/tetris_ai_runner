@@ -133,6 +133,9 @@ struct ScalarOracle
     void run(coord start, unsigned init_rot)
     {
         bool const allow_float = cfg.allow_softdrop && !cfg.allow_20g;
+        bool const sonicmode = cfg.allow_sonicdrop || cfg.allow_20g;
+        bool const grounded = !allow_float && sonicmode;
+        bool const phase_a = !cfg.allow_20g || allow_float;
         auto spawn_pose = [&](int o) {
             return std::pair{start[0_szc] + geo.spawn_off[o].first,
                 std::min(start[1_szc] + geo.spawn_off[o].second, height - 1)};
@@ -143,7 +146,7 @@ struct ScalarOracle
             {
                 return;
             }
-            if (!allow_float)
+            if (cfg.allow_20g)
             {
                 drop_to_rest(o, py, px);
             }
@@ -156,7 +159,10 @@ struct ScalarOracle
         }
         if (!cfg.allow_softdrop)
         {
-            seed(static_cast<int>(init_rot));
+            for (int o = 0; o < orientations; ++o)
+            {
+                seed(o);
+            }
         }
         else if (cfg.allow_20g)
         {
@@ -170,76 +176,127 @@ struct ScalarOracle
             seed(static_cast<int>(init_rot));
         }
 
-        bool changed = true;
-        while (changed)
-        {
-            changed = false;
-            for (int o = 0; o < orientations; ++o)
+        auto run_phase = [&](bool settle_steps) {
+            bool changed = true;
+            while (changed)
             {
-                for (int x = 0; x < width; ++x)
+                changed = false;
+                for (int o = 0; o < orientations; ++o)
                 {
-                    for (int y = 0; y < height; ++y)
+                    for (int x = 0; x < width; ++x)
                     {
-                        if (!visited_any(o, x, y))
+                        for (int y = 0; y < height; ++y)
                         {
-                            continue;
-                        }
-                        auto try_visit = [&](int oo, int xx, int yy, int channel) {
-                            if (!fits(oo, xx, yy))
+                            if (!visited_any(o, x, y))
                             {
-                                return;
+                                continue;
                             }
-                            uint8_t bit = static_cast<uint8_t>(1 << channel);
-                            if (!allow_float)
-                            {
-                                int ny = yy;
-                                drop_to_rest(oo, ny, xx);
-                                if (channel == 1 && ny != yy)
+                            auto try_visit = [&](int oo, int xx, int yy, int channel) {
+                                if (!fits(oo, xx, yy))
                                 {
-                                    channel = 0;
-                                    bit = 1;
+                                    return;
                                 }
-                                yy = ny;
-                            }
-                            if ((visited[oo][xx][yy] & bit) == 0)
-                            {
-                                visited[oo][xx][yy] |= bit;
-                                changed = true;
-                            }
-                        };
-                        if (allow_float)
-                        {
-                            try_visit(o, x - 1, y, 0);
-                            try_visit(o, x + 1, y, 0);
-                            try_visit(o, x, y - 1, 0);
-                        }
-                        else
-                        {
-                            try_visit(o, x - 1, y, 0);
-                            try_visit(o, x + 1, y, 0);
-                        }
-                        for (auto const &rule : geo.kicks)
-                        {
-                            if (rule.from != o)
-                            {
-                                continue;
-                            }
-                            if ((rule.from + 2) % 4 == rule.to && !cfg.allow_180)
-                            {
-                                continue;
-                            }
-                            for (auto const &[dx, dy] : rule.offsets)
-                            {
-                                if (fits(rule.to, x + dx, y + dy))
+                                uint8_t bit = static_cast<uint8_t>(1 << channel);
+                                if (settle_steps)
                                 {
-                                    try_visit(rule.to, x + dx, y + dy, 1);
-                                    break;
+                                    int ny = yy;
+                                    drop_to_rest(oo, ny, xx);
+                                    if (channel == 1 && ny != yy)
+                                    {
+                                        channel = 0;
+                                        bit = 1;
+                                    }
+                                    yy = ny;
+                                }
+                                if ((visited[oo][xx][yy] & bit) == 0)
+                                {
+                                    visited[oo][xx][yy] |= bit;
+                                    changed = true;
+                                }
+                            };
+                            if (allow_float)
+                            {
+                                try_visit(o, x - 1, y, 0);
+                                try_visit(o, x + 1, y, 0);
+                                try_visit(o, x, y - 1, 0);
+                            }
+                            else
+                            {
+                                try_visit(o, x - 1, y, 0);
+                                try_visit(o, x + 1, y, 0);
+                            }
+                            for (auto const &rule : geo.kicks)
+                            {
+                                if (rule.from != o)
+                                {
+                                    continue;
+                                }
+                                if ((rule.from + 2) % 4 == rule.to && !cfg.allow_180)
+                                {
+                                    continue;
+                                }
+                                for (auto const &[dx, dy] : rule.offsets)
+                                {
+                                    if (fits(rule.to, x + dx, y + dy))
+                                    {
+                                        try_visit(rule.to, x + dx, y + dy, 1);
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+        };
+        auto finalize = [&]() {
+            uint8_t settled[orientations][width][height] = {};
+            for (int o = 0; o < orientations; ++o)
+            {
+                for (int x = 0; x < width; ++x)
+                {
+                    for (int y = 0; y < height; ++y)
+                    {
+                        uint8_t v = visited[o][x][y];
+                        if (v == 0)
+                        {
+                            continue;
+                        }
+                        int ny = y;
+                        drop_to_rest(o, ny, x);
+                        if ((v & 1) != 0)
+                        {
+                            settled[o][x][ny] |= 1;
+                        }
+                        if ((v & 2) != 0)
+                        {
+                            settled[o][x][ny] |= (ny == y) ? 2 : 1;
+                        }
+                    }
+                }
+            }
+            for (int o = 0; o < orientations; ++o)
+            {
+                for (int x = 0; x < width; ++x)
+                {
+                    for (int y = 0; y < height; ++y)
+                    {
+                        visited[o][x][y] = settled[o][x][y];
+                    }
+                }
+            }
+        };
+        if (phase_a)
+        {
+            run_phase(false);
+        }
+        if (!allow_float)
+        {
+            finalize();
+        }
+        if (grounded)
+        {
+            run_phase(true);
         }
     }
 

@@ -119,6 +119,15 @@ namespace
                 }
             }
             check(union_ok, "arrival union equals binary reachability " + what);
+            bool landings_ok = true;
+            for (int s = 0; s < B2.shapes; ++s)
+            {
+                for (int w = 0; w < 8; ++w)
+                {
+                    landings_ok = landings_ok && uint64_t(result.landings[s].logical_word(w)) == uint64_t(raw[s].logical_word(w));
+                }
+            }
+            check(landings_ok, "arrival landings member equals binary reachability " + what);
         };
         if (consecutive)
         {
@@ -158,7 +167,7 @@ namespace
                     compare_selection<B2>(name, b, sc, selected, geo, ws, boards[b], spawn);
                     if (false_valid && !selected)
                     {
-                        compare_selection<B2>(name, b, sc, false, geo, ws, boards[b], spawn);
+                        compare_selection<B2>(name, b, sc, true, geo, ws, boards[b], spawn);
                     }
                 }
             }
@@ -363,14 +372,24 @@ namespace
                     cfg.allow_sonicdrop = true;
                     search::search_workspace<B, Cut> cut_ws(nb);
                     auto dispatched = search::template arrival_search<B, Check>(cut_ws, cfg, spawn, 0);
-                    auto manual = search::template arrival_search<B, Check>(cut_ws, cfg, spawn, 0);
+                    auto cut_rows = nb.to_row_bitboard();
+                    Cut rebuilt{};
+                    std::array<typename Cut::row_t, Cut::height> reclipped = {};
+                    for (int y = 0; y < Cut::height; ++y)
+                    {
+                        reclipped[y] = cut_rows[y];
+                    }
+                    rebuilt.template from_row_bitboard<true>(reclipped);
+                    search::search_workspace<B, Cut> manual_ws(rebuilt);
+                    auto manual = expected_check ? search::template arrival_search<B, true>(manual_ws, cfg, spawn, 0)
+                                                 : search::template arrival_search<B, false>(manual_ws, cfg, spawn, 0);
                     bool ok = true;
                     for (int o = 0; o < 4; ++o)
                     {
                         ok = ok && dispatched.normal_landings[o] == manual.normal_landings[o];
                         ok = ok && dispatched.rotation_landings[o] == manual.rotation_landings[o];
                     }
-                    check(ok, "dispatch search equals manual search on the selected cut for occupied " + std::to_string(occupied));
+                    check(ok, "dispatch threads cut board and flag correctly for occupied " + std::to_string(occupied));
                     return 0;
                 });
                 return 0;

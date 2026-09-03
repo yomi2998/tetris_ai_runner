@@ -138,3 +138,17 @@ add_executable(reference_a_bench
 target_link_libraries(reference_a_bench PRIVATE fast_reachability)
 target_include_directories(reference_a_bench PRIVATE src tests src/fast-reachability)
 target_compile_options(reference_a_bench PRIVATE -O3)
+
+add_executable(arrival_candidates
+    src/arrival_candidates.cpp
+)
+target_link_libraries(arrival_candidates PRIVATE fast_reachability)
+target_include_directories(arrival_candidates PRIVATE src tests src/fast-reachability)
+target_compile_options(arrival_candidates PRIVATE -O3)
+
+add_executable(bfs_bench
+    src/bfs_bench.cpp
+)
+target_link_libraries(bfs_bench PRIVATE fast_reachability)
+target_include_directories(bfs_bench PRIVATE src tests src/fast-reachability)
+target_compile_options(bfs_bench PRIVATE -O3)

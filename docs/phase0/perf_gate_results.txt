@@ -1,0 +1,54 @@
+# Phase 2 Reference A gate run 2026-09-03T23:10:51Z
+
+Machine: x86_64 AMD Ryzen 7 7700 8-Core Processor, 16 cores.
+Frozen revision: 0c35e13 (see artifact_hashes.txt for binary hashes).
+Root revision: 4391dbd.
+
+Method: each binary runs 5 warmup sweeps then 20 measured iterations over
+27 corpus boards (production movement config). Times are nanoseconds per
+board search. ABBA pairing: frozen, current, current, frozen.
+
+## Frozen Reference A (binary_bfs 0c35e13 plus scalar recovery)
+
+T count=60 hash=d26fb13e94861e33 ns=136691
+Z count=60 hash=a606a3dcd6c39667 ns=135725
+S count=60 hash=a606a3dcd6c39667 ns=134443
+J count=60 hash=d26fb13e94861e33 ns=135825
+L count=60 hash=d26fb13e94861e33 ns=118241
+O count=9 hash=8f43c7fec9bc853b ns=10643
+I count=61 hash=f47500fa61b76cc0 ns=108467
+
+Second ABBA round:
+
+T count=60 hash=d26fb13e94861e33 ns=110424
+Z count=60 hash=a606a3dcd6c39667 ns=110373
+S count=60 hash=a606a3dcd6c39667 ns=109277
+J count=60 hash=d26fb13e94861e33 ns=110760
+L count=60 hash=d26fb13e94861e33 ns=114451
+O count=9 hash=8f43c7fec9bc853b ns=10704
+I count=61 hash=f47500fa61b76cc0 ns=108389
+
+## Current arrival_search candidates
+
+T count=60 hash=d26fb13e94861e33 ns=597
+Z count=60 hash=a606a3dcd6c39667 ns=613
+S count=60 hash=a606a3dcd6c39667 ns=606
+J count=60 hash=d26fb13e94861e33 ns=567
+L count=60 hash=d26fb13e94861e33 ns=521
+O count=9 hash=8f43c7fec9bc853b ns=83
+I count=61 hash=f47500fa61b76cc0 ns=509
+
+Second ABBA round:
+
+T count=60 hash=d26fb13e94861e33 ns=602
+Z count=60 hash=a606a3dcd6c39667 ns=661
+S count=60 hash=a606a3dcd6c39667 ns=580
+J count=60 hash=d26fb13e94861e33 ns=589
+L count=60 hash=d26fb13e94861e33 ns=597
+O count=9 hash=8f43c7fec9bc853b ns=83
+I count=61 hash=f47500fa61b76cc0 ns=545
+
+## Gate
+
+Candidate hashes match exactly on all pieces in both rounds.
+T speedup (worst round pairing): 110424/602 = 183x. Need >= 2x. PASS.

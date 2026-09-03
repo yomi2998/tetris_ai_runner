@@ -7,3 +7,6 @@ ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037  artifacts/froz
 948edb403954a86da361511488d752ad947325e4fa23ac444d0e6f70730850a8  combo_table (values 0,0,0,1,1,2,2,3,3,4)
 043aae0aaeb7675dfa96a48207e977f361bfd05a8bf26c4addda3c203c089504   docs/phase0/pair_output_schema.md
 74017e067a5097058a9bc69fac8e15c49866ed7327330a4297c19aa27c1923df   docs/phase0/profile_schema_v2.md
+
+43d48ff0e9daa84fcfeb5bed1cac5e4ff2574d91d2e89c44db6ebe570d008244  reference_a_frozen (frozen 0c35e13 binary_bfs plus scalar recovery)
+5e1d2aeeabee2b4ea84be6ddc21118881d1f34da29448a069ac18de7412ce5ab  arrival_candidates (current arrival_search candidates, root 4391dbd)

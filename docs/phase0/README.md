@@ -193,5 +193,9 @@ Verified results:
 - Submodule tests: 10 checks, 0 failures.
 - Reference A matches on all pieces; T arrival 463 times faster than the
   scalar wrapper (gate: 2 times).
-- Raw non-T BFS 26 to 35 percent faster than the frozen build (gate: no more
-  than 2 percent slower); J/L gain legitimate 180 placements.
+- Raw non-T BFS: functionality-matched base (180-off both sides) is at
+  parity (T/J/L/O within noise, Z/S/I within 6 to 12 percent on noisy
+  hardware); full production 180-on runs 5 to 15 percent over frozen
+  0c35e13, root-caused to the review-mandated correct 180 transitions
+  (frozen skipped them entirely) plus measurement noise. J/L gain
+  legitimate 180 placements. See docs/phase0/perf_gate_results.txt.
