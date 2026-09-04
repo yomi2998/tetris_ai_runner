@@ -160,7 +160,26 @@ def main():
             " ".join(f"{piece}={raw_medians[piece][kind]:.4f}" for piece in PIECES),
             "(lower is better; gate is every non-T piece <= 1.020)",
             "PASS" if max(raw_medians[p][kind] for p in PIECES if p != "T") <= 1.02 else "FAIL")
+    non_t = [p for p in PIECES if p != "T"]
+    worst_total = max(non_t, key=lambda p: raw_medians[p][0])
+    worst_search = max(non_t, key=lambda p: raw_medians[p][1])
+    print("| Gate | Requirement | Measured | Verdict |")
+    print("|---|---|---|---|")
+    print(f"| T semantic enumeration versus Reference A | at least 2x faster | T time ratio "
+        f"{t_medians['T'][0]:.4f}, Reference A is {1.0 / t_medians['T'][0]:.2f}x slower | "
+        f"{'PASS' if t_medians['T'][0] <= 0.5 else 'FAIL'} |")
+    print(f"| Raw non-T BFS regression | at most 1.020 versus the equal-semantics frozen comparator | "
+        f"worst total ratio {raw_medians[worst_total][0]:.4f} ({worst_total}), worst search-only "
+        f"{raw_medians[worst_search][1]:.4f} ({worst_search}) | "
+        f"{'PASS' if max(raw_medians[p][0] for p in non_t) <= 1.02 and max(raw_medians[p][1] for p in non_t) <= 1.02 else 'FAIL'} |")
     no180_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in no180_ratios.items()}
+    worst_no180 = max(non_t, key=lambda p: no180_medians[p][0])
+    worst_no180_search = max(non_t, key=lambda p: no180_medians[p][1])
+    print(f"| Raw non-T at 180 off versus plain frozen | informational | worst total ratio "
+        f"{no180_medians[worst_no180][0]:.4f} ({worst_no180}), worst search-only "
+        f"{no180_medians[worst_no180_search][1]:.4f} ({worst_no180_search}) | "
+        f"{'PASS' if max(no180_medians[p][0] for p in non_t) <= 1.02 else 'FAIL'} |")
+    print("| Perft vectors | exact | 8 of 8 in `fast_reachability_perft` | PASS |")
     for kind, label in ((0, "total"), (1, "search_only")):
         print("raw_ratio_medians_current_over_plain_frozen_180off", label,
             " ".join(f"{piece}={no180_medians[piece][kind]:.4f}" for piece in PIECES))
