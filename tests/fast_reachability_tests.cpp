@@ -143,16 +143,7 @@ namespace
     {
         call_with_block<SRS>(Tetromino::from_name(name), [&]<block B2>() {
             auto geo = scalar_arrival::make_geometry<B2>();
-            std::array<scalar_arrival::ScalarConfig, 8> const configs = {{
-                {true, true, true, false},
-                {false, true, true, false},
-                {true, false, true, false},
-                {true, true, false, false},
-                {true, false, false, false},
-                {true, false, true, true},
-                {true, true, true, true},
-                {false, false, false, false},
-            }};
+            auto const &configs = reach_corpus::all_configs;
             constexpr int necessary = 20 + search::downmost_position<B2>;
             for (size_t b = 0; b < boards.size(); ++b)
             {

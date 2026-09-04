@@ -1,64 +1,98 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
-#include <string>
+#include <print>
+#include <string_view>
+#include <utility>
 #include <vector>
 
-namespace refa {
+namespace candfmt
+{
 
-struct Candidate {
-    uint8_t x;
-    uint8_t y;
-    uint8_t rot;
-    uint8_t arrival;
+inline constexpr uint64_t fnv_offset = 0xcbf29ce484222325ull;
+inline constexpr uint64_t fnv_prime = 0x100000001b3ull;
 
-    constexpr bool operator==(Candidate const &) const = default;
-    constexpr bool operator<(Candidate const &o) const
+inline uint64_t fnv_mix(uint64_t hash, uint64_t value)
+{
+    for (int byte = 0; byte < 8; ++byte)
     {
-        if (rot != o.rot)
-        {
-            return rot < o.rot;
-        }
-        if (y != o.y)
-        {
-            return y < o.y;
-        }
-        if (x != o.x)
-        {
-            return x < o.x;
-        }
-        return arrival < o.arrival;
+        hash ^= (value >> (byte * 8)) & 0xffu;
+        hash *= fnv_prime;
     }
+    return hash;
+}
+
+using Cells = std::array<std::pair<int, int>, 4>;
+
+inline uint64_t occupancy_hash(Cells const &cells)
+{
+    std::array<int, 4> codes;
+    for (int i = 0; i < 4; ++i)
+    {
+        codes[i] = cells[i].second * 1000 + cells[i].first;
+    }
+    std::sort(codes.begin(), codes.end());
+    uint64_t hash = fnv_offset;
+    for (int code : codes)
+    {
+        hash = fnv_mix(hash, static_cast<uint64_t>(static_cast<int64_t>(code)));
+    }
+    return hash;
+}
+
+class Report
+{
+public:
+    void begin_case(char piece, std::size_t board_index, bool keep_arrival)
+    {
+        piece_ = piece;
+        board_ = board_index;
+        keep_arrival_ = keep_arrival;
+        keys_.clear();
+    }
+
+    void add_candidate(uint64_t occupancy, int arrival)
+    {
+        int const channel = keep_arrival_ ? (arrival != 0 ? 1 : 0) : 0;
+        keys_.push_back(fnv_mix(occupancy, static_cast<uint64_t>(channel)));
+    }
+
+    void end_case()
+    {
+        std::sort(keys_.begin(), keys_.end());
+        keys_.erase(std::unique(keys_.begin(), keys_.end()), keys_.end());
+        uint64_t hash = fnv_offset;
+        for (uint64_t key : keys_)
+        {
+            hash = fnv_mix(hash, key);
+        }
+        std::println("CASE {} {:>3} {:>5} {:016x}", piece_, board_, keys_.size(), hash);
+        corpus_ = fnv_mix(corpus_, hash);
+        corpus_ = fnv_mix(corpus_, static_cast<uint64_t>(keys_.size()));
+        total_ += keys_.size();
+        ++cases_;
+    }
+
+    void print_corpus(std::string_view producer) const
+    {
+        std::println("CORPUS {} cases {} candidates {} {:016x}", producer, cases_, total_, corpus_);
+    }
+
+    std::size_t cases() const noexcept
+    {
+        return cases_;
+    }
+
+private:
+    char piece_ = '?';
+    std::size_t board_ = 0;
+    bool keep_arrival_ = false;
+    std::size_t cases_ = 0;
+    std::size_t total_ = 0;
+    uint64_t corpus_ = fnv_offset;
+    std::vector<uint64_t> keys_;
 };
 
-inline uint64_t fnv1a(std::vector<Candidate> const &sorted)
-{
-    uint64_t h = 1469598103934665603ull;
-    for (auto const &c : sorted)
-    {
-        h ^= c.x;
-        h *= 1099511628211ull;
-        h ^= c.y;
-        h *= 1099511628211ull;
-        h ^= c.rot;
-        h *= 1099511628211ull;
-        h ^= c.arrival;
-        h *= 1099511628211ull;
-    }
-    return h;
-}
-
-inline std::string hex64(uint64_t v)
-{
-    char buf[17] = {};
-    char const *digits = "0123456789abcdef";
-    for (int i = 15; i >= 0; --i)
-    {
-        buf[i] = digits[v & 15];
-        v >>= 4;
-    }
-    return std::string(buf, 16);
-}
-
-}
+} // namespace candfmt

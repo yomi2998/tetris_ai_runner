@@ -1,4 +1,5 @@
 #include "perft.hpp"
+#include "reach_corpus.h"
 
 #include <print>
 #include <queue>
@@ -11,13 +12,7 @@ using reachability::operator""_szc;
 namespace scalar_arrival
 {
     using namespace reachability;
-struct ScalarConfig
-{
-    bool allow_180;
-    bool allow_softdrop;
-    bool allow_sonicdrop;
-    bool allow_20g;
-};
+using ScalarConfig = reach_corpus::MovementConfig;
 
 struct KickRule
 {
@@ -332,80 +327,7 @@ bool compare_with_bitpar(auto const &result, auto const &oracle_normal, auto con
 
 std::vector<std::array<uint16_t, 48>> make_corpus()
 {
-    std::vector<std::array<uint16_t, 48>> boards;
-    boards.push_back({});
-    std::mt19937 rng(20260905u);
-    for (unsigned height : {2u, 5u, 10u, 18u, 25u, 32u, 40u, 44u})
-    {
-        for (int variant = 0; variant < 3; ++variant)
-        {
-            std::array<uint16_t, 48> rows = {};
-            for (unsigned y = 0; y < height; ++y)
-            {
-                rows[y] = static_cast<uint16_t>(rng()) & 0x3ff;
-                if (rows[y] == 0x3ff)
-                {
-                    rows[y] &= 0x1ff;
-                }
-            }
-            boards.push_back(rows);
-        }
-    }
-    {
-        std::array<uint16_t, 48> flat = {};
-        for (int y = 0; y < 10; ++y)
-        {
-            flat[y] = 0x2aa;
-        }
-        boards.push_back(flat);
-    }
-    {
-        std::array<uint16_t, 48> near_top = {};
-        for (int y = 38; y < 46; ++y)
-        {
-            near_top[y] = 0x2aa;
-        }
-        boards.push_back(near_top);
-    }
-    {
-        std::array<uint16_t, 48> fringe_a = {};
-        fringe_a[18] = 0x010;
-        fringe_a[19] = 0x028;
-        boards.push_back(fringe_a);
-    }
-    {
-        std::array<uint16_t, 48> fringe_b = {};
-        fringe_b[19] = 0x020;
-        fringe_b[21] = 0x008;
-        boards.push_back(fringe_b);
-    }
-    for (int variant = 0; variant < 8; ++variant)
-    {
-        std::array<uint16_t, 48> rows = {};
-        for (int y = 0; y < 15; ++y)
-        {
-            rows[y] = static_cast<uint16_t>(rng()) & 0x3ff;
-            if (rows[y] == 0x3ff)
-            {
-                rows[y] &= 0x1ff;
-            }
-        }
-        unsigned density = 12u + unsigned(variant) * 4u;
-        for (int y = 15; y <= 23; ++y)
-        {
-            uint16_t mask = 0;
-            for (int x = 1; x <= 8; ++x)
-            {
-                if (rng() % 100u < density)
-                {
-                    mask |= static_cast<uint16_t>(1u << x);
-                }
-            }
-            rows[y] = mask;
-        }
-        boards.push_back(rows);
-    }
-    return boards;
+    return reach_corpus::make();
 }
 
 } // namespace scalar_arrival

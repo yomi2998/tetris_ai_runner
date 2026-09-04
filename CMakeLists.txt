@@ -132,23 +132,182 @@ target_compile_definitions(fast_reachability_perft PRIVATE FAST_REACHABILITY_PER
 target_compile_options(fast_reachability_perft PRIVATE -O3)
 add_test(NAME fast_reachability_perft COMMAND fast_reachability_perft)
 
-add_executable(reference_a_bench
-    src/reference_a_bench.cpp
-)
-target_link_libraries(reference_a_bench PRIVATE fast_reachability)
-target_include_directories(reference_a_bench PRIVATE src tests src/fast-reachability)
-target_compile_options(reference_a_bench PRIVATE -O3)
-
 add_executable(arrival_candidates
     src/arrival_candidates.cpp
 )
 target_link_libraries(arrival_candidates PRIVATE fast_reachability)
 target_include_directories(arrival_candidates PRIVATE src tests src/fast-reachability)
-target_compile_options(arrival_candidates PRIVATE -O3)
+target_compile_options(arrival_candidates PRIVATE -O3 -march=native)
 
 add_executable(bfs_bench
     src/bfs_bench.cpp
 )
 target_link_libraries(bfs_bench PRIVATE fast_reachability)
 target_include_directories(bfs_bench PRIVATE src tests src/fast-reachability)
-target_compile_options(bfs_bench PRIVATE -O3)
+target_compile_options(bfs_bench PRIVATE -O3 -march=native)
+
+add_executable(raw_bench_current
+    tests/raw_bench_main.cpp
+)
+target_link_libraries(raw_bench_current PRIVATE fast_reachability)
+target_include_directories(raw_bench_current PRIVATE src tests src/fast-reachability)
+target_compile_options(raw_bench_current PRIVATE -O3 -march=native)
+
+add_executable(raw_bench_frozen
+    tests/raw_bench_main.cpp
+)
+target_include_directories(raw_bench_frozen BEFORE PRIVATE tests/frozen_0c35e13)
+target_include_directories(raw_bench_frozen PRIVATE src tests)
+target_compile_options(raw_bench_frozen PRIVATE -O3 -march=native)
+
+add_executable(raw_bench_frozen_180fix
+    tests/raw_bench_main.cpp
+)
+target_include_directories(raw_bench_frozen_180fix BEFORE PRIVATE tests/frozen_0c35e13_180fix tests/frozen_0c35e13)
+target_include_directories(raw_bench_frozen_180fix PRIVATE src tests)
+target_compile_options(raw_bench_frozen_180fix PRIVATE -O3 -march=native)
+
+find_program(GIT_EXECUTABLE git)
+
+function(reach_provenance target detail_name)
+    cmake_parse_arguments(PROV "AUTO_GIT" "PREFIX" "SOURCES" ${ARGN})
+    set(detail "${PROV_PREFIX}")
+    if (PROV_AUTO_GIT AND GIT_EXECUTABLE)
+        execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT_VARIABLE root_head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/fast-reachability
+            OUTPUT_VARIABLE kernel_head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        execute_process(COMMAND ${GIT_EXECUTABLE} status --porcelain -- src tests
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT_VARIABLE root_dirty OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        string(REGEX REPLACE "
+" "," root_dirty "${root_dirty}")
+        if (root_dirty STREQUAL "")
+            set(root_dirty "clean")
+        endif()
+        string(JOIN " " detail "${detail}" "root=${root_head}" "root_worktree=${root_dirty}" "kernel=${kernel_head}")
+    endif()
+    foreach (source IN LISTS PROV_SOURCES)
+        if (IS_ABSOLUTE "${source}")
+            set(path "${source}")
+        else()
+            set(path "${CMAKE_SOURCE_DIR}/${source}")
+        endif()
+        set(label "${path}")
+        if (path MATCHES "^${CMAKE_SOURCE_DIR}/")
+            string(REGEX REPLACE "^${CMAKE_SOURCE_DIR}/" "" label "${path}")
+        elseif (path MATCHES "^${REFERENCE_A_ROOT}/")
+            string(REGEX REPLACE "^${REFERENCE_A_ROOT}/" "refa_" label "${path}")
+        endif()
+        string(REPLACE "/" "_" label "${label}")
+        file(SHA256 ${path} digest)
+        string(APPEND detail " ${label}=${digest}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${path})
+    endforeach()
+    string(STRIP "${detail}" detail)
+    target_compile_definitions(${target} PRIVATE ${detail_name}="${detail}")
+endfunction()
+
+reach_provenance(raw_bench_current PRODUCER_DETAIL AUTO_GIT
+    SOURCES src/fast-reachability/search.hpp tests/raw_bench_main.cpp)
+reach_provenance(raw_bench_frozen PRODUCER_DETAIL AUTO_GIT
+    SOURCES tests/frozen_0c35e13/search.hpp tests/raw_bench_main.cpp)
+reach_provenance(raw_bench_frozen_180fix PRODUCER_DETAIL AUTO_GIT
+    SOURCES tests/frozen_0c35e13_180fix/search.hpp tests/raw_bench_main.cpp)
+reach_provenance(arrival_candidates PRODUCER_DETAIL AUTO_GIT
+    SOURCES src/fast-reachability/search.hpp src/arrival_candidates.cpp src/candidate_format.h)
+
+add_test(NAME raw_parity_frozen_180fix
+    COMMAND ${CMAKE_COMMAND}
+        -DA=$<TARGET_FILE:raw_bench_current>
+        -DB=$<TARGET_FILE:raw_bench_frozen_180fix>
+        -DPREFIX=RAWCASE -DMODE=equal
+        "-DARGS_A=--reps 0 --warmup 0 --producer parity"
+        "-DARGS_B=--reps 0 --warmup 0 --producer parity"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
+)
+add_test(NAME raw_parity_frozen_180off
+    COMMAND ${CMAKE_COMMAND}
+        -DA=$<TARGET_FILE:raw_bench_current>
+        -DB=$<TARGET_FILE:raw_bench_frozen>
+        -DPREFIX=RAWCASE -DMODE=equal
+        "-DARGS_A=--reps 0 --warmup 0 --no-180 --producer parity"
+        "-DARGS_B=--reps 0 --warmup 0 --no-180 --producer parity"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
+)
+
+set(REFERENCE_A_ROOT "/home/icly/Documents/GitHub/tet" CACHE PATH "Pinned Reference A (tet) checkout")
+set(REFERENCE_A_PIN_HEAD "e9a90d8")
+set(REFERENCE_A_PIN_KERNEL_HEAD "0c35e130abb733caefababe0d08c8faf466740e7")
+
+if (EXISTS ${REFERENCE_A_ROOT}/src/search/reachability_search.cpp)
+    set(refa_provenance "refa_root=git-unavailable")
+    if (GIT_EXECUTABLE)
+        execute_process(COMMAND ${GIT_EXECUTABLE} -C ${REFERENCE_A_ROOT} rev-parse HEAD
+            OUTPUT_VARIABLE refa_head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        execute_process(COMMAND ${GIT_EXECUTABLE} -C ${REFERENCE_A_ROOT}/src/fast-reachability rev-parse HEAD
+            OUTPUT_VARIABLE refa_kernel_head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        execute_process(COMMAND ${GIT_EXECUTABLE} -C ${REFERENCE_A_ROOT} status --porcelain -- src
+            OUTPUT_VARIABLE refa_dirty OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        string(REGEX REPLACE "
+" "," refa_dirty "${refa_dirty}")
+        if (refa_dirty STREQUAL "")
+            set(refa_dirty "clean")
+        endif()
+        string(JOIN " " refa_provenance "refa_root=${refa_head}" "refa_worktree=${refa_dirty}"
+            "refa_kernel=${refa_kernel_head}")
+        string(LENGTH "${refa_head}" refa_head_len)
+        if (NOT "${refa_head_len}" GREATER_EQUAL 7 OR NOT "${refa_head}" MATCHES "^${REFERENCE_A_PIN_HEAD}")
+            message(WARNING "reference_a_frozen: ${REFERENCE_A_ROOT} HEAD is ${refa_head}, expected ${REFERENCE_A_PIN_HEAD}")
+        endif()
+        if (NOT refa_kernel_head STREQUAL REFERENCE_A_PIN_KERNEL_HEAD)
+            message(WARNING "reference_a_frozen: Reference A kernel is ${refa_kernel_head}, expected ${REFERENCE_A_PIN_KERNEL_HEAD}")
+        endif()
+        if (NOT refa_dirty STREQUAL "clean")
+            message(WARNING "reference_a_frozen: Reference A src/ worktree is not clean: ${refa_dirty}")
+        endif()
+    endif()
+
+    add_library(reference_a_search STATIC ${REFERENCE_A_ROOT}/src/search/reachability_search.cpp)
+    target_include_directories(reference_a_search PUBLIC ${REFERENCE_A_ROOT}/src)
+    target_compile_options(reference_a_search PRIVATE -O3 -march=native)
+    target_compile_definitions(reference_a_search PRIVATE NDEBUG)
+
+    add_executable(reference_a_frozen
+        tests/reference_a_frozen_main.cpp
+    )
+    target_link_libraries(reference_a_frozen PRIVATE reference_a_search)
+    target_include_directories(reference_a_frozen BEFORE PRIVATE ${REFERENCE_A_ROOT}/src)
+    target_include_directories(reference_a_frozen PRIVATE tests src)
+    target_compile_options(reference_a_frozen PRIVATE -O3 -march=native)
+    target_compile_definitions(reference_a_frozen PRIVATE NDEBUG)
+    reach_provenance(reference_a_frozen PRODUCER_DETAIL AUTO_GIT PREFIX "${refa_provenance}"
+        SOURCES
+            ${REFERENCE_A_ROOT}/src/search/reachability_search.cpp
+            ${REFERENCE_A_ROOT}/src/fast-reachability/search.hpp
+            tests/reference_a_frozen_main.cpp
+            src/candidate_format.h)
+
+    add_test(NAME t_contract_reference_a_180off
+        COMMAND ${CMAKE_COMMAND}
+            -DA=$<TARGET_FILE:arrival_candidates>
+            -DB=$<TARGET_FILE:reference_a_frozen>
+            -DPREFIX=CASE -DMODE=equal
+            "-DARGS_A=--reps 0 --warmup 0 --no-180"
+            "-DARGS_B=--reps 0 --warmup 0 --no-180"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
+    )
+    add_test(NAME t_contract_reference_a_production
+        COMMAND ${CMAKE_COMMAND}
+            -DA=$<TARGET_FILE:arrival_candidates>
+            -DB=$<TARGET_FILE:reference_a_frozen>
+            -DPREFIX=CASE -DMODE=superset
+            "-DARGS_A=--reps 0 --warmup 0"
+            "-DARGS_B=--reps 0 --warmup 0"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
+    )
+else()
+    message(STATUS "reference_a_frozen: not configured, set -DREFERENCE_A_ROOT to a pinned tet checkout")
+endif()
