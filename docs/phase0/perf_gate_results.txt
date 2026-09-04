@@ -148,9 +148,11 @@ then restoring the committed source, so the tests are known to be able to fail.
   with "alternate orientation is never a normal landing", and the root suite
   reports 12 oracle comparison failures over the 37-board corpus. The earlier
   27-board corpus reported none, which is why the fringe boards were added.
-- Removing the `allow_180` propagation: the I orientation 2 rotation-landing and
-  180 growth cases fail, and raw landing parity against the frozen kernel with
-  the 180 fix breaks.
+- Replacing the 180 transition body with an early return, which is the defect
+  the frozen kernel has: the submodule suite fails "arrival 180 transitions add
+  rotation landings", and the raw production-flag corpus drops from 5819 landing
+  bits (`d731b27d2f850919`) to the 180-off table (`1a502b27ef7174be`), which
+  breaks `raw_parity_frozen_180fix`.
 - Removing the range checks from `move_checker::is_valid`: the move checker suite
   fails 772 checks, including the pinned "row 47 upward kick cannot return anchor
   row 48" case.
