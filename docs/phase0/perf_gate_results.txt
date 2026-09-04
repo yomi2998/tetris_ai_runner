@@ -91,6 +91,7 @@ compiler and optimization level:
 | GCC self-release (`-O3 -march=native -flto=2`) | `ctest` 7 of 7 pass; `fast_reachability_tests` 8677 checks, 0 failures |
 | GCC Debug | reachability CTest 6 of 6 pass; harness corpus hashes identical to self-release (`d731b27d2f850919` raw, `21615cb90be7f22a` T contract) |
 | Clang Debug | reachability CTest 6 of 6 pass; 8669 checks, 0 failures without perft |
+| Clang self-release (`-O3 -march=native -flto`) | reachability CTest 6 of 6 pass; 8677 checks, 0 failures with perft |
 | GCC `-O1` with ASan and UBSan | 8669 checks, 0 failures, no sanitizer reports; sanitised raw harness runs clean |
 | Submodule `search_tests` (clang, `-O3 -march=native`) | 18 checks, 0 failures |
 | `fast_reachability_perft` (`-O3`) | 8 of 8 frozen perft vectors exact |
