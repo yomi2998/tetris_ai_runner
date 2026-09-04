@@ -3,6 +3,9 @@ import collections
 import subprocess
 import sys
 
+EXPECTED_PIECES = frozenset("TZSJLOI")
+EXPECTED_BOARD_COUNT = 37
+
 
 def collect(executable, extra):
     out = subprocess.run([executable, "--reps", "0", "--warmup", "0", "--dump-keys"] + extra,
@@ -28,6 +31,24 @@ def collect(executable, extra):
     return keys, rows, len(denom), corpus
 
 
+def require_corpus(rows, name):
+    pieces = {piece for piece, _ in rows}
+    boards = {board for _, board in rows}
+    problems = []
+    if pieces != EXPECTED_PIECES:
+        problems.append(f"pieces seen {sorted(pieces)}")
+    if len(boards) != EXPECTED_BOARD_COUNT:
+        problems.append(f"{len(boards)} distinct boards")
+    if len(rows) != len(EXPECTED_PIECES) * EXPECTED_BOARD_COUNT:
+        problems.append(f"{len(rows)} cases")
+    for piece in sorted(EXPECTED_PIECES):
+        for board in sorted(boards):
+            if (piece, board) not in rows:
+                problems.append(f"missing case {piece} board {board}")
+    if problems:
+        raise SystemExit(f"{name} corpus incomplete: " + "; ".join(problems))
+
+
 def main():
     if len(sys.argv) < 3:
         raise SystemExit("usage: check_candidate_inclusion.py <new exe> <comparator exe> [shared args...]")
@@ -35,6 +56,8 @@ def main():
     extra = sys.argv[3:]
     new_keys, new_rows, new_denom, new_corpus = collect(new_exe, extra)
     other_keys, other_rows, other_denom, other_corpus = collect(comparator_exe, extra)
+    require_corpus(new_rows, "new")
+    require_corpus(other_rows, "comparator")
 
     missing_cases = 0
     missing_keys = 0
@@ -66,6 +89,7 @@ def main():
         print(f"INCLUSION piece {piece} lost {per_piece[piece][0]} gained {per_piece[piece][1]}")
     print(f"CORPUS new {new_corpus}")
     print(f"CORPUS comparator {other_corpus}")
+    print(f"GRID {len(EXPECTED_PIECES)} pieces {EXPECTED_BOARD_COUNT} boards complete on both sides")
     print(f"DENOM checked {len(new_rows)} new and {len(other_rows)} comparator rows")
     if missing_keys or missing_cases:
         raise SystemExit(f"comparator emitted {missing_keys} keys the new implementation does not contain")

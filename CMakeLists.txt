@@ -12,8 +12,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(TETRIS_SANITIZERS "Instrument the build with ASan and UBSan" OFF)
 if (TETRIS_SANITIZERS)
-    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1)
-    add_link_options(-fsanitize=address,undefined)
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined
+        -fno-omit-frame-pointer -g -O1)
+    add_link_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined)
 endif()
 
 add_library(fast_reachability INTERFACE)
@@ -189,7 +190,7 @@ function(reach_provenance target detail_name)
         execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/fast-reachability
             OUTPUT_VARIABLE kernel_head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-        execute_process(COMMAND ${GIT_EXECUTABLE} status --porcelain -- src tests
+        execute_process(COMMAND ${GIT_EXECUTABLE} status --porcelain -- src tests cmake CMakeLists.txt
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             OUTPUT_VARIABLE root_dirty OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
         string(REGEX REPLACE "
@@ -235,12 +236,15 @@ add_test(NAME raw_bench_warmup_smoke
 add_test(NAME raw_bench_warmup_smoke_frozen
     COMMAND $<TARGET_FILE:raw_bench_frozen_180fix> --reps 2 --warmup 3 --producer smoke
 )
+add_test(NAME raw_bench_warmup_smoke_frozen_plain
+    COMMAND $<TARGET_FILE:raw_bench_frozen> --reps 2 --warmup 3 --producer smoke
+)
 
 add_test(NAME raw_parity_frozen_180fix
     COMMAND ${CMAKE_COMMAND}
         -DA=$<TARGET_FILE:raw_bench_current>
         -DB=$<TARGET_FILE:raw_bench_frozen_180fix>
-        -DPREFIX=RAWCASE -DMODE=equal
+        -DPREFIX=RAWCASE -DMODE=equal -DEXPECTED_ROWS=259
         "-DARGS_A=--reps 0 --warmup 0 --producer parity"
         "-DARGS_B=--reps 0 --warmup 0 --producer parity"
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
@@ -249,11 +253,17 @@ add_test(NAME raw_parity_frozen_180off
     COMMAND ${CMAKE_COMMAND}
         -DA=$<TARGET_FILE:raw_bench_current>
         -DB=$<TARGET_FILE:raw_bench_frozen>
-        -DPREFIX=RAWCASE -DMODE=equal
+        -DPREFIX=RAWCASE -DMODE=equal -DEXPECTED_ROWS=259
         "-DARGS_A=--reps 0 --warmup 0 --no-180 --producer parity"
         "-DARGS_B=--reps 0 --warmup 0 --no-180 --producer parity"
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
 )
+
+set_tests_properties(tetris_board_tests fast_reachability_tests fast_reachability_perft
+    raw_bench_warmup_smoke raw_bench_warmup_smoke_frozen raw_bench_warmup_smoke_frozen_plain
+    raw_parity_frozen_180fix raw_parity_frozen_180off
+    PROPERTIES FAIL_REGULAR_EXPRESSION "runtime error:"
+    ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1")
 
 set(REFERENCE_A_ROOT "/home/icly/Documents/GitHub/tet" CACHE PATH "Pinned Reference A (tet) checkout")
 set(REFERENCE_A_PIN_HEAD "e9a90d8")
@@ -311,17 +321,23 @@ if (EXISTS ${REFERENCE_A_ROOT}/src/search/reachability_search.cpp)
         COMMAND ${CMAKE_COMMAND}
             -DA=$<TARGET_FILE:arrival_candidates>
             -DB=$<TARGET_FILE:reference_a_frozen>
-            -DPREFIX=CASE -DMODE=equal
+            -DPREFIX=CASE -DMODE=equal -DEXPECTED_ROWS=259
             "-DARGS_A=--reps 0 --warmup 0 --no-180"
             "-DARGS_B=--reps 0 --warmup 0 --no-180"
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
     )
+    set_tests_properties(t_contract_reference_a_180off
+        PROPERTIES FAIL_REGULAR_EXPRESSION "runtime error:"
+        ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1")
     find_program(PYTHON3_EXECUTABLE python3)
     if (PYTHON3_EXECUTABLE)
         add_test(NAME t_contract_reference_a_production
             COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_candidate_inclusion.py
                 $<TARGET_FILE:arrival_candidates> $<TARGET_FILE:reference_a_frozen>
         )
+        set_tests_properties(t_contract_reference_a_production
+            PROPERTIES FAIL_REGULAR_EXPRESSION "runtime error:"
+            ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1")
     else()
         message(STATUS "t_contract_reference_a_production: skipped, python3 not found")
     endif()

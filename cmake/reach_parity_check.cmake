@@ -1,5 +1,5 @@
-if (NOT DEFINED A OR NOT DEFINED B)
-    message(FATAL_ERROR "usage: cmake -DA=<exe> -DB=<exe> [-DPREFIX=CASE] [-DARGS_A=<args>] [-DARGS_B=<args>] -P reach_parity_check.cmake")
+if (NOT DEFINED A OR NOT DEFINED B OR NOT DEFINED EXPECTED_ROWS)
+    message(FATAL_ERROR "usage: cmake -DA=<exe> -DB=<exe> -DEXPECTED_ROWS=<count> [-DPREFIX=CASE] [-DARGS_A=<args>] [-DARGS_B=<args>] -P reach_parity_check.cmake")
 endif()
 
 if (NOT PREFIX)
@@ -37,6 +37,14 @@ string(REPLACE "\n" ";" list_a "${rows_a}")
 string(REPLACE "\n" ";" list_b "${rows_b}")
 list(LENGTH list_a n_a)
 list(LENGTH list_b n_b)
+
+if (NOT n_a EQUAL EXPECTED_ROWS)
+    message(FATAL_ERROR "expected ${EXPECTED_ROWS} ${PREFIX} rows from ${A} but found ${n_a}")
+endif()
+
+if (NOT n_b EQUAL EXPECTED_ROWS)
+    message(FATAL_ERROR "expected ${EXPECTED_ROWS} ${PREFIX} rows from ${B} but found ${n_b}")
+endif()
 
 if (NOT n_a EQUAL n_b)
     message(FATAL_ERROR "row count mismatch: ${n_a} from ${A} versus ${n_b} from ${B}")
