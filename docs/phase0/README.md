@@ -186,6 +186,12 @@ Implemented in the submodule and root tests:
   `binary_bfs` landings for every piece, board, and configuration. Both routings
   now share one seed, so this checks that channel splitting loses nothing; the
   semantic authority is the oracle plus the Reference A parity below.
+- `move_checker` legality is confined to representable anchors. `board_t::get`
+  returns a truthy sentinel outside the board, so the old `is_valid` accepted any
+  out of range coordinate and `try_rotate` could return an anchor at row 48 after
+  an upward kick from row 47. Anchors, rotations, and results are range checked,
+  and the submodule suite pins the invariant across the top rows for every piece
+  on boards with a row 46 and 47 fringe.
 - Comparators: `reference_a_frozen` builds the pinned Reference A
   `ReachabilitySearch` from `/home/icly/Documents/GitHub/tet` unchanged, and
   `tests/frozen_0c35e13` plus `tests/frozen_0c35e13_180fix` preserve the frozen
@@ -194,12 +200,22 @@ Implemented in the submodule and root tests:
   `raw_bench_frozen_180fix` compile one shared bench source against one kernel
   each, and print provenance (root commit, worktree state, kernel commits, and
   source digests) plus per-case hashes.
-- Four CTest gates: raw landing parity against the frozen kernel with the 180
-  fix under production flags, raw parity against the plain frozen kernel with 180
-  off, byte-identical T contract against Reference A with 180 off, and Reference
-  A contract containment with 180 on.
+- Six CTest gates for the comparators: raw landing parity against the frozen
+  kernel with the 180 fix under production flags, raw parity against the plain
+  frozen kernel with 180 off, byte-identical T contract against Reference A with
+  180 off, key-by-key Reference A containment with 180 on
+  (`tests/check_candidate_inclusion.py`, which compares dumped candidate keys
+  rather than counts), and two warmup smoke runs of the raw harness that must
+  exit clean under a sanitizer build (`-DTETRIS_SANITIZERS=ON`).
 - Submodule tests (`search_tests.cpp`) for set gravity, 180 propagation, spawn
-  seeding provenance on hand-verified minimal boards, and height dispatch.
+  seeding provenance on hand-verified minimal boards, `move_checker` bounds, and
+  height dispatch.
+- A dispatch matrix over 7 pieces, 8 movement configurations, and 47 boards
+  (2632 cases) which asserts that whenever the selected cut still holds the
+  spawn pose, the arrival result equals the full-height result: 672 such
+  cut-versus-full comparisons, all equal. The previous revision compared T only,
+  in one configuration, and its mode-neutrality assertion passed vacuously
+  whenever the rule selected true.
 
 Kernel defects found and fixed during oracle bring-up and review: the kick
 cascade guarded 180 transitions out of the cascade entirely (the `allow_180`
@@ -212,26 +228,31 @@ rotation-only arrivals as normal and, with 20G, reported unreachable placements.
 
 Verified results:
 
-- Root tests: 8677 checks, 0 failures (GCC Debug, Clang Debug, GCC
-  self-release, ASan/UBSan clean). The Debug figure is 8669 without the eight
-  perft vectors.
+- Root tests: 17204 checks, 0 failures with perft (17196 without), in GCC Debug,
+  Clang Debug, GCC self-release, Clang self-release, and under ASan plus UBSan
+  with no sanitizer reports.
 - Perft vectors exact (8 vectors, dedicated optimized CTest, unchanged values
   from the frozen baseline).
-- Submodule tests: 18 checks, 0 failures.
-- CTest: 7 of 7 in GCC self-release, 6 of 6 reachability gates in GCC Debug and
-  Clang Debug, including the four new parity gates.
+- Submodule tests: 12633 checks, 0 failures.
+- CTest: 9 of 9 in all four compiler and configuration combinations, and 8 of 8
+  in the sanitizer build excluding the sanitizer-free perft target.
 - Reference A parity: with 180 off on both sides the 259-row normalized T
   contract is byte identical (corpus hash `27f4998e663f3604`), so the timing
-  comparison is equal work. With production flags the current side is a strict
-  superset: Reference A cannot emit any 180 arrival because its frozen kernel
-  ignores `allow_180`, which the recorded hashes show directly (its 180-on corpus
-  hash equals its 180-off corpus hash).
-- Gates: T semantic enumeration is 10.9 times faster than the real Reference A
+  comparison is equal work. With production flags the current side contains all
+  4416 Reference A candidate keys and adds 119 of its own, confined to J and L:
+  Reference A cannot emit any 180 arrival because its frozen kernel ignores
+  `allow_180`, which the recorded hashes show directly (its 180-on corpus hash
+  equals its 180-off corpus hash).
+- Gates: T semantic enumeration is 10.66 times faster than the real Reference A
   wrapper (gate: 2 times). Raw non-T BFS against the equal-semantics frozen
-  comparator is faster on every piece, worst non-T ratio 0.967 total and 0.968
+  comparator is faster on every piece, worst non-T ratio 0.9918 total and 0.9903
   search-only (gate: at most 1.020). Details, protocol, environment, and raw run
-  rows are in `docs/phase0/perf_gate_results.txt`; comparator and source hashes
-  are in `docs/phase0/artifact_hashes.txt`.
+  rows are in `docs/phase0/perf_gate_results.txt`; comparator, preserved frozen
+  source, and Reference A source hashes are in
+  `docs/phase0/artifact_hashes.txt`. An earlier raw campaign in that file was
+  withdrawn because the harness shifted by a negative exponent during warmup;
+  the corrected harness, sanitizer smoke tests, and a fresh campaign replaced
+  it, with identical output hashes.
 - Open note for Phase 3: the frozen raw path reported per-orientation caches that
   included spawn poses reachable only by "spawning in that orientation" for
   pieces with non-identity rotation offsets (Z, S, I). With authoritative
