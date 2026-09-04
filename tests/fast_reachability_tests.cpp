@@ -381,6 +381,43 @@ namespace
                         ok = ok && dispatched.rotation_landings[o] == manual.rotation_landings[o];
                     }
                     check(ok, "dispatch threads cut board and flag correctly for occupied " + std::to_string(occupied));
+                    if constexpr (Cut::height < BOARD::height && Cut::height >= necessary)
+                    {
+                        search::search_workspace<B, BOARD> full_ws(board);
+                        auto full = expected_check ? search::template arrival_search<B, true>(full_ws, cfg, spawn, 0)
+                                                   : search::template arrival_search<B, false>(full_ws, cfg, spawn, 0);
+                        bool same_as_full = true;
+                        for (int o = 0; o < 4; ++o)
+                        {
+                            for (int w = 0; w < Cut::num_of_under; ++w)
+                            {
+                                same_as_full = same_as_full
+                                    && uint64_t(dispatched.normal_landings[o].logical_word(w)) == uint64_t(full.normal_landings[o].logical_word(w));
+                                same_as_full = same_as_full
+                                    && uint64_t(dispatched.rotation_landings[o].logical_word(w)) == uint64_t(full.rotation_landings[o].logical_word(w));
+                            }
+                        }
+                        check(same_as_full, "cut arrival equals full-height arrival for occupied " + std::to_string(occupied));
+                        if (!same_as_full)
+                        {
+                            std::println(stderr, "cut {} versus full versus check {}", Cut::height, expected_check);
+                        }
+                        search::search_workspace<B, BOARD> other_ws(board);
+                        auto other = expected_check ? search::template arrival_search<B, false>(other_ws, cfg, spawn, 0)
+                                                    : search::template arrival_search<B, true>(other_ws, cfg, spawn, 0);
+                        bool flag_neutral = true;
+                        for (int o = 0; o < 4; ++o)
+                        {
+                            for (int w = 0; w < 8; ++w)
+                            {
+                                flag_neutral = flag_neutral
+                                    && uint64_t(full.normal_landings[o].logical_word(w)) == uint64_t(other.normal_landings[o].logical_word(w));
+                                flag_neutral = flag_neutral
+                                    && uint64_t(full.rotation_landings[o].logical_word(w)) == uint64_t(other.rotation_landings[o].logical_word(w));
+                            }
+                        }
+                        check(flag_neutral || expected_check, "selected check_consecutive mode matches the other mode on uncut low boards for occupied " + std::to_string(occupied));
+                    }
                     return 0;
                 });
                 return 0;
