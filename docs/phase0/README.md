@@ -245,7 +245,7 @@ Verified results:
   equals its 180-off corpus hash).
 - Gates: T semantic enumeration is 10.66 times faster than the real Reference A
   wrapper (gate: 2 times). Raw non-T BFS against the equal-semantics frozen
-  comparator is faster on every piece, worst non-T ratio 0.9918 total and 0.9903
+  comparator is faster on every piece, worst non-T ratio 0.9922 total and 0.9694
   search-only (gate: at most 1.020). Details, protocol, environment, and raw run
   rows are in `docs/phase0/perf_gate_results.txt`; comparator, preserved frozen
   source, and Reference A source hashes are in
