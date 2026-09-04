@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(TETRIS_SANITIZERS "Instrument the build with ASan and UBSan" OFF)
+if (TETRIS_SANITIZERS)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 add_library(fast_reachability INTERFACE)
 target_include_directories(fast_reachability INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(fast_reachability INTERFACE cxx_std_23)
@@ -219,6 +225,13 @@ reach_provenance(raw_bench_frozen_180fix PRODUCER_DETAIL AUTO_GIT
 reach_provenance(arrival_candidates PRODUCER_DETAIL AUTO_GIT
     SOURCES src/fast-reachability/search.hpp src/arrival_candidates.cpp src/candidate_format.h)
 
+add_test(NAME raw_bench_warmup_smoke
+    COMMAND $<TARGET_FILE:raw_bench_current> --reps 2 --warmup 3 --producer smoke
+)
+add_test(NAME raw_bench_warmup_smoke_frozen
+    COMMAND $<TARGET_FILE:raw_bench_frozen_180fix> --reps 2 --warmup 3 --producer smoke
+)
+
 add_test(NAME raw_parity_frozen_180fix
     COMMAND ${CMAKE_COMMAND}
         -DA=$<TARGET_FILE:raw_bench_current>
@@ -299,15 +312,15 @@ if (EXISTS ${REFERENCE_A_ROOT}/src/search/reachability_search.cpp)
             "-DARGS_B=--reps 0 --warmup 0 --no-180"
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
     )
-    add_test(NAME t_contract_reference_a_production
-        COMMAND ${CMAKE_COMMAND}
-            -DA=$<TARGET_FILE:arrival_candidates>
-            -DB=$<TARGET_FILE:reference_a_frozen>
-            -DPREFIX=CASE -DMODE=superset
-            "-DARGS_A=--reps 0 --warmup 0"
-            "-DARGS_B=--reps 0 --warmup 0"
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
-    )
+    find_program(PYTHON3_EXECUTABLE python3)
+    if (PYTHON3_EXECUTABLE)
+        add_test(NAME t_contract_reference_a_production
+            COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_candidate_inclusion.py
+                $<TARGET_FILE:arrival_candidates> $<TARGET_FILE:reference_a_frozen>
+        )
+    else()
+        message(STATUS "t_contract_reference_a_production: skipped, python3 not found")
+    endif()
 else()
     message(STATUS "reference_a_frozen: not configured, set -DREFERENCE_A_ROOT to a pinned tet checkout")
 endif()
