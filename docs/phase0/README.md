@@ -146,56 +146,99 @@ The Phase 1 review (blockers 1-3, high 4-5, follow-ups 6-7) was applied:
 Revert the instrumentation commits. No production architecture has changed;
 the frozen baseline artifacts remain valid.
 
-## Phase 2 status (complete, awaiting review)
+## Phase 2 status (reworked after review, awaiting re-review)
 
 Implemented in the submodule and root tests:
 
 - One shared transition core (`seed_reachability`, `expand_channel`,
-  `cascade_kicks`, `settle_positions`, `run_fixpoint`) with a channel-routing
-  policy. Single-channel binary reachability and two-channel arrival
-  reachability use the same seeding, non-rotation expansion, first-valid kick
-  cascade, gravity operation, and fixpoint convergence. Only channel routing
-  differs.
+  `cascade_kicks`, `settle_positions`, `run_phase`, `run_fixpoint`) with a
+  channel-routing policy. Single-channel binary reachability and two-channel
+  arrival reachability use the same seeding, non-rotation expansion, first-valid
+  kick cascade, gravity operation, and fixpoint convergence. Only channel
+  routing differs, plus an early exit that the single-channel routing may take
+  once every landable position is covered because it reports landings only.
+- Authoritative initial-pose seeding. The kernel seeds exactly the spawn pose of
+  the initial orientation and nothing else, in every movement configuration. The
+  open-sky closure is applied only to the initial orientation, where every
+  position other than the seed is entered by a move. Alternate orientations at
+  the spawn pose are therefore discovered through rotation transitions and land
+  in the rotation channel, and 20G no longer reports placements that no command
+  sequence reaches.
+- Three movement phases: airborne propagation, an airborne finalization that
+  settles positions and downgrades the ones that moved to the normal channel,
+  and grounded propagation for the non-soft-drop sonic and 20G modes.
 - Two-channel (normal versus rotation) bit-parallel arrival propagation
-  (`arrival_bfs`, `arrival_search`) with per-result sonic-drop arrival
-  downgrading: kicked results that stay become rotation arrivals, results
-  that move during the drop enter the normal channel.
-- `search_workspace` owning both board data and usable masks. Searches take
-  the workspace only, so reachability, landing extraction, and legality
-  checking share the same data by construction.
-- `dispatch_with_height` implementing the perft.hpp height and
-  check_consecutive selection rule with the pinned cutoffs 6/12/24/48 and the
-  +3 margin.
-- Test-only scalar arrival oracle (`tests/scalar_arrival_oracle.h`) starting
-  from only the initial pose and modelling explicit legal commands and
-  first-valid kicks, compared against the bit-parallel result with the
-  dispatch-selected check mode everywhere (both modes where false is valid).
+  (`arrival_bfs`, `arrival_search`) with per-result sonic-drop downgrading.
+- `search_workspace` owning both board data and usable masks. Searches take the
+  workspace only, so reachability, landing extraction, and legality checking
+  share the same data by construction. It is not default constructible and
+  exposes no mutating API.
+- `dispatch_with_height` implementing the height and `check_consecutive`
+  selection rule with the pinned cutoffs 6/12/24/48 and the +3 margin.
+- Test-only scalar arrival oracle (`tests/scalar_arrival_oracle.h`) that starts
+  from the initial pose only, explores explicit single-step commands with
+  first-valid kicks, and is compared against the bit-parallel result on 37
+  boards times 8 movement configurations times both `check_consecutive` modes
+  where each is valid. The oracle is independent of the kernel flood shortcut,
+  and the corpus now includes the sparse spawn-fringe boards that distinguish
+  authoritative seeding from seeding every fitting orientation.
 - Arrival-channel union invariant: normal plus rotation landings equal
-  corrected `binary_bfs` reachability for every piece, board, and movement
-  configuration.
-- Reference A scalar-wrapper comparator and microbench
-  (`src/reference_a_bench.cpp`).
-- Submodule tests (`search_tests.cpp`) for set gravity, 180 propagation,
-  and height dispatch.
+  `binary_bfs` landings for every piece, board, and configuration. Both routings
+  now share one seed, so this checks that channel splitting loses nothing; the
+  semantic authority is the oracle plus the Reference A parity below.
+- Comparators: `reference_a_frozen` builds the pinned Reference A
+  `ReachabilitySearch` from `/home/icly/Documents/GitHub/tet` unchanged, and
+  `tests/frozen_0c35e13` plus `tests/frozen_0c35e13_180fix` preserve the frozen
+  kernel with one isolated 180 branch correction for equal-semantics raw
+  comparison. `raw_bench_current`, `raw_bench_frozen`, and
+  `raw_bench_frozen_180fix` compile one shared bench source against one kernel
+  each, and print provenance (root commit, worktree state, kernel commits, and
+  source digests) plus per-case hashes.
+- Four CTest gates: raw landing parity against the frozen kernel with the 180
+  fix under production flags, raw parity against the plain frozen kernel with 180
+  off, byte-identical T contract against Reference A with 180 off, and Reference
+  A contract containment with 180 on.
+- Submodule tests (`search_tests.cpp`) for set gravity, 180 propagation, spawn
+  seeding provenance on hand-verified minimal boards, and height dispatch.
 
-Kernel defects found and fixed during oracle bring-up: the kick cascade
-guarded 180 transitions out of the cascade entirely (the allow_180 flag was
-dead in binary_bfs); `drop_to_bottom` early-breaks on vertically chained
-multi-position sets (new `settle_positions` implements correct set gravity);
-the kernel allowed piece cells above row 47 (open sky, mirrored by the
-oracle).
+Kernel defects found and fixed during oracle bring-up and review: the kick
+cascade guarded 180 transitions out of the cascade entirely (the `allow_180`
+flag was dead in `binary_bfs`); `drop_to_bottom` early-breaks on vertically
+chained multi-position sets (replaced by `settle_positions`, and
+`drop_to_bottom` is removed); the kernel allowed piece cells above row 47 (open
+sky, mirrored by the oracle); `allow_sonicdrop` was not distinguished from 20G
+in the phase structure; and seeding every fitting spawn pose labelled
+rotation-only arrivals as normal and, with 20G, reported unreachable placements.
 
 Verified results:
 
-- Root tests: 4669 checks, 0 failures (GCC/Clang Debug oracle tests,
-  self-release full suite, ASan/UBSan clean).
-- Perft vectors exact (8 vectors, dedicated optimized CTest).
-- Submodule tests: 10 checks, 0 failures.
-- Reference A matches on all pieces; T arrival 463 times faster than the
-  scalar wrapper (gate: 2 times).
-- Raw non-T BFS: functionality-matched base (180-off both sides) is at
-  parity (T/J/L/O within noise, Z/S/I within 6 to 12 percent on noisy
-  hardware); full production 180-on runs 5 to 15 percent over frozen
-  0c35e13, root-caused to the review-mandated correct 180 transitions
-  (frozen skipped them entirely) plus measurement noise. J/L gain
-  legitimate 180 placements. See docs/phase0/perf_gate_results.txt.
+- Root tests: 8677 checks, 0 failures (GCC Debug, Clang Debug, GCC
+  self-release, ASan/UBSan clean). The Debug figure is 8669 without the eight
+  perft vectors.
+- Perft vectors exact (8 vectors, dedicated optimized CTest, unchanged values
+  from the frozen baseline).
+- Submodule tests: 18 checks, 0 failures.
+- CTest: 7 of 7 in GCC self-release, 6 of 6 reachability gates in GCC Debug and
+  Clang Debug, including the four new parity gates.
+- Reference A parity: with 180 off on both sides the 259-row normalized T
+  contract is byte identical (corpus hash `27f4998e663f3604`), so the timing
+  comparison is equal work. With production flags the current side is a strict
+  superset: Reference A cannot emit any 180 arrival because its frozen kernel
+  ignores `allow_180`, which the recorded hashes show directly (its 180-on corpus
+  hash equals its 180-off corpus hash).
+- Gates: T semantic enumeration is 10.9 times faster than the real Reference A
+  wrapper (gate: 2 times). Raw non-T BFS against the equal-semantics frozen
+  comparator is faster on every piece, worst non-T ratio 0.967 total and 0.968
+  search-only (gate: at most 1.020). Details, protocol, environment, and raw run
+  rows are in `docs/phase0/perf_gate_results.txt`; comparator and source hashes
+  are in `docs/phase0/artifact_hashes.txt`.
+- Open note for Phase 3: the frozen raw path reported per-orientation caches that
+  included spawn poses reachable only by "spawning in that orientation" for
+  pieces with non-identity rotation offsets (Z, S, I). With authoritative
+  seeding the union of landings is unchanged in every non-20G configuration, so
+  the legacy differential should expect no lost placements, and only 20G
+  configurations lose placements that were never legal.
+
+## Rollback
+
+Revert the submodule commit and the root pointer. Phases 0 and 1 remain usable.

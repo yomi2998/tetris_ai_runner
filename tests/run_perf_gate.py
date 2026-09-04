@@ -31,6 +31,8 @@ def shell(command):
 def run(binary, extra, iters):
     command = ["taskset", "-c", CORE, os.path.join(BUILD, binary),
         "--reps", str(iters), "--warmup", WARMUP] + extra
+    if binary.startswith("raw_bench") and "--producer" not in extra:
+        command += ["--producer", extra_label(binary)]
     out = subprocess.run(command, capture_output=True, text=True, check=True)
     samples = {piece: [] for piece in PIECES}
     corpus = ""
@@ -48,7 +50,16 @@ def run(binary, extra, iters):
     return totals, corpus
 
 
+LABELS = {}
+
+
+def extra_label(binary):
+    return LABELS.get(binary, "unknown")
+
+
 def sequence(label_a, bin_a, label_b, bin_b, extra, iters, raw_lines):
+    LABELS[bin_a] = label_a
+    LABELS[bin_b] = label_b
     order = ["A", "B", "B", "A"] * REPS + ["A"]
     obs = {"A": [], "B": []}
     for index, side in enumerate(order):

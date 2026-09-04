@@ -8,5 +8,82 @@ ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037  artifacts/froz
 043aae0aaeb7675dfa96a48207e977f361bfd05a8bf26c4addda3c203c089504   docs/phase0/pair_output_schema.md
 74017e067a5097058a9bc69fac8e15c49866ed7327330a4297c19aa27c1923df   docs/phase0/profile_schema_v2.md
 
-43d48ff0e9daa84fcfeb5bed1cac5e4ff2574d91d2e89c44db6ebe570d008244  reference_a_frozen (frozen 0c35e13 binary_bfs plus scalar recovery)
-5e1d2aeeabee2b4ea84be6ddc21118881d1f34da29448a069ac18de7412ce5ab  arrival_candidates (current arrival_search candidates, root 4391dbd)
+
+# Phase 2 comparators, preserved read-only under
+# /home/icly/Documents/tetris_ai_runner_results/phase2/ and hashed by the run in perf_gate_results.txt
+dceda1cbfb799a773d6381369bc70e476d4c4cfe16d73313e53429275b40d0b5  /home/icly/Documents/tetris_ai_runner_results/phase2/arrival_candidates
+140b44ad411c96cf2b8c7976ad327ceea51b30d99d8a667502ea9f44d39959da  /home/icly/Documents/tetris_ai_runner_results/phase2/raw_bench_current
+b85ec6b0c97b2815e98cb66edeb18a0adabf66b1e6ad832e29172ce628e3b046  /home/icly/Documents/tetris_ai_runner_results/phase2/raw_bench_frozen
+6af3a86fbd6d94d4244d4e546ead2ca063cc8f3184a93eba3407ddd91a04c9d6  /home/icly/Documents/tetris_ai_runner_results/phase2/raw_bench_frozen_180fix
+9d7d3c99299d0b2c88e5e68af121b205dd59272a5cbcde5c4a553588d839796e  /home/icly/Documents/tetris_ai_runner_results/phase2/reference_a_frozen
+427212c4dbef6ab589f436929d1e9761cea5f6f76227658e5f6cdc70bc106663  /home/icly/Documents/tetris_ai_runner_results/phase2/submodule_search_tests
+
+# Frozen fast-reachability kernel preserved at 0c35e13, extracted with git show from the
+# submodule, byte for byte. Each blob hash below is the git blob id of the same path at 0c35e13.
+# The search.hpp digest also equals the digest of src/fast-reachability/search.hpp inside the
+# pinned Reference A checkout, which cross-checks the freeze against Reference A.
+b643a9fc84b5e211dfcddec0558d7810e180e65880942685ad7d92fb98f9ac1b  tests/frozen_0c35e13/LICENSE  blob=76c13c8a993e4e7458d535949fa0c768c5d55541
+f6c007e5462bc46e3bb509e83c0c0a13a31f463cd051df9f2307e9de6ac5c3e1  tests/frozen_0c35e13/bit_permutations.hpp  blob=08f09429104f44072a29651a2947025b6a9af521
+e8c530253bf5446af463a07324a5868f567a6dea9c500eeed27e3d37cb402729  tests/frozen_0c35e13/block.hpp  blob=6c60f0aff7f88d7b322ddfa08ba0fa54022ac6d1
+d73a3e67fb034bf6a40da8905780f4dc7cba4f9bf55ccda35dd5f61887ea9390  tests/frozen_0c35e13/board.hpp  blob=93cae5ebaa2f9a586954bc918c88a42efdf64420
+433297636482458fddc13e087c439b468af08f4c2730c356f6ece52d92c29e02  tests/frozen_0c35e13/kick_srs.hpp  blob=f13a165f6391f7c0874d15a68ec6f97285ec4b66
+609f43c138f9783b7dd7fd495319015a930649429b84b0bac646161b1b39ba43  tests/frozen_0c35e13/perft.hpp  blob=6eee1f34eaf538fdc35e3c0ae6d1684266f6c449
+45dd6afcb6fa0c30391887bafc8f3e5af109b061e2f9f9846225244815667a35  tests/frozen_0c35e13/piece_tetromino.hpp  blob=673df5136b1afaeb6eb235cb52c5bb13403b6d47
+853d662aea2e0a84b0cbe23fc17a022b41d1d9a3fe319d0a187e9775f3d54488  tests/frozen_0c35e13/search.hpp  blob=b60a5cc0e9c5d2daa55b8b537061c3e968cda14f
+8921a81e25d4eea59eb1cc3e586609d1953d59cccf5353bd7dc25b18b9149b4e  tests/frozen_0c35e13/stme.hpp  blob=12162c9537af044bfcb7e4120318d566d1b6dde9
+4c0e55e749db7bb52f8fdfab98a08f1f135d0bbf3fa0975b327b5b450b9b7230  tests/frozen_0c35e13/utils.hpp  blob=daca139a0ee97cf4d274a8ed3970f69d12e8f2d1
+
+# Isolated 180 branch correction over the preserved frozen kernel. The complete change is
+# moving the allow_180 guard inside the transition body, so the body runs for 180 edges:
+#   --- tests/frozen_0c35e13/search.hpp	2026-09-04 12:29:42.611747930 +0800
+#   +++ tests/frozen_0c35e13_180fix/search.hpp	2026-09-04 12:32:46.902590841 +0800
+#   @@ -273,11 +273,12 @@
+#                            constexpr auto kick_table = this_kick[1_szc];
+#                            if constexpr (diff[0_szc] != i) {
+#                                return;
+#   -                        } else if constexpr ((diff[0_szc] + 2) % 4 == diff[1_szc]) {
+#   -                            if (!cfg.allow_180) {
+#   -                                return;
+#   -                            }
+#                            } else {
+#   +                            if constexpr ((diff[0_szc] + 2) % 4 == diff[1_szc]) {
+#   +                                if (!cfg.allow_180) {
+#   +                                    return;
+#   +                                }
+#   +                            }
+#                                constexpr auto target = index_c<diff[1_szc]>;
+#                                static_assert(target != i);
+#                                board_t to;
+e7d4473b37d766fa7932925f23578058fa1098684fa74fb82cb60a73a0cb3b1b  tests/frozen_0c35e13_180fix/search.hpp
+
+# Comparator and contract sources in this repository
+b35d993502dd33d1cb4cffdc81c0729b049fcf0c409750564c893f7bab273501  src/candidate_format.h
+f578390595ee3b356d0ea204bb722d8dc10fe4a139ddecb198e0fab006ef906e  src/producer_info.h
+53996b33f012829babb8c356d3aecdf7ef5855269faf70470a4e111186d27925  tests/reach_corpus.h
+4706b64957cadde090fea318291cec8ad9263f94b46a7a29729da615e1da72d9  tests/raw_bench_main.cpp
+4b6d161610c0d4cfbd381ca99ed29a580fb28d0b2144165a29462da301252f79  tests/reference_a_frozen_main.cpp
+0e0818e28f0b59bf2e1667761cfb7194f1beb6557ef628d007123db5c5041ba5  src/arrival_candidates.cpp
+74ed68c208594c8fbbd12957d52719dd56720d1ea35db4a047d9e4aa5bb1ce3f  tests/run_perf_gate.py
+f04877fe379872a84495b4e91f7e0ff6888b449b1a88b8f0f293c1b68b338fc7  cmake/reach_parity_check.cmake
+714ff278bb3cab37bc7c578dfaaf1f074d965374b28c1232517a15a43caa51b6  CMakeLists.txt
+fb924b6fe6403e71a5e9077a47cbe986354204ddebd91dfefc517449e1c55466  tests/scalar_arrival_oracle.h
+5f4595cb098587d235507a5e5155171112d72923e8b2dbba8c15ae0b259094a6  tests/fast_reachability_tests.cpp
+869fd8031ccd3e6d95ab0b0982ec541be13a5447ad01829ac5a35332e01b91cc  src/fast-reachability/search.hpp
+d811d100dad1a6eb70c18aa42a4e65f4a8bd85ac011b1f7b3131166cdde80a1d  src/fast-reachability/search_tests.cpp
+
+# Reference A sources compiled into reference_a_frozen
+refa_root=e9a90d8dbc8e2e5f513691c1c83b211097fb21eb refa_src_worktree=clean refa_kernel=0c35e130abb733caefababe0d08c8faf466740e7
+58f6bda895994508836c01d7cea381d478eef379837f253fbda4c841d70ff6cc  refa/src/search/reachability_search.cpp
+2f69501cae1557838803ed1d2d8fc9cf0139a1704f79b8e49887ee73392c6de8  refa/src/search/reachability_search.hpp
+853d662aea2e0a84b0cbe23fc17a022b41d1d9a3fe319d0a187e9775f3d54488  refa/src/fast-reachability/search.hpp
+33c63e685afba7e6ffa7c19b9a67100c81784e58db38bbe333b5146798c80275  refa/src/games/toj/geometry.hpp
+2538cd70c88d5c7af652591e89a733e5fb690ef2601536c7520c62e61871c349  refa/src/games/toj/types.hpp
+a718d0010e2e26530f9b0a15da362e8f0a26be869a83783c4d2f051257df89b9  refa/src/core/board.hpp
+96adce0707e92314b6ff2aeb35990aedddb092590fdbe9f85a27690f04b9ed7e  refa/src/core/types.hpp
+7b907a15ac7d43d4b9d233aef0bf607b28b750e25de31a92837910b397cfa88b  refa/src/core/search_budget.hpp
+
+# Build commands behind the recorded binaries, after cmake -B out/build/linux-gcc-self-release
+# with the linux-gcc-self-release preset (CMAKE_CXX_FLAGS=-O3 -march=native -flto=2, Release).
+cmake --build out/build/linux-gcc-self-release --target reference_a_frozen arrival_candidates raw_bench_current raw_bench_frozen raw_bench_frozen_180fix fast_reachability_tests fast_reachability_perft
+# Per-target options: -O3 -march=native -DNDEBUG for every comparator, plus -flto from the root scope.
+# clang++ (user build for the Debug matrix) and g++ (GCC) 16.2.1 both build and pass the same gates.
