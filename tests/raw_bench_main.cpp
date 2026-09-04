@@ -145,7 +145,7 @@ double run_rep(std::vector<BOARD> const &boards, search::search_config const &cf
     for (auto const &board : boards)
     {
         auto const landings = search::template binary_bfs<B>(board, cfg, coord{reach_corpus::spawn_x, reach_corpus::spawn_y}, 0);
-        sink += static_cast<std::size_t>(landings_sum(landings.data(), landings.size()) >> rep);
+        sink += static_cast<std::size_t>(landings_sum(landings.data(), landings.size()) >> (rep % 32));
     }
     auto t1 = std::chrono::steady_clock::now();
     return static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count())
@@ -158,7 +158,7 @@ double run_extract_rep(std::vector<std::array<BOARD, 4>> const &stored, std::siz
     auto t0 = std::chrono::steady_clock::now();
     for (auto const &entry : stored)
     {
-        sink += static_cast<std::size_t>(landings_sum(entry.data(), B.shapes) >> rep);
+        sink += static_cast<std::size_t>(landings_sum(entry.data(), B.shapes) >> (rep % 32));
     }
     auto t1 = std::chrono::steady_clock::now();
     return static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count())
