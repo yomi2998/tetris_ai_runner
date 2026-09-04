@@ -333,6 +333,7 @@ namespace
 
     int dispatch_cases = 0;
     int dispatch_comparisons = 0;
+    int dispatch_comparisons_same_mode = 0;
 
     void run_dispatch_tests()
     {
@@ -427,6 +428,10 @@ namespace
                                     }
                                     check(semantic, "selected cut arrival equals full height arrival " + what);
                                     ++dispatch_comparisons;
+                                    if (Check)
+                                    {
+                                        ++dispatch_comparisons_same_mode;
+                                    }
                                 }
                             }
                             return 0;
@@ -448,8 +453,10 @@ int main()
     run_directed_cases();
     run_workspace_tests();
     run_dispatch_tests();
-    std::println("dispatch matrix: {} piece config board cases, {} cut versus full comparisons",
-        dispatch_cases, dispatch_comparisons);
+    std::println("dispatch matrix: {} piece config board cases, {} cut versus full comparisons, "
+        "{} same-mode and {} cross-mode",
+        dispatch_cases, dispatch_comparisons, dispatch_comparisons_same_mode,
+        dispatch_comparisons - dispatch_comparisons_same_mode);
     std::println("fast_reachability_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }
