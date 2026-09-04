@@ -183,7 +183,7 @@ function(reach_provenance target detail_name)
     cmake_parse_arguments(PROV "AUTO_GIT" "PREFIX" "SOURCES" ${ARGN})
     set(detail "${PROV_PREFIX}")
     if (PROV_AUTO_GIT AND GIT_EXECUTABLE)
-        execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+        execute_process(COMMAND ${GIT_EXECUTABLE} log -1 --format=%H -- src tests cmake CMakeLists.txt
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             OUTPUT_VARIABLE root_head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
         execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
