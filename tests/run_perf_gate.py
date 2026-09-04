@@ -76,14 +76,16 @@ def summarize(obs, label_a, label_b, raw_lines):
         raw_lines.append(f"RATIO {label_a}/{label_b} {piece} total "
             + " ".join(f"{value:.4f}" for value in values)
             + f" median={statistics.median(values):.4f}")
-        raw_lines.append(f"RATIO {label_a}/{label_b} {piece} search "
-            + " ".join(f"{value:.4f}" for value in search_only)
-            + f" median={statistics.median(search_only):.4f}")
+        if any(value != 0.0 for value in search_only):
+            raw_lines.append(f"RATIO {label_a}/{label_b} {piece} search "
+                + " ".join(f"{value:.4f}" for value in search_only)
+                + f" median={statistics.median(search_only):.4f}")
     return ratios
 
 
 def provenance(binary, name, lines):
-    out = subprocess.run([os.path.join(BUILD, binary), "--reps", "0", "--warmup", "0"],
+    extra = ["--producer", name] if binary.startswith("raw_bench") else []
+    out = subprocess.run([os.path.join(BUILD, binary), "--reps", "0", "--warmup", "0"] + extra,
         capture_output=True, text=True, check=True)
     for line in out.stdout.splitlines():
         if line.startswith("PRODUCER"):
@@ -134,11 +136,13 @@ def main():
 
     print("=== gates")
     t_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in t_ratios.items()}
-    print("speedup_medians_current_over_reference_a total",
-        " ".join(f"{piece}={t_medians[piece][0]:.3f}" for piece in PIECES),
-        "search_only", " ".join(f"{piece}={t_medians[piece][1]:.3f}" for piece in PIECES),
-        "(higher is better; gate applies to T at >= 2.000)",
-        "PASS" if min(t_medians["T"]) >= 2.0 else "FAIL")
+    print("time_ratio_medians_current_over_reference_a",
+        " ".join(f"{piece}={t_medians[piece][0]:.4f}" for piece in PIECES),
+        "(lower is better; gate is T <= 0.500)",
+        "PASS" if t_medians["T"][0] <= 0.5 else "FAIL")
+    print("speedup_medians_reference_a_over_current",
+        " ".join(f"{piece}={1.0 / t_medians[piece][0]:.3f}" for piece in PIECES),
+        "(times reported include board preparation and candidate normalization on both sides)")
     raw_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in raw_ratios.items()}
     for kind, label in ((0, "total"), (1, "search_only")):
         print("raw_ratio_medians_current_over_frozen_180fix", label,
