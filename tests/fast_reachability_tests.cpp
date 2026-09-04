@@ -331,95 +331,108 @@ namespace
         });
     }
 
+    int dispatch_cases = 0;
+    int dispatch_comparisons = 0;
+
     void run_dispatch_tests()
     {
         coord const spawn{4, 20};
-        std::vector<unsigned> roofs = {0, 5, 9, 10, 17, 18, 21, 22, 25, 40, 45};
+        std::vector<std::array<uint16_t, 48>> boards = scalar_arrival::make_corpus();
         std::mt19937 rng(20260906u);
-        for (unsigned occupied : roofs)
+        for (unsigned height : {5u, 9u, 10u, 17u, 18u, 21u, 22u, 25u, 40u, 45u})
         {
-            BOARD board;
-            for (unsigned y = 0; y < occupied && y < 48; ++y)
+            std::array<uint16_t, 48> rows = {};
+            for (unsigned y = 0; y < height; ++y)
             {
                 uint32_t row = rng();
+                uint16_t mask = 0;
                 for (int x = 0; x < 10; ++x)
                 {
                     if ((row >> x) & 1)
                     {
-                        board.set(x, static_cast<int>(y));
+                        mask |= static_cast<uint16_t>(1u << x);
                     }
                 }
+                if (mask == 0x3ff)
+                {
+                    mask &= 0x1ff;
+                }
+                rows[y] = mask;
             }
-            call_with_block<SRS>(Tetromino::from_name('T'), [&]<block B>() {
+            boards.push_back(rows);
+        }
+        for (char name : std::string_view("TZSJLOI"))
+        {
+            call_with_block<SRS>(Tetromino::from_name(name), [&]<block B>() {
                 constexpr int necessary = 20 + search::downmost_position<B>;
-                search::template dispatch_with_height<B, 20>(board, occupied, [&]<class Cut, bool Check>(Cut &nb, std::integral_constant<bool, Check>) {
-                    int const expected_cut = occupied + 3 <= 6 ? 6 : occupied + 3 <= 12 ? 12 : occupied + 3 <= 24 ? 24 : 48;
-                    check(Cut::height == expected_cut, "dispatch cut height for occupied " + std::to_string(occupied));
-                    bool expected_check = !(Cut::height < necessary) && occupied > unsigned(necessary);
-                    check(Check == expected_check, "dispatch check_consecutive for occupied " + std::to_string(occupied) + ": got " + std::to_string(Check));
+                for (auto const &sc : reach_corpus::all_configs)
+                {
                     search::search_config cfg{};
-                    cfg.allow_180 = true;
-                    cfg.allow_softdrop = true;
-                    cfg.allow_sonicdrop = true;
-                    search::search_workspace<B, Cut> cut_ws(nb);
-                    auto dispatched = search::template arrival_search<B, Check>(cut_ws, cfg, spawn, 0);
-                    auto cut_rows = nb.to_row_bitboard();
-                    Cut rebuilt{};
-                    std::array<typename Cut::row_t, Cut::height> reclipped = {};
-                    for (int y = 0; y < Cut::height; ++y)
+                    cfg.allow_180 = sc.allow_180;
+                    cfg.allow_softdrop = sc.allow_softdrop;
+                    cfg.allow_sonicdrop = sc.allow_sonicdrop;
+                    cfg.allow_20g = sc.allow_20g;
+                    for (std::size_t bi = 0; bi < boards.size(); ++bi)
                     {
-                        reclipped[y] = cut_rows[y];
-                    }
-                    rebuilt.template from_row_bitboard<true>(reclipped);
-                    search::search_workspace<B, Cut> manual_ws(rebuilt);
-                    auto manual = expected_check ? search::template arrival_search<B, true>(manual_ws, cfg, spawn, 0)
-                                                 : search::template arrival_search<B, false>(manual_ws, cfg, spawn, 0);
-                    bool ok = true;
-                    for (int o = 0; o < 4; ++o)
-                    {
-                        ok = ok && dispatched.normal_landings[o] == manual.normal_landings[o];
-                        ok = ok && dispatched.rotation_landings[o] == manual.rotation_landings[o];
-                    }
-                    check(ok, "dispatch threads cut board and flag correctly for occupied " + std::to_string(occupied));
-                    if constexpr (Cut::height < BOARD::height && Cut::height >= necessary)
-                    {
-                        search::search_workspace<B, BOARD> full_ws(board);
-                        auto full = expected_check ? search::template arrival_search<B, true>(full_ws, cfg, spawn, 0)
-                                                   : search::template arrival_search<B, false>(full_ws, cfg, spawn, 0);
-                        bool same_as_full = true;
-                        for (int o = 0; o < 4; ++o)
-                        {
-                            for (int w = 0; w < Cut::num_of_under; ++w)
+                        BOARD board = board_from_rows(boards[bi]);
+                        unsigned const occupied = board.highest_y();
+                        std::string what = std::string(1, name) + " board " + std::to_string(bi)
+                            + " cfg{" + std::to_string(sc.allow_180) + "," + std::to_string(sc.allow_softdrop)
+                            + "," + std::to_string(sc.allow_sonicdrop) + "," + std::to_string(sc.allow_20g) + "}";
+                        search::template dispatch_with_height<B, 20>(board, occupied,
+                            [&]<class Cut, bool Check>(Cut &nb, std::integral_constant<bool, Check>) {
+                            int const expected_cut = occupied + 3 <= 6 ? 6 : occupied + 3 <= 12 ? 12
+                                : occupied + 3 <= 24 ? 24 : 48;
+                            check(Cut::height == expected_cut, "dispatch cut height " + what);
+                            bool const expected_check = !(Cut::height < necessary) && occupied > unsigned(necessary);
+                            check(Check == expected_check, "dispatch check mode " + what);
+                            search::search_workspace<B, Cut> cut_ws(nb);
+                            auto dispatched = search::template arrival_search<B, Check>(cut_ws, cfg, spawn, 0);
+                            std::array<typename Cut::row_t, Cut::height> reclipped = {};
+                            auto cut_rows = nb.to_row_bitboard();
+                            for (int y = 0; y < Cut::height; ++y)
                             {
-                                same_as_full = same_as_full
-                                    && uint64_t(dispatched.normal_landings[o].logical_word(w)) == uint64_t(full.normal_landings[o].logical_word(w));
-                                same_as_full = same_as_full
-                                    && uint64_t(dispatched.rotation_landings[o].logical_word(w)) == uint64_t(full.rotation_landings[o].logical_word(w));
+                                reclipped[y] = cut_rows[y];
                             }
-                        }
-                        check(same_as_full, "cut arrival equals full-height arrival for occupied " + std::to_string(occupied));
-                        if (!same_as_full)
-                        {
-                            std::println(stderr, "cut {} versus full versus check {}", Cut::height, expected_check);
-                        }
-                        search::search_workspace<B, BOARD> other_ws(board);
-                        auto other = expected_check ? search::template arrival_search<B, false>(other_ws, cfg, spawn, 0)
-                                                    : search::template arrival_search<B, true>(other_ws, cfg, spawn, 0);
-                        bool flag_neutral = true;
-                        for (int o = 0; o < 4; ++o)
-                        {
-                            for (int w = 0; w < 8; ++w)
+                            Cut rebuilt{};
+                            rebuilt.template from_row_bitboard<true>(reclipped);
+                            search::search_workspace<B, Cut> manual_ws(rebuilt);
+                            auto manual = search::template arrival_search<B, Check>(manual_ws, cfg, spawn, 0);
+                            bool plumbing = true;
+                            for (int o = 0; o < B.orientations; ++o)
                             {
-                                flag_neutral = flag_neutral
-                                    && uint64_t(full.normal_landings[o].logical_word(w)) == uint64_t(other.normal_landings[o].logical_word(w));
-                                flag_neutral = flag_neutral
-                                    && uint64_t(full.rotation_landings[o].logical_word(w)) == uint64_t(other.rotation_landings[o].logical_word(w));
+                                plumbing = plumbing && dispatched.normal_landings[o] == manual.normal_landings[o];
+                                plumbing = plumbing && dispatched.rotation_landings[o] == manual.rotation_landings[o];
                             }
-                        }
-                        check(flag_neutral || expected_check, "selected check_consecutive mode matches the other mode on uncut low boards for occupied " + std::to_string(occupied));
+                            check(plumbing, "dispatch threads cut board and flag correctly " + what);
+                            ++dispatch_cases;
+                            if constexpr (Cut::height < BOARD::height)
+                            {
+                                if (Cut::height >= necessary)
+                                {
+                                    search::search_workspace<B, BOARD> full_ws(board);
+                                    auto full = search::template arrival_search<B, true>(full_ws, cfg, spawn, 0);
+                                    bool semantic = true;
+                                    for (int o = 0; o < B.orientations; ++o)
+                                    {
+                                        for (int w = 0; w < Cut::num_of_under; ++w)
+                                        {
+                                            semantic = semantic
+                                                && uint64_t(dispatched.normal_landings[o].logical_word(w))
+                                                == uint64_t(full.normal_landings[o].logical_word(w));
+                                            semantic = semantic
+                                                && uint64_t(dispatched.rotation_landings[o].logical_word(w))
+                                                == uint64_t(full.rotation_landings[o].logical_word(w));
+                                        }
+                                    }
+                                    check(semantic, "selected cut arrival equals full height arrival " + what);
+                                    ++dispatch_comparisons;
+                                }
+                            }
+                            return 0;
+                        });
                     }
-                    return 0;
-                });
+                }
                 return 0;
             });
         }
@@ -435,6 +448,8 @@ int main()
     run_directed_cases();
     run_workspace_tests();
     run_dispatch_tests();
+    std::println("dispatch matrix: {} piece config board cases, {} cut versus full comparisons",
+        dispatch_cases, dispatch_comparisons);
     std::println("fast_reachability_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }
