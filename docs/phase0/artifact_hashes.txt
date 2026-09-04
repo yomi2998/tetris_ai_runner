@@ -13,20 +13,23 @@ ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037  artifacts/froz
 # /home/icly/Documents/tetris_ai_runner_results/phase2/. The five comparator hashes below are
 # byte for byte the binary_sha256 values the campaign in perf_gate_results.txt recorded in
 # its environment block, and the reachability suites are the binaries that produced the
-# 17204-check, 9-of-9 CTest result. The comparators embed the last commit touching src,
-# tests, cmake, or CMakeLists.txt, so rebuilding this tree after documentation commits
-# reproduces these exact hashes. Regenerate with:
+# 17204-check, 10-of-10 CTest result. The comparators embed the last commit touching src,
+# tests, cmake, or CMakeLists.txt, the worktree state over those same paths, and the kernel
+# commit, so a clean stamp proves every tracked file under those paths, including all
+# transitively compiled headers and the submodule worktree, matches the stamped commit.
+# Rebuilding this tree after documentation commits reproduces these exact hashes. Regenerate
+# with:
 #   cmake -B out/build/linux-gcc-self-release -S .
 #   cmake --build out/build/linux-gcc-self-release
 #   make -C src/fast-reachability build/search_tests
-c54efd30339e5d32c0d0ecbb8efd96ceaeee134ecc75320779cbdf9fff190733  /home/icly/Documents/tetris_ai_runner_results/phase2/arrival_candidates
-a74eada77118658f0628daa2a2f8ce4ddecac8edc3208a76173625c04e3c7da8  /home/icly/Documents/tetris_ai_runner_results/phase2/fast_reachability_perft
-a74eada77118658f0628daa2a2f8ce4ddecac8edc3208a76173625c04e3c7da8  /home/icly/Documents/tetris_ai_runner_results/phase2/fast_reachability_tests
-b986c46e22b8be18f198f357f1d9e839f8aae96213079d1edbb4cdb9cad7d6ee  /home/icly/Documents/tetris_ai_runner_results/phase2/raw_bench_current
-4a7787c2f174eecae1accbdc19a453bb68e9ca52696ede6056fe2c037e171784  /home/icly/Documents/tetris_ai_runner_results/phase2/raw_bench_frozen
-a0f0b724b59d6189b4a6bdb2c85b91fcf3380071af3bc6cb40c12ace15ee8ae1  /home/icly/Documents/tetris_ai_runner_results/phase2/raw_bench_frozen_180fix
-67e2cc0675dea4f6f6b86c04445697896b01aada1cb8536946b4a8454cb6acf9  /home/icly/Documents/tetris_ai_runner_results/phase2/reference_a_frozen
-65bd9dc1bbe7b092d31abf707f86881990651402926e7302cc54feb1c13ce884  /home/icly/Documents/tetris_ai_runner_results/phase2/submodule_search_tests
+5ee1848a947f2c923c817972087e61e3879cd5244fe12c97e7ae60e17c530865  /home/icly/Documents/tetris_ai_runner_results/phase2/arrival_candidates
+3470beef692dc3852de50440c527133c9c42fddeb1976c2d1514b8cf93e373b2  /home/icly/Documents/tetris_ai_runner_results/phase2/fast_reachability_perft
+3470beef692dc3852de50440c527133c9c42fddeb1976c2d1514b8cf93e373b2  /home/icly/Documents/tetris_ai_runner_results/phase2/fast_reachability_tests
+70b9ed65c4b20c1a3e4f54a3117f676859b2b64c44dc00ba15021b1d7bba81f3  /home/icly/Documents/tetris_ai_runner_results/phase2/raw_bench_current
+d5791c8dbab780342bf19cb66b6253d6e1984920f1437abe4025ca584a04b7b4  /home/icly/Documents/tetris_ai_runner_results/phase2/raw_bench_frozen
+ac065ec9bc042dfec97333ccc0eadbb29698882e209bfd4820c87c15c749aa53  /home/icly/Documents/tetris_ai_runner_results/phase2/raw_bench_frozen_180fix
+168f578102a49e7c9c3c2a9f34108084f84620be4d72c25fa8d6dbc84dac1f3e  /home/icly/Documents/tetris_ai_runner_results/phase2/reference_a_frozen
+ee88393a80bbcd2d8a46ac2664974bf635cc3aafa7bc0ba25441ac6c812b46b6  /home/icly/Documents/tetris_ai_runner_results/phase2/submodule_search_tests
 
 # Frozen fast-reachability kernel preserved at 0c35e13, extracted with git show from the
 # submodule, byte for byte. Each blob hash below is the git blob id of the same path at
@@ -73,15 +76,15 @@ f578390595ee3b356d0ea204bb722d8dc10fe4a139ddecb198e0fab006ef906e  src/producer_i
 53996b33f012829babb8c356d3aecdf7ef5855269faf70470a4e111186d27925  tests/reach_corpus.h
 98f63ffc5c78bf6b619c4be5bfd6b970f9e12e708f7f536329781c640671312b  tests/raw_bench_main.cpp
 769ca3cd01d5c851e07403535cd35ad29d1bb84b94aeb8bb3b0ea5ba10650e29  tests/reference_a_frozen_main.cpp
-a2399c712ab7a55f2e847dae9552605c48bf9e4595749fc8e720f7dbfcd7e03d  tests/check_candidate_inclusion.py
+6d480f9adeac8b18a879d719d4fcfd84a7602222a7f621886f34fdd4a4e56185  tests/check_candidate_inclusion.py
 00db5d52a8f546bf860bd35ceab079974b0da6564b791eeaeb6843204561afe1  src/arrival_candidates.cpp
 272e9369dcdc41d958a3fd74b782821d76716100c41237b53cffac8118196557  tests/run_perf_gate.py
-9332f5d8396ec3cb7ad4ab31687df3ca549a14aa0d3f6333a6e57c1245351546  cmake/reach_parity_check.cmake
-e8dd8295ea0106ab2e1eb21d8fd6b6d1171487beb72e5bbd145a695a420321fe  CMakeLists.txt
+58da8976cbcd21938442038f348b3bd39bdffa18588954d2032b9112bbcc399b  cmake/reach_parity_check.cmake
+22ff2f5fc356c4fb55a9eef37c12f5ff5ca27b562220f8bf69306e791a0c888b  CMakeLists.txt
 fb924b6fe6403e71a5e9077a47cbe986354204ddebd91dfefc517449e1c55466  tests/scalar_arrival_oracle.h
-a24f9976f86ea4210e6fbbb398cc3af0045181fcb501da040e51196c1269d089  tests/fast_reachability_tests.cpp
+673b3766476cd7f124a720d44be8b8b16d3abfe2554f434f4470362d1d4b2f77  tests/fast_reachability_tests.cpp
 76b2460769f95ef6cebf20441fe80140a54055ae21587f17fea18994289e092c  src/fast-reachability/search.hpp
-70bb1e47ca4050294cfd1c82b448d4760bf78974064fef3d120bd02ee9939f16  src/fast-reachability/search_tests.cpp
+b9d6ea6dc7f07c990164fcfee9bcb7ebe0594a51ae2d513723909b8861ca57f3  src/fast-reachability/search_tests.cpp
 
 # Reference A sources compiled into reference_a_frozen
 refa_root=e9a90d8dbc8e2e5f513691c1c83b211097fb21eb refa_src_worktree=clean refa_kernel=0c35e130abb733caefababe0d08c8faf466740e7
@@ -96,13 +99,13 @@ a718d0010e2e26530f9b0a15da362e8f0a26be869a83783c4d2f051257df89b9  refa/src/core/
 
 # Campaign build and verification commands, chained so a failed build cannot be
 # mistaken for a passing test
-cmake -B out/build/linux-gcc-self-release -S . && cmake --build out/build/linux-gcc-self-release && (cd out/build/linux-gcc-self-release && ctest)   # 9 of 9
+cmake -B out/build/linux-gcc-self-release -S . && cmake --build out/build/linux-gcc-self-release && (cd out/build/linux-gcc-self-release && ctest)   # 10 of 10
 PERF_GATE_CORE=6 PERF_GATE_REPS=5 PERF_GATE_ITERS_T=300 PERF_GATE_ITERS_RAW=3000 \
   python3 tests/run_perf_gate.py out/build/linux-gcc-self-release
 cmake -B out/build/san -S . -DCMAKE_BUILD_TYPE=Debug -DTETRIS_SANITIZERS=ON \
-  && cmake --build out/build/san && (cd out/build/san && ctest -E perft)                      # 8 of 8
-cmake --preset linux-gcc-debug && cmake --build --preset build-linux-gcc-debug && ctest --preset ... # 9 of 9
-cmake --preset linux-clang-debug && cmake --build --preset build-linux-clang-debug            # 9 of 9
-cmake --preset linux-clang-self-release && cmake --build --preset build-linux-clang-self-release  # 9 of 9
+  && cmake --build out/build/san && (cd out/build/san && ctest -E perft)                      # 9 of 9
+cmake --preset linux-gcc-debug && cmake --build --preset build-linux-gcc-debug && ctest --preset ... # 10 of 10
+cmake --preset linux-clang-debug && cmake --build --preset build-linux-clang-debug            # 10 of 10
+cmake --preset linux-clang-self-release && cmake --build --preset build-linux-clang-self-release  # 10 of 10
 # Comparator targets compile with -O3 -march=native -DNDEBUG; the root scope adds -flto
 # except in the sanitizer build. gcc (GCC) 16.2.1 and clang 22.1.8 both build and pass.

@@ -190,8 +190,8 @@ Implemented in the submodule and root tests:
   returns a truthy sentinel outside the board, so the old `is_valid` accepted any
   out of range coordinate and `try_rotate` could return an anchor at row 48 after
   an upward kick from row 47. Anchors, rotations, and results are range checked,
-  and the submodule suite pins the invariant across the top rows for every piece
-  on boards with a row 46 and 47 fringe.
+  and the submodule suite pins the invariant across the top rows for all seven
+  pieces on boards with a row 46 and 47 fringe.
 - Comparators: `reference_a_frozen` builds the pinned Reference A
   `ReachabilitySearch` from `/home/icly/Documents/GitHub/tet` unchanged, and
   `tests/frozen_0c35e13` plus `tests/frozen_0c35e13_180fix` preserve the frozen
@@ -200,20 +200,31 @@ Implemented in the submodule and root tests:
   `raw_bench_frozen_180fix` compile one shared bench source against one kernel
   each, and print provenance (root commit, worktree state, kernel commits, and
   source digests) plus per-case hashes.
-- Six CTest gates for the comparators: raw landing parity against the frozen
-  kernel with the 180 fix under production flags, raw parity against the plain
-  frozen kernel with 180 off, byte-identical T contract against Reference A with
+- Seven CTest comparator gates: raw landing parity against the frozen kernel
+  with the 180 fix under production flags, raw parity against the plain frozen
+  kernel with 180 off, byte-identical T contract against Reference A with
   180 off, key-by-key Reference A containment with 180 on
   (`tests/check_candidate_inclusion.py`, which compares dumped candidate keys
-  rather than counts), and two warmup smoke runs of the raw harness that must
-  exit clean under a sanitizer build (`-DTETRIS_SANITIZERS=ON`).
+  rather than counts), and three warmup smoke runs, one per compiled raw
+  comparator, that must exit clean under a sanitizer build
+  (`-DTETRIS_SANITIZERS=ON`). Both parity mechanisms require the full corpus:
+  the row-comparison script fails unless both sides emit exactly the expected
+  259 rows, and the inclusion checker fails unless both sides report the
+  complete seven piece by 37 board grid, so mutually empty or partial outputs
+  cannot pass. In the sanitizer build UBSan reports are fatal
+  (`-fno-sanitize-recover=undefined`), every CTest runs with
+  `UBSAN_OPTIONS=halt_on_error=1`, and CTest fails on any `runtime error:`
+  output.
 - Submodule tests (`search_tests.cpp`) for set gravity, 180 propagation, spawn
   seeding provenance on hand-verified minimal boards, `move_checker` bounds, and
   height dispatch.
 - A dispatch matrix over 7 pieces, 8 movement configurations, and 47 boards
   (2632 cases) which asserts that whenever the selected cut still holds the
   spawn pose, the arrival result equals the full-height result: 672 such
-  cut-versus-full comparisons, all equal. The previous revision compared T only,
+  cut-versus-full comparisons, all equal, of which 104 compare a selected
+  `check_consecutive=true` cut against full-height true and 568 compare a
+  dispatch-selected false mode against full-height true. The suite prints the
+  split. The previous revision compared T only,
   in one configuration, and its mode-neutrality assertion passed vacuously
   whenever the rule selected true.
 
@@ -233,8 +244,8 @@ Verified results:
   with no sanitizer reports.
 - Perft vectors exact (8 vectors, dedicated optimized CTest, unchanged values
   from the frozen baseline).
-- Submodule tests: 12633 checks, 0 failures.
-- CTest: 9 of 9 in all four compiler and configuration combinations, and 8 of 8
+- Submodule tests: 18889 checks, 0 failures.
+- CTest: 10 of 10 in all four compiler and configuration combinations, and 9 of 9
   in the sanitizer build excluding the sanitizer-free perft target.
 - Reference A parity: with 180 off on both sides the 259-row normalized T
   contract is byte identical (corpus hash `27f4998e663f3604`), so the timing
@@ -243,16 +254,23 @@ Verified results:
   Reference A cannot emit any 180 arrival because its frozen kernel ignores
   `allow_180`, which the recorded hashes show directly (its 180-on corpus hash
   equals its 180-off corpus hash).
-- Gates: T semantic enumeration is 10.66 times faster than the real Reference A
+- Gates: T semantic enumeration is 10.91 times faster than the real Reference A
   wrapper (gate: 2 times). Raw non-T BFS against the equal-semantics frozen
-  comparator is faster on every piece, worst non-T ratio 0.9922 total and 0.9694
-  search-only (gate: at most 1.020). Details, protocol, environment, and raw run
-  rows are in `docs/phase0/perf_gate_results.txt`; comparator, preserved frozen
+  comparator is faster on every piece, worst non-T ratio 0.9790 total and 0.9750
+  search-only (gate: at most 1.020). The informational 180-off comparison
+  against the plain frozen kernel straddles parity on its smallest piece from
+  campaign to campaign, 0.9538, 0.9790, and 1.0377 across three runs with
+  identical output hashes, and is analyzed in the record. Details, protocol,
+  environment, and raw run rows are in
+  `docs/phase0/perf_gate_results.txt`; comparator, preserved frozen
   source, and Reference A source hashes are in
   `docs/phase0/artifact_hashes.txt`. An earlier raw campaign in that file was
   withdrawn because the harness shifted by a negative exponent during warmup;
   the corrected harness, sanitizer smoke tests, and a fresh campaign replaced
-  it, with identical output hashes.
+  it, with identical output hashes. Review then found that UBSan recovered by
+  default, so the defective shift still exited zero and the smoke gates were a
+  false pass; UBSan reports are fatal now, and re-introducing the signed shift
+  fails all three warmup smoke gates in the sanitizer build.
 - Open note for Phase 3: the frozen raw path reported per-orientation caches that
   included spawn poses reachable only by "spawning in that orientation" for
   pieces with non-identity rotation offsets (Z, S, I). With authoritative
