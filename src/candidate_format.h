@@ -59,10 +59,22 @@ public:
         keys_.push_back(fnv_mix(occupancy, static_cast<uint64_t>(channel)));
     }
 
+    void set_dump(bool enabled) noexcept
+    {
+        dump_ = enabled;
+    }
+
     void end_case()
     {
         std::sort(keys_.begin(), keys_.end());
         keys_.erase(std::unique(keys_.begin(), keys_.end()), keys_.end());
+        if (dump_)
+        {
+            for (uint64_t key : keys_)
+            {
+                std::println("KEY {} {} {:016x}", piece_, board_, key);
+            }
+        }
         uint64_t hash = fnv_offset;
         for (uint64_t key : keys_)
         {
@@ -89,6 +101,7 @@ private:
     char piece_ = '?';
     std::size_t board_ = 0;
     bool keep_arrival_ = false;
+    bool dump_ = false;
     std::size_t cases_ = 0;
     std::size_t total_ = 0;
     uint64_t corpus_ = fnv_offset;

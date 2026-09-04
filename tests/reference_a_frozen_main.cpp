@@ -25,6 +25,7 @@ struct Options
     int reps = 5;
     int warmup = 2;
     bool allow_180 = true;
+    bool dump_keys = false;
 };
 
 Options parse_args(int argc, char **argv)
@@ -44,6 +45,10 @@ Options parse_args(int argc, char **argv)
         else if (arg == "--no-180")
         {
             o.allow_180 = false;
+        }
+        else if (arg == "--dump-keys")
+        {
+            o.dump_keys = true;
         }
     }
     return o;
@@ -136,6 +141,7 @@ int main(int argc, char **argv)
     search.init(info);
 
     candfmt::Report report;
+    report.set_dump(opts.dump_keys);
     for (char piece : std::string_view(reach_corpus::pieces)) {
         for (std::size_t b = 0; b < boards.size(); ++b) {
             Board board = board_from_rows(boards[b]);
