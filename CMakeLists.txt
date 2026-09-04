@@ -20,7 +20,7 @@ enable_testing()
 
 string(TOLOWER "${CMAKE_CXX_COMPILER}" _cxx_compiler_lower)
 
-if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT TETRIS_SANITIZERS)
     add_compile_options(-flto)
     add_link_options(-flto)
 endif()
