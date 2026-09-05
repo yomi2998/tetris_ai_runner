@@ -153,8 +153,15 @@ add_test(NAME path_differential COMMAND path_differential)
 
 add_executable(toj_policy_tests
     tests/toj_policy_tests.cpp
+    src/toj_policy.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
 )
-target_include_directories(toj_policy_tests PRIVATE src tests)
+target_link_libraries(toj_policy_tests PRIVATE fast_reachability)
+target_include_directories(toj_policy_tests PRIVATE src tests src/fast-reachability)
 target_compile_definitions(toj_policy_tests PRIVATE
     TETRIS_POLICY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/docs/phase5/fixtures")
 add_test(NAME toj_policy_tests COMMAND toj_policy_tests)

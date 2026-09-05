@@ -52,6 +52,7 @@ namespace
         engine.search_config()->last_rotate = false;
         engine.ai_config()->table = combo_table;
         engine.ai_config()->table_max = combo_table_max;
+        engine.ai_config()->safe = 0;
         engine.ai_config()->param = frozen_param();
         return engine;
     }
