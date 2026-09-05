@@ -382,7 +382,7 @@ self-release, and 10 of 10 in the sanitizer build excluding perft.
 ## Phase 4 status
 
 Implemented in `src/toj_pathfinder.h` and gated by
-`tests/path_differential.cpp` (CTest `path_differential`, 98040 checks,
+`tests/path_differential.cpp` (CTest `path_differential`, 135772 checks,
 0 failures):
 
 - Fixed-array breadth-first search over pose and arrival class on the full
@@ -406,9 +406,12 @@ Implemented in `src/toj_pathfinder.h` and gated by
   the placement. Non-T candidates keep the conventional normal label while
   preferring a non-rotation ending; a rotation ending is allowed only where
   both the finder and the independent scalar channel oracle agree no normal
-  landing exists, which the suite asserts per candidate, with fallback
-  totals of 81 and 62 pinned for the seeded corpus and 116 and 85 for the
-  reach corpus. Floating terminal candidates receive no path.
+  landing exists, which the suite asserts per candidate from the pre-lock
+  path endpoint so a moving final hard drop cannot hide an invalid
+  rotation ending, with fallback totals of 81 and 62 pinned for the
+  seeded corpus and 116 and 85 for the reach corpus. Both replay layers
+  must agree on the pre-lock arrival. Floating terminal candidates
+  receive no path.
 - A production replay interpreter over the same legality and kick routines
   proves every command legal, first-valid kicks, exact final placement and
   arrival class (placement only for non-T), and an unmoved terminal
