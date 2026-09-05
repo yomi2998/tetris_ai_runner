@@ -220,7 +220,8 @@ Implemented in the submodule and root tests:
   height dispatch.
 - A dispatch matrix over 7 pieces, 8 movement configurations, and 47 boards
   (2632 cases) which asserts that whenever the selected cut still holds the
-  spawn pose, the arrival result equals the full-height result: 672 such
+  spawn pose, the arrival result equals the full-height result over the rows the
+  selected cut board can represent, which is what the two boards share: 672 such
   cut-versus-full comparisons, all equal, of which 104 compare a selected
   `check_consecutive=true` cut against full-height true and 568 compare a
   dispatch-selected false mode against full-height true. The suite prints the
@@ -281,3 +282,32 @@ Verified results:
 ## Rollback
 
 Revert the submodule commit and the root pointer. Phases 0 and 1 remain usable.
+
+## Phase 2 closure hardening
+
+The closure audit left one test-hardening follow-up, applied immediately after
+closure and before Phase 3 work:
+
+- `tests/check_candidate_inclusion.py` now requires the board identifiers to be
+  exactly 0 to 36 and rejects duplicate `CASE` records, so a shifted or padded
+  synthetic corpus cannot pass as the full grid. A probe corpus using board
+  identifiers 1 to 37 on both sides now fails with "corpus incomplete: board
+  identifiers", and a probe with a repeated `CASE` line fails with "duplicate
+  CASE record".
+- `cmake/reach_parity_check.cmake` now extracts the piece and board identity of
+  every selected row and fails unless both sides produce the expected number of
+  distinct identities, so repeated or malformed rows cannot satisfy the row
+  count. A probe emitting 259 rows that all share one identity now fails with
+  "expected 259 distinct CASE identities ... but found 1".
+- The root suite asserts that the dispatch comparison split keeps both the
+  same-mode and cross-mode comparisons nonempty, so a future change that
+  empties either mode fails the suite instead of only printing a zero.
+- The dispatch record now states that cut-versus-full equality is over the rows
+  the selected cut board can represent, which is what the suite compares.
+
+The root suite reports 17206 checks with perft and 17198 without after these
+assertions; the dispatch counts are unchanged (2632 cases, 672 comparisons, 104
+same-mode, 568 cross-mode) and the corpus and contract hashes are unchanged.
+The Phase 2 campaign record stays pinned to its recorded commit: the comparator
+bytes embed the last code commit, so reproducing the recorded binary hashes
+after later code commits requires checking out the recorded commit `0d03459`.

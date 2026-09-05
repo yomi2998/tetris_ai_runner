@@ -453,6 +453,9 @@ int main()
     run_directed_cases();
     run_workspace_tests();
     run_dispatch_tests();
+    check(dispatch_comparisons_same_mode > 0, "dispatch matrix keeps same-mode comparisons");
+    check(dispatch_comparisons - dispatch_comparisons_same_mode > 0,
+        "dispatch matrix keeps cross-mode comparisons");
     std::println("dispatch matrix: {} piece config board cases, {} cut versus full comparisons, "
         "{} same-mode and {} cross-mode",
         dispatch_cases, dispatch_comparisons, dispatch_comparisons_same_mode,

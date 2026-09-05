@@ -17,7 +17,9 @@ ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037  artifacts/froz
 # tests, cmake, or CMakeLists.txt, the worktree state over those same paths, and the kernel
 # commit, so a clean stamp proves every tracked file under those paths, including all
 # transitively compiled headers and the submodule worktree, matches the stamped commit.
-# Rebuilding this tree after documentation commits reproduces these exact hashes. Regenerate
+# Rebuilding this tree after documentation commits reproduces these exact hashes;
+# code commits after the recorded commit move the embedded stamp, so reproduce
+# these bytes by checking out the recorded commit. Regenerate
 # with:
 #   cmake -B out/build/linux-gcc-self-release -S .
 #   cmake --build out/build/linux-gcc-self-release

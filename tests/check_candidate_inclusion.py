@@ -20,7 +20,10 @@ def collect(executable, extra):
         if parts[0] == "KEY" and len(parts) == 4:
             keys.setdefault((parts[1], int(parts[2])), set()).add(parts[3])
         elif parts[0] == "CASE" and len(parts) == 5:
-            rows[(parts[1], int(parts[2]))] = int(parts[3])
+            case = (parts[1], int(parts[2]))
+            if case in rows:
+                raise SystemExit(f"duplicate CASE record {case[0]} {case[1]}")
+            rows[case] = int(parts[3])
         elif parts[0] == "CORPUS":
             corpus = " ".join(parts[1:])
     for case in rows:
@@ -37,12 +40,12 @@ def require_corpus(rows, name):
     problems = []
     if pieces != EXPECTED_PIECES:
         problems.append(f"pieces seen {sorted(pieces)}")
-    if len(boards) != EXPECTED_BOARD_COUNT:
-        problems.append(f"{len(boards)} distinct boards")
+    if boards != set(range(EXPECTED_BOARD_COUNT)):
+        problems.append(f"board identifiers {sorted(boards)}")
     if len(rows) != len(EXPECTED_PIECES) * EXPECTED_BOARD_COUNT:
         problems.append(f"{len(rows)} cases")
     for piece in sorted(EXPECTED_PIECES):
-        for board in sorted(boards):
+        for board in range(EXPECTED_BOARD_COUNT):
             if (piece, board) not in rows:
                 problems.append(f"missing case {piece} board {board}")
     if problems:

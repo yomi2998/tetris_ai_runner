@@ -217,7 +217,8 @@ then restoring the committed source, so the tests are known to be able to fail.
   0 distinct boards; 0 cases". Both previously exited zero.
 - With the committed sources, all 8 movement configurations match the scalar
   command oracle on all 37 boards in both `check_consecutive` modes, and the
-  dispatch matrix reproduces full-height arrivals in all 672 cases where the
+  dispatch matrix reproduces the full-height arrival rows that the selected cut
+  board can represent in all 672 cases where the
   selected cut still holds the spawn pose: 104 of those compare a selected
   `check_consecutive` cut against full-height true, isolating same-mode cut
   equivalence, and 568 compare a dispatch-selected false mode against full-height
