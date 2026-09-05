@@ -307,6 +307,79 @@ namespace
         std::println("directed replay: production rejections and lock arrival reset");
     }
 
+    void run_directed_t_normal_arrival_tests(Engine &engine)
+    {
+        auto model = published_replay::measure_frames(engine);
+        Board empty;
+        std::array<std::uint16_t, 48> rows = {};
+        PathConfig on{};
+        on.allow_180 = true;
+        Placement const spawn = Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+        Candidate const target{Placement::unchecked(1, 0, 0), ArrivalClass::Normal};
+        auto expected = sorted_cells_of(Piece::T, target.placement);
+        {
+            auto open = replay_path(empty, Piece::T, spawn, "lll", on, false);
+            check(open.valid && open.placement == Placement::unchecked(1, 20, 0)
+                && open.arrival == ArrivalClass::Normal,
+                "directed T-normal witness ends without rotation before lock");
+            auto locked = replay_path(empty, Piece::T, spawn, "lll", on, true);
+            check(locked.valid && locked.placement == target.placement
+                && locked.arrival == ArrivalClass::Normal,
+                "directed T-normal witness locks the floor candidate as normal");
+            auto independent_open =
+                published_replay::replay(model, rows, 'T', 3, 21, 0, "lll", false, true);
+            check(independent_open.valid && independent_open.arrival == 0,
+                "directed T-normal witness is normal before lock in the independent replay");
+            auto independent_locked =
+                published_replay::replay(model, rows, 'T', 3, 21, 0, "lll", true, true);
+            check(independent_locked.valid && independent_locked.cells == expected
+                && independent_locked.arrival == 0,
+                "directed T-normal witness locks the floor candidate in the independent replay");
+        }
+        {
+            auto open = replay_path(empty, Piece::T, spawn, "lllcz", on, false);
+            check(open.valid && open.placement == Placement::unchecked(1, 20, 0)
+                && open.arrival == ArrivalClass::TerminalRotation,
+                "directed T-normal mutation ends with rotation before lock");
+            auto locked = replay_path(empty, Piece::T, spawn, "lllcz", on, true);
+            check(locked.valid && locked.placement == target.placement
+                && locked.arrival == ArrivalClass::Normal,
+                "directed T-normal mutation hides rotation after the moving lock");
+            check(!(open.valid && open.arrival == ArrivalClass::Normal),
+                "directed T-normal mutation fails the required pre-lock arrival");
+            auto independent_open =
+                published_replay::replay(model, rows, 'T', 3, 21, 0, "lllcz", false, true);
+            check(independent_open.valid && independent_open.arrival == 1,
+                "directed T-normal mutation is terminal before lock in the independent replay");
+            auto independent_locked =
+                published_replay::replay(model, rows, 'T', 3, 21, 0, "lllcz", true, true);
+            check(independent_locked.valid && independent_locked.cells == expected
+                && independent_locked.arrival == 0,
+                "directed T-normal mutation locks the floor candidate in the independent replay");
+            check(!(independent_open.valid && independent_open.arrival == 0),
+                "directed T-normal mutation fails the independent pre-lock arrival");
+            check((open.arrival == ArrivalClass::TerminalRotation)
+                    == (independent_open.arrival == 1),
+                "directed T-normal mutation keeps layer agreement while hiding rotation");
+        }
+        {
+            Pathfinder finder(empty, Piece::T, spawn, on);
+            Path found = finder.find(target);
+            check(found.valid, "directed T-normal finder reaches the floor candidate");
+            if (found.valid)
+            {
+                auto open = replay_path(empty, Piece::T, spawn, found.view(), on, false);
+                check(open.valid && open.arrival == ArrivalClass::Normal,
+                    "directed T-normal finder path has the required pre-lock arrival");
+                auto independent_open = published_replay::replay(model, rows, 'T', 3, 21, 0,
+                    found.view(), false, true);
+                check(independent_open.valid && independent_open.arrival == 0,
+                    "directed T-normal finder path has the independent pre-lock arrival");
+            }
+        }
+        std::println("directed T-normal: valid witness keeps normal pre-lock arrival");
+    }
+
     struct PathTallies
     {
         std::size_t candidates = 0;
@@ -388,6 +461,15 @@ namespace
             check((open.arrival == ArrivalClass::TerminalRotation)
                     == (independent_open.arrival == 1),
                 what + " replay layers agree on the pre-lock arrival");
+            if (piece == Piece::T)
+            {
+                check(open.valid && open.arrival == candidate.arrival,
+                    what + " has the required T pre-lock arrival");
+                check(independent_open.valid
+                        && independent_open.arrival
+                            == (candidate.arrival == ArrivalClass::TerminalRotation ? 1 : 0),
+                    what + " independent replay has the required T pre-lock arrival");
+            }
             if (piece != Piece::T && open.arrival == ArrivalClass::TerminalRotation)
             {
                 check(!finder.normal_path_exists(candidate),
@@ -621,6 +703,7 @@ int main()
     Engine engine = make_engine();
     run_directed_interpreter_tests(engine);
     run_directed_replay_tests();
+    run_directed_t_normal_arrival_tests(engine);
     run_start_placement_tests();
     run_terminal_validity_tests();
     run_selection_integration_tests();
