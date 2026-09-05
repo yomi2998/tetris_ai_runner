@@ -249,6 +249,22 @@ namespace published_replay
                 }
                 arrival = 0;
             }
+            else if (command == 'L')
+            {
+                while (cells_fit(cells_at(model, piece, r, x - 1, y), rows))
+                {
+                    --x;
+                }
+                arrival = 0;
+            }
+            else if (command == 'R')
+            {
+                while (cells_fit(cells_at(model, piece, r, x + 1, y), rows))
+                {
+                    ++x;
+                }
+                arrival = 0;
+            }
             else
             {
                 return {};

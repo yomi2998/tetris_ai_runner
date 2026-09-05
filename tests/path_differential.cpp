@@ -149,6 +149,18 @@ namespace
             check(!result.valid, "directed removed command fails the replay");
         }
         {
+            auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "L", false, true);
+            published_replay::Cells expected{{{0, 20}, {1, 20}, {1, 21}, {2, 20}}};
+            check(result.valid && result.cells == expected && result.rotation == 0 && result.arrival == 0,
+                "directed wall command slides to the left wall");
+        }
+        {
+            auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "R", false, true);
+            published_replay::Cells expected{{{7, 20}, {8, 20}, {8, 21}, {9, 20}}};
+            check(result.valid && result.cells == expected && result.rotation == 0 && result.arrival == 0,
+                "directed wall command slides to the right wall");
+        }
+        {
             auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "x", true, false);
             check(!result.valid, "directed disabled 180 fails the replay");
         }
@@ -157,6 +169,30 @@ namespace
             published_replay::Cells expected{{{3, 20}, {4, 19}, {4, 20}, {5, 20}}};
             check(result.valid && result.cells == expected && result.rotation == 2 && result.arrival == 1,
                 "directed identity-kick 180 keeps the box");
+        }
+        {
+            auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "z", false, true);
+            published_replay::Cells expected{{{3, 20}, {4, 19}, {4, 20}, {4, 21}}};
+            check(result.valid && result.cells == expected && result.rotation == 3 && result.arrival == 1,
+                "directed counter-clockwise rotation marks the arrival");
+        }
+        {
+            auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "c", true, true);
+            published_replay::Cells expected{{{4, 0}, {4, 1}, {4, 2}, {5, 1}}};
+            check(result.valid && result.cells == expected && result.rotation == 1 && result.arrival == 0,
+                "directed moving lock resets arrival after clockwise rotation");
+        }
+        {
+            auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "z", true, true);
+            published_replay::Cells expected{{{3, 1}, {4, 0}, {4, 1}, {4, 2}}};
+            check(result.valid && result.cells == expected && result.rotation == 3 && result.arrival == 0,
+                "directed moving lock resets arrival after counter-clockwise rotation");
+        }
+        {
+            auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "x", true, true);
+            published_replay::Cells expected{{{3, 1}, {4, 0}, {4, 1}, {5, 1}}};
+            check(result.valid && result.cells == expected && result.rotation == 2 && result.arrival == 0,
+                "directed moving lock resets arrival after 180 rotation");
         }
         {
             auto dropped = published_replay::replay(model, rows, 'T', 3, 21, 0, "cD", true, true);
@@ -175,11 +211,24 @@ namespace
         on.allow_180 = true;
         PathConfig off{};
         off.allow_180 = false;
-        for (char command : {'X', 'Z', 'C', 'L', 'R'})
+        check(Path::capacity == 1024, "exported buffer capacity is pinned");
+        check(Path::max_payload + 3 == Path::capacity,
+            "exported payload leaves room for v, V, and null");
+        for (char command : {'X', 'Z', 'C'})
         {
             std::string input(1, command);
             check(!replay_path(empty, Piece::T, spawn, input, on, true).valid,
                 std::string("production replay rejects removed command ") + command);
+        }
+        {
+            auto left = replay_path(empty, Piece::T, spawn, "L", on, false);
+            check(left.valid && left.placement == Placement::unchecked(1, 20, 0)
+                && left.arrival == ArrivalClass::Normal,
+                "production replay slides wall commands to the wall");
+            auto right = replay_path(empty, Piece::T, spawn, "R", on, false);
+            check(right.valid && right.placement == Placement::unchecked(8, 20, 0)
+                && right.arrival == ArrivalClass::Normal,
+                "production replay slides wall commands to the right wall");
         }
         check(!replay_path(empty, Piece::T, spawn, "x", off, true).valid,
             "production replay rejects disabled 180");
@@ -242,6 +291,7 @@ namespace
         std::size_t candidates = 0;
         std::size_t terminal = 0;
         std::size_t longest = 0;
+        std::size_t skipped = 0;
     };
 
     void check_piece_paths(Board const &board, std::array<std::uint16_t, 48> const &rows,
@@ -373,14 +423,57 @@ namespace
         {
             Placement const spawn = Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
             Pathfinder held(empty, Piece::T, spawn, config);
-            Pathfinder canonical(empty, Piece::T, spawn, config);
             Path held_path = held.find(target);
-            Path canonical_path = canonical.find(target);
-            check(held_path.valid && canonical_path.valid
-                && held_path.view() == canonical_path.view(),
-                "post-hold spawn search matches the canonical spawn search");
+            check(held_path.valid, "post-hold spawn search reaches the floor candidate");
+            Pathfinder other(empty, Piece::J, spawn, config);
+            Candidate const other_target{Placement::unchecked(4, 0, 0), ArrivalClass::Normal};
+            Path other_path = other.find(other_target);
+            check(other_path.valid, "post-hold search for the held piece starts from its spawn");
+            if (other_path.valid)
+            {
+                auto replayed = replay_path(empty, Piece::J, spawn, other_path.view(), config, true);
+                check(replayed.valid && replayed.placement == other_target.placement,
+                    "post-hold search for the held piece replays from its spawn");
+            }
         }
         std::println("start placements: translated, rotated, obstructed, and post-hold starts");
+    }
+
+    void run_terminal_validity_tests()
+    {
+        Board empty;
+        PathConfig config{};
+        Placement const spawn = Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+        {
+            Candidate const floating{Placement::unchecked(1, 1, 0), ArrivalClass::TerminalRotation};
+            Pathfinder finder(empty, Piece::T, spawn, config);
+            check(!finder.find(floating).valid, "floating terminal candidates receive no path");
+        }
+        {
+            auto listed = enumerate_candidates(empty, Piece::T, MovementConfig{true});
+            bool saw_terminal = false;
+            Pathfinder finder(empty, Piece::T, spawn, config);
+            for (auto const &candidate : listed)
+            {
+                if (candidate.arrival != ArrivalClass::TerminalRotation)
+                {
+                    continue;
+                }
+                saw_terminal = true;
+                Path path = finder.find(candidate);
+                check(path.valid, "landed terminal candidates receive a path");
+                if (path.valid)
+                {
+                    auto replayed = replay_path(empty, Piece::T, spawn, path.view(), config, true);
+                    check(replayed.valid && replayed.placement == candidate.placement
+                        && replayed.arrival == ArrivalClass::TerminalRotation,
+                        "landed terminal paths replay exactly");
+                }
+                break;
+            }
+            check(saw_terminal, "empty board T enumeration holds a terminal candidate");
+        }
+        std::println("terminal validity: floating terminal rejected, landed terminal accepted");
     }
 
     void run_selection_integration_tests()
@@ -407,10 +500,8 @@ namespace
                     break;
                 }
             }
-            int constructions = 0;
             Path selected_path;
             {
-                ++constructions;
                 PathConfig config{};
                 Placement const spawn =
                     Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
@@ -420,7 +511,6 @@ namespace
                 check(again.valid == selected_path.valid && again.view() == selected_path.view(),
                     "repeated finds reuse the single search");
             }
-            check(constructions == 1, "selection builds exactly one pathfinder");
             check(selected_path.valid, "selected candidate has a path");
             if (selected_path.valid)
             {
@@ -432,7 +522,7 @@ namespace
                     "selected path replays to the selected placement");
             }
         }
-        std::println("selection integration: one pathfinder construction per selected move");
+        std::println("selection shape: one finder per selection with deterministic reuse");
     }
 
     PathTallies run_reach_corpus_path_tests(Engine &engine, bool allow_180)
@@ -441,7 +531,6 @@ namespace
         auto corpus = reach_corpus::make();
         check(corpus.size() == 37, "reach corpus holds 37 boards");
         PathTallies tallies;
-        std::size_t skipped = 0;
         for (auto const &rows : corpus)
         {
             Board const board = Board::from_rows(rows);
@@ -455,14 +544,15 @@ namespace
                 {
                     check(!toj_alias::can_spawn(board, piece),
                         "empty candidate set only under spawn obstruction");
-                    ++skipped;
+                    ++tallies.skipped;
                     continue;
                 }
                 check_piece_paths(board, rows, model, piece, *p, allow_180, listed, tallies);
             }
         }
         std::println("reach corpus paths{}: {} candidates, {} terminal, longest {} commands, {} skipped",
-            allow_180 ? "" : " 180 off", tallies.candidates, tallies.terminal, tallies.longest, skipped);
+            allow_180 ? "" : " 180 off", tallies.candidates, tallies.terminal, tallies.longest,
+            tallies.skipped);
         return tallies;
     }
 }
@@ -475,16 +565,18 @@ int main()
     run_start_placement_tests();
     run_selection_integration_tests();
     PathTallies on = run_corpus_path_tests(engine, true);
-    check(on.candidates == 4980 && on.terminal == 721,
+    check(on.candidates == 4980 && on.terminal == 721 && on.longest == 17,
         "seeded corpus candidate totals are pinned");
     PathTallies off = run_corpus_path_tests(engine, false);
-    check(off.candidates == 4935 && off.terminal == 721,
+    check(off.candidates == 4935 && off.terminal == 721 && off.longest == 13,
         "seeded corpus 180-off candidate totals are pinned");
     PathTallies reach_on = run_reach_corpus_path_tests(engine, true);
-    check(reach_on.candidates == 4535 && reach_on.terminal == 640,
+    check(reach_on.candidates == 4535 && reach_on.terminal == 640 && reach_on.longest == 24
+        && reach_on.skipped == 114,
         "reach corpus candidate totals are pinned");
     PathTallies reach_off = run_reach_corpus_path_tests(engine, false);
-    check(reach_off.candidates == 4416 && reach_off.terminal == 640,
+    check(reach_off.candidates == 4416 && reach_off.terminal == 640 && reach_off.longest == 26
+        && reach_off.skipped == 114,
         "reach corpus 180-off candidate totals are pinned");
     std::println("reach corpus totals: {} candidates 180 on, {} candidates 180 off",
         reach_on.candidates, reach_off.candidates);

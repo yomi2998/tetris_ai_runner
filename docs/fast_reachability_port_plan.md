@@ -553,7 +553,7 @@ A valid path must prove:
 - Every command is legal.
 - First-valid kick behavior is respected.
 - Final hard drop produces exactly the candidate placement.
-- Replayed arrival class equals the candidate arrival class.
+- Replayed arrival class equals the candidate arrival class for T candidates. Non-T candidates carry the conventional normal label with history ignored, so their replayed arrival is compared for placement only.
 - Lockout behavior is unchanged.
 - The output fits the 1,024-byte exported buffer including optional `v`, `V`, and null terminator.
 
@@ -979,7 +979,7 @@ Gate:
 - Replay produces exact placement and, for T candidates, exact arrival class. Non-T candidates carry the conventional normal label with history ignored, so their paths may end with a rotation where no normal path exists; the differential pins that fallback per candidate.
 - No path uses removed commands.
 - No path exceeds the exported buffer.
-- Pathfinding occurs once per selected move in integration tests.
+- Pathfinding occurs once per selected move in integration tests. The construction-counting half of this gate is deferred to Phase 6 engine integration, which provides the production caller; the Phase 4 fixture models the one-finder-per-selection shape with deterministic reuse.
 
 Rollback:
 

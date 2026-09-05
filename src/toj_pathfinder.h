@@ -84,12 +84,12 @@ namespace tetris::path
             }
             if (candidate.arrival == ArrivalClass::TerminalRotation)
             {
-                std::size_t const goal = full_index(target_rotation, target_x, target_y, 1);
-                if ((seen[slot_index(target_rotation, target_x, target_y)] & 2) == 0)
+                std::size_t const slot = slot_index(target_rotation, target_x, target_y);
+                if ((seen[slot] & 2) == 0 || drop_to[slot] != pack(target_x, target_y))
                 {
                     return out;
                 }
-                return reconstruct(goal);
+                return reconstruct(full_index(target_rotation, target_x, target_y, 1));
             }
             Path normal = find_normal_goal(target_rotation, target_x, target_y, false);
             if (normal.valid)
@@ -346,6 +346,22 @@ namespace tetris::path
                     while (checker.is_valid(rotation, x, y - 1))
                     {
                         --y;
+                    }
+                    arrival = ArrivalClass::Normal;
+                }
+                else if (command == 'L')
+                {
+                    while (checker.is_valid(rotation, x - 1, y))
+                    {
+                        --x;
+                    }
+                    arrival = ArrivalClass::Normal;
+                }
+                else if (command == 'R')
+                {
+                    while (checker.is_valid(rotation, x + 1, y))
+                    {
+                        ++x;
                     }
                     arrival = ArrivalClass::Normal;
                 }
