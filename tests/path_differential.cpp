@@ -227,6 +227,11 @@ namespace
                     check(independent.valid && independent.cells == expected_cells
                         && independent_arrival_ok,
                         what + " replays through the independent interpreter");
+                    if (piece != Piece::T && replayed.arrival == ArrivalClass::TerminalRotation)
+                    {
+                        check(!finder.normal_path_exists(candidate),
+                            what + " ends with rotation only where no normal path exists");
+                    }
                     if (candidate.arrival == ArrivalClass::TerminalRotation)
                     {
                         auto unlocked = published_replay::replay(model, rows, *p, 3, 21, 0,

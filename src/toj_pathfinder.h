@@ -90,12 +90,42 @@ namespace tetris::path
                 }
                 return reconstruct(goal);
             }
+            Path normal = find_normal_goal(target_rotation, target_x, target_y, false);
+            if (normal.valid)
+            {
+                return normal;
+            }
+            if (piece_is_t)
+            {
+                return out;
+            }
+            return find_normal_goal(target_rotation, target_x, target_y, true);
+        }
+
+        bool normal_path_exists(Candidate candidate) const
+        {
+            int const target_rotation = candidate.placement.rotation();
+            int const target_x = candidate.placement.x();
+            int const target_y = candidate.placement.y();
+            if (target_rotation < 0 || target_rotation >= orientations || target_x < 0
+                || target_x >= Board::width || target_y < 0 || target_y >= Board::height)
+            {
+                return false;
+            }
+            return find_normal_goal(target_rotation, target_x, target_y, false).valid;
+        }
+
+    private:
+        Path find_normal_goal(int target_rotation, int target_x, int target_y,
+            bool terminal_channel_ok) const
+        {
+            Path out;
             std::uint16_t const wanted = pack(target_x, target_y);
             for (std::size_t order = 0; order < queue_tail; ++order)
             {
                 std::uint16_t const state = queue[order];
                 int const channel = static_cast<int>(state & 1);
-                if (channel != 0 && piece_is_t)
+                if (channel != 0 && !terminal_channel_ok)
                 {
                     continue;
                 }
@@ -110,7 +140,6 @@ namespace tetris::path
             return out;
         }
 
-    private:
         static constexpr std::size_t slot_index(int rotation, int x, int y)
         {
             return (static_cast<std::size_t>(rotation) * Board::width + static_cast<std::size_t>(x))
