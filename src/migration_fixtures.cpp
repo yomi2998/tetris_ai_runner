@@ -5,6 +5,8 @@
 #include "random.h"
 
 #include <algorithm>
+#include <bit>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -326,6 +328,177 @@ namespace
         write_all(dir, "policy.csv", out);
     }
 
+    std::string double_hex(double value)
+    {
+        char buf[17];
+        std::snprintf(buf, sizeof buf, "%016llx",
+            static_cast<unsigned long long>(std::bit_cast<std::uint64_t>(value)));
+        return buf;
+    }
+
+    std::string param_hex(ai_zzz::TOJ::Param const &param)
+    {
+        double theta[ai_zzz::TOJ::NUM_PARAMS];
+        ai_zzz::TOJ::theta_from_param(param, theta);
+        std::string out;
+        for (size_t i = 0; i < ai_zzz::TOJ::NUM_PARAMS; ++i)
+        {
+            if (i != 0)
+            {
+                out += " ";
+            }
+            out += double_hex(theta[i]);
+        }
+        return out;
+    }
+
+    m_tetris::TetrisMap tall_board()
+    {
+        m_tetris::TetrisMap map(board_width, board_height);
+        for (size_t y = 0; y < 20; ++y)
+        {
+            map.row[y] = static_cast<uint32_t>(0x3ff & ~(1u << (y % board_width)));
+        }
+        rebuild_metadata(map);
+        return map;
+    }
+
+    m_tetris::TetrisMap bank_board(std::vector<std::pair<size_t, uint32_t>> const &rows)
+    {
+        m_tetris::TetrisMap map(board_width, board_height);
+        for (auto const &[y, bits] : rows)
+        {
+            map.row[y] = bits;
+        }
+        rebuild_metadata(map);
+        return map;
+    }
+
+    void generate_policy_v2(std::string const &dir, size_t boards, uint32_t seed)
+    {
+        Engine engine = make_engine();
+        ai_zzz::TOJ &ai = *engine.ai();
+        search_tspin::Search search;
+        search.init(engine.context().get(), engine.search_config());
+        std::string out = "# toj_policy_v2 fixture, one case per line\n";
+        out += "# generator: migration_fixtures policy_v2 <dir> <count> <seed>\n";
+        out += "# param: " + param_hex(engine.ai_config()->param) + "\n";
+        out += "# combo: 0,0,0,1,1,2,2,3,3,4\n";
+        out += "# columns: id board piece x y r arrival spin_in spin_eff is_check is_last_rotate is_ready is_mini_ready clear src_rows result_rows p_death p_combo p_under p_maprise p_b2b p_t2 p_t3 p_acc p_like p_value next hold node is_hold depth eval_value eval_t2 eval_t3 o_death o_combo o_b2b o_under o_maprise o_t2 o_t3 o_acc o_like o_value safe\n";
+        char const *next_options[] = { "IOSZLJT", "T", "IOSZLI", "", "STLI", "IOT" };
+        size_t const next_lengths[] = { 7, 1, 6, 0, 4, 3 };
+        char const hold_options[] = { ' ', 'T', 'I', 'O' };
+        std::vector<std::pair<std::string, m_tetris::TetrisMap>> tagged;
+        for (size_t b = 0; b < boards; ++b)
+        {
+            tagged.push_back({ "s" + std::to_string(b), seeded_board(seed, b) });
+        }
+        tagged.push_back({ "empty", m_tetris::TetrisMap(board_width, board_height) });
+        tagged.push_back({ "tall", tall_board() });
+        tagged.push_back({ "o1", bank_board({ { 0, 0x3ff & ~0x30 } }) });
+        tagged.push_back({ "o2", bank_board({ { 0, 0x3ff & ~0x30 }, { 1, 0x3ff & ~0x30 } }) });
+        tagged.push_back({ "t1", bank_board({ { 0, 0x3ff & ~0x70 } }) });
+        tagged.push_back({ "iwell3",
+            bank_board({ { 0, 0x3ff & ~0x10 }, { 1, 0x3ff & ~0x10 }, { 2, 0x3ff & ~0x10 } }) });
+        tagged.push_back({ "iwell4",
+            bank_board({ { 0, 0x3ff & ~0x10 }, { 1, 0x3ff & ~0x10 }, { 2, 0x3ff & ~0x10 }, { 3, 0x3ff & ~0x10 } }) });
+        tagged.push_back({ "slotS",
+            bank_board({ { 0, 0x3ff & ~0x10 }, { 1, 0x3ff & ~0x30 }, { 2, 0x3ff & ~0x10 }, { 3, 0x3ff & ~0x70 }, { 4, (0x3ff & ~0x60) | 0x10 } }) });
+        tagged.push_back({ "slotM",
+            bank_board({ { 0, 0x3ff & ~0x10 }, { 1, 0x3ff & ~0x18 }, { 2, 0x3ff & ~0x10 }, { 3, 0x3ff & ~0x1c }, { 4, (0x3ff & ~0x0c) | 0x10 } }) });
+        tagged.push_back({ "mini0",
+            bank_board({ { 0, 0b1101110111 }, { 1, 0b1100110111 }, { 2, 0b1111111111 }, { 3, 0b1111111011 }, { 4, 0b1110100011 }, { 5, 0b0111110011 } }) });
+        tagged.push_back({ "mini1",
+            bank_board({ { 0, 0b1111011111 }, { 1, 0b1101011111 }, { 2, 0b1110001111 }, { 3, 0b1111110111 }, { 4, 0b1111000101 }, { 5, 0b1101100111 } }) });
+        tagged.push_back({ "mini2",
+            bank_board({ { 0, 0b1111101011 }, { 1, 0b1110101111 }, { 2, 0b1110101111 }, { 3, 0b1101011111 }, { 4, 0b1111100011 }, { 5, 0b1111010011 } }) });
+        tagged.push_back({ "double0",
+            bank_board({ { 0, 0b1110011111 }, { 1, 0b1111111111 }, { 2, 0b0100011001 }, { 3, 0b1110111111 }, { 4, 0b1100011111 }, { 5, 0b1100111111 } }) });
+        size_t id = 0;
+        for (auto const &[tag, src_map] : tagged)
+        {
+            for (char const *p = pieces; *p; ++p)
+            {
+                int16_t t2_init = 0, t3_init = 0;
+                ai_zzz::TOJ::Status::init_t_value(src_map, t2_init, t3_init);
+                int safe = ai.get_safe(src_map, *p);
+                m_tetris::TetrisNode const *node = engine.context()->generate(*p);
+                auto const *results = search.search(src_map, node, 1);
+                for (auto const &land : *results)
+                {
+                    m_tetris::TetrisMap map = src_map;
+                    size_t clear = land.node->attach(engine.context().get(), map);
+                    search_tspin::Search::TetrisNodeWithTSpinType ex(land.node);
+                    ex.last = land.last;
+                    ex.type = land.type;
+                    ex.flags = land.flags;
+                    ai_zzz::TOJ::Status status;
+                    status.death = 0;
+                    status.combo = static_cast<int8_t>(id % 5);
+                    status.under_attack = static_cast<int8_t>((id / 2) % 3);
+                    status.map_rise = static_cast<int8_t>((id / 6) % 2);
+                    status.b2b = static_cast<int8_t>((id / 5) % 2);
+                    status.t2_value = t2_init;
+                    status.t3_value = t3_init;
+                    status.acc_value = (id % 11 == 0) ? 12345.678 : 0.0;
+                    status.like = (id % 13 == 0) ? 987.654 : 0.0;
+                    status.value = 0.0;
+                    size_t env_pick = id % 6;
+                    std::string next_text = next_options[env_pick];
+                    char hold = hold_options[id % 4];
+                    m_tetris::TetrisContext::Env env{ next_text.c_str(), next_lengths[env_pick],
+                        *p, hold, ((id / 4) % 2) != 0 };
+                    auto result = ai.eval(ex, map, src_map);
+                    ai_zzz::TOJ::Status transition = ai.get(ex, result, clear, map, id % 3, status, env);
+                    out += std::to_string(id) + " " + tag + " " + *p
+                        + " " + std::to_string(land.node->status.x)
+                        + " " + std::to_string(land.node->status.y)
+                        + " " + std::to_string(land.node->status.r)
+                        + " " + std::to_string(land.is_last_rotate ? 1 : 0)
+                        + " " + std::to_string(static_cast<int>(land.type))
+                        + " " + std::to_string(static_cast<int>(ex.type))
+                        + " " + std::to_string(land.is_check ? 1 : 0)
+                        + " " + std::to_string(land.is_last_rotate ? 1 : 0)
+                        + " " + std::to_string(land.is_ready ? 1 : 0)
+                        + " " + std::to_string(land.is_mini_ready ? 1 : 0)
+                        + " " + std::to_string(clear)
+                        + " " + rows_text(src_map) + " " + rows_text(map)
+                        + " " + std::to_string(status.death)
+                        + " " + std::to_string(status.combo)
+                        + " " + std::to_string(status.under_attack)
+                        + " " + std::to_string(status.map_rise)
+                        + " " + std::to_string(status.b2b)
+                        + " " + std::to_string(status.t2_value)
+                        + " " + std::to_string(status.t3_value)
+                        + " " + double_hex(status.acc_value)
+                        + " " + double_hex(status.like)
+                        + " " + double_hex(status.value)
+                        + " " + (next_text.empty() ? std::string("-") : next_text)
+                        + " " + (hold == ' ' ? std::string("-") : std::string(1, hold))
+                        + " " + *p
+                        + " " + std::to_string(env.is_hold ? 1 : 0)
+                        + " " + std::to_string(id % 3)
+                        + " " + double_hex(result.value)
+                        + " " + std::to_string(result.t2_value)
+                        + " " + std::to_string(result.t3_value)
+                        + " " + std::to_string(transition.death)
+                        + " " + std::to_string(transition.combo)
+                        + " " + std::to_string(transition.b2b)
+                        + " " + std::to_string(transition.under_attack)
+                        + " " + std::to_string(transition.map_rise)
+                        + " " + std::to_string(transition.t2_value)
+                        + " " + std::to_string(transition.t3_value)
+                        + " " + double_hex(transition.acc_value)
+                        + " " + double_hex(transition.like)
+                        + " " + double_hex(transition.value)
+                        + " " + std::to_string(safe) + "\n";
+                    ++id;
+                }
+            }
+        }
+        write_all(dir, "toj_policy_v2.csv", out);
+    }
+
     void generate_selfplay(std::string const &dir, size_t games, uint32_t seed)
     {
         Engine engine = make_engine();
@@ -478,7 +651,7 @@ int main(int argc, char **argv)
 {
     if (argc < 3)
     {
-        std::println(stderr, "usage: migration_fixtures <geometry|reach|tspin|policy|selfplay|garbage|queue> <outdir> [count] [seed]");
+        std::println(stderr, "usage: migration_fixtures <geometry|reach|tspin|policy|policy_v2|selfplay|garbage|queue> <outdir> [count] [seed]");
         return 1;
     }
     std::string mode = argv[1];
@@ -489,6 +662,7 @@ int main(int argc, char **argv)
     else if (mode == "reach") generate_reach(dir, count, seed);
     else if (mode == "tspin") generate_tspin(dir, count, seed);
     else if (mode == "policy") generate_policy(dir, count, seed);
+    else if (mode == "policy_v2") generate_policy_v2(dir, count, seed);
     else if (mode == "selfplay") generate_selfplay(dir, count, seed);
     else if (mode == "garbage") generate_garbage(dir, count, seed);
     else if (mode == "queue") generate_queue(dir);

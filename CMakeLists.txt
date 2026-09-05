@@ -151,6 +151,14 @@ target_link_libraries(path_differential PRIVATE fast_reachability)
 target_include_directories(path_differential PRIVATE src tests src/fast-reachability)
 add_test(NAME path_differential COMMAND path_differential)
 
+add_executable(toj_policy_tests
+    tests/toj_policy_tests.cpp
+)
+target_include_directories(toj_policy_tests PRIVATE src tests)
+target_compile_definitions(toj_policy_tests PRIVATE
+    TETRIS_POLICY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/docs/phase5/fixtures")
+add_test(NAME toj_policy_tests COMMAND toj_policy_tests)
+
 add_executable(fast_reachability_tests
     tests/fast_reachability_tests.cpp
 )
