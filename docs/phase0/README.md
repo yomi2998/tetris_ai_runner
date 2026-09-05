@@ -382,7 +382,7 @@ self-release, and 10 of 10 in the sanitizer build excluding perft.
 ## Phase 4 status
 
 Implemented in `src/toj_pathfinder.h` and gated by
-`tests/path_differential.cpp` (CTest `path_differential`, 97688 checks,
+`tests/path_differential.cpp` (CTest `path_differential`, 98040 checks,
 0 failures):
 
 - Fixed-array breadth-first search over pose and arrival class on the full
@@ -405,15 +405,18 @@ Implemented in `src/toj_pathfinder.h` and gated by
   candidate ends at a non-rotation arrival whose hard drop lands exactly on
   the placement. Non-T candidates keep the conventional normal label while
   preferring a non-rotation ending; a rotation ending is allowed only where
-  the finder proves no normal path exists, which the suite asserts per
-  candidate.
+  both the finder and the independent scalar channel oracle agree no normal
+  landing exists, which the suite asserts per candidate, with fallback
+  totals of 81 and 62 pinned for the seeded corpus and 116 and 85 for the
+  reach corpus. Floating terminal candidates receive no path.
 - A production replay interpreter over the same legality and kick routines
   proves every command legal, first-valid kicks, exact final placement and
   arrival class (placement only for non-T), and an unmoved terminal
   placement under the final hard drop, and the suite checks every emitted
   path against the exported buffer bound. Both interpreters reset arrival
   to normal when the final hard drop moves the piece, with directed locked
-  and unlocked rotation cases. Directed rejection tests cover removed
+  and unlocked rotation cases in both interpreters, including
+  rotation-then-wall arrival resets. Directed rejection tests cover removed
   commands, disabled 180, blocked translations, failed rotations, invalid
   starts, and piece-invalid rotations for the production replay.
 - An independent row-and-cell scalar interpreter in the legacy status frame
