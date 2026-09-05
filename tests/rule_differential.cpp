@@ -778,18 +778,18 @@ namespace
                     for (auto const &candidate : candidates)
                     {
                         CellKey const key = cells_key(piece, candidate.placement);
-                        if (legacy_keys.count(key) > 0)
+                        if (legacy_keys.count(key) == 0)
                         {
-                            continue;
+                            ++new_only;
+                            bool const table_reachable = piece == Piece::T
+                                ? (candidate.arrival == ArrivalClass::TerminalRotation
+                                    ? bit_at(rotation_words, candidate)
+                                    : bit_at(normal_words, candidate))
+                                : (bit_at(normal_words, candidate) || bit_at(rotation_words, candidate));
+                            check(table_reachable,
+                                std::string("new-only candidate is reachable through the scalar oracle for ")
+                                    + *p);
                         }
-                        ++new_only;
-                        bool const table_reachable = piece == Piece::T
-                            ? (candidate.arrival == ArrivalClass::TerminalRotation
-                                ? bit_at(rotation_words, candidate)
-                                : bit_at(normal_words, candidate))
-                            : (bit_at(normal_words, candidate) || bit_at(rotation_words, candidate));
-                        check(table_reachable,
-                            std::string("new-only candidate is reachable through the scalar oracle for ") + *p);
                         int const channel = piece == Piece::T
                             && candidate.arrival == ArrivalClass::TerminalRotation ? 1 : 0;
                         bool const command_reachable = piece == Piece::T
@@ -797,7 +797,8 @@ namespace
                             : (replay.landable_reachable(*p, key, 0)
                                 || replay.landable_reachable(*p, key, 1));
                         check(command_reachable,
-                            std::string("new-only candidate is reachable through legacy commands for ") + *p);
+                            std::string("every emitted candidate is reachable through legacy commands for ")
+                                + *p);
                     }
                     return 0;
                 });
@@ -980,11 +981,14 @@ namespace
             {
                 bool const rotation_valid = r < valid_rotations;
                 Placement const placement = Placement::unchecked(4, 20, r);
-                bool const geometry_valid = toj::cells(piece, placement).has_value()
-                    && toj::lowest_occupied_row(piece, placement).has_value()
-                    && toj::occupancy_mask(piece, placement).has_value();
-                check(geometry_valid == rotation_valid,
-                    std::string("geometry rejects piece-invalid rotations for ") + *p
+                check(toj::cells(piece, placement).has_value() == rotation_valid,
+                    std::string("cells rejects piece-invalid rotations for ") + *p
+                        + " r" + std::to_string(r));
+                check(toj::lowest_occupied_row(piece, placement).has_value() == rotation_valid,
+                    std::string("lowest row rejects piece-invalid rotations for ") + *p
+                        + " r" + std::to_string(r));
+                check(toj::occupancy_mask(piece, placement).has_value() == rotation_valid,
+                    std::string("occupancy mask rejects piece-invalid rotations for ") + *p
                         + " r" + std::to_string(r));
                 check(toj::fits(piece, placement, empty) == rotation_valid,
                     std::string("fits rejects piece-invalid rotations for ") + *p
@@ -998,16 +1002,16 @@ namespace
                 }
             }
         }
-        Candidate floating_j{Placement::unchecked(4, 10, 0), ArrivalClass::Normal};
-        check(!apply(empty, Piece::J, floating_j).has_value(),
-            "apply rejects floating non-T candidates");
-        Candidate floating_t{Placement::unchecked(4, 10, 0), ArrivalClass::TerminalRotation};
-        check(!apply(empty, Piece::T, floating_t).has_value(), "apply rejects floating T candidates");
-        Candidate resting_j{Placement::unchecked(4, 0, 0), ArrivalClass::Normal};
-        check(apply(empty, Piece::J, resting_j).has_value(),
-            "apply accepts resting non-T candidates");
-        Candidate resting_t{Placement::unchecked(4, 0, 0), ArrivalClass::Normal};
-        check(apply(empty, Piece::T, resting_t).has_value(), "apply accepts resting T candidates");
+        for (char const *p = piece_order; *p; ++p)
+        {
+            Piece const piece = piece_of(*p);
+            Candidate floating{Placement::unchecked(4, 10, 0), ArrivalClass::Normal};
+            check(!apply(empty, piece, floating).has_value(),
+                std::string("apply rejects floating candidates for ") + *p);
+            Candidate resting{Placement::unchecked(4, 0, 0), ArrivalClass::Normal};
+            check(apply(empty, piece, resting).has_value(),
+                std::string("apply accepts resting candidates for ") + *p);
+        }
         std::println("input validation: O rotations 1 through 3 rejected through the value API, "
             "floating candidates rejected for every piece");
     }
