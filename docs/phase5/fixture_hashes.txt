@@ -2,14 +2,17 @@
 
 Corpus:
 
-2d731ddd69a6dfb508536de66840735dabf6cdc79e7b5a8e615f6828994766cd  fixtures/toj_policy_v2.csv
+9d1bdf59d8f5f50a694ab60f8436cbf6966c9aac212e4257b9216b4988dc2a29  fixtures/toj_policy_v2.csv
 
-The corpus holds 6024 cases over 39 board tags (24 seeded stacks plus
-empty, tall, o1, o2, t1, iwell3, iwell4, slotS, slotM, mini0, mini1,
-mini2, double0). Clears 0 through 4, spin inputs none, full, and mini,
-full spins at clears 1, 2, and 3, T2 and T3 gains, death, perfect
-clear, all parent, hold, next, arrival, and witness categories are
-present; tests/toj_policy_tests.cpp asserts each one (74 checks).
+The corpus holds 7,167 cases over 44 board tags (24 seeded stacks
+plus empty, tall, o1, o2, t1, iwell3, iwell4, slotS, slotM, mini0,
+mini1, mini2, double0 through double3, and pci through pci4). Clears
+0 through 4, spin inputs none, full, and mini, full spins at clears
+1, 2, and 3, T2 and T3 gains, death, perfect clear, all parent,
+hold, next, arrival, and witness categories are present, with
+config-safe variants 0, 5, and 16 cycling by case;
+tests/toj_policy_tests.cpp asserts each one, including full doubles
+and live-bonus perfect clears at nonzero safety.
 
 Generator command (run from the repository root):
 
@@ -18,29 +21,38 @@ Generator command (run from the repository root):
 Byte determinism: two consecutive runs with the committed generator
 produce byte-identical output (verified with cmp).
 
-Cross-compiler comparison against the committed bytes:
+Engine safety: the generator sets `ai_config()->safe` per case from
+{0, 5, 16} and records it in the `cfg_safe` column after validation
+found that field uninitialized on the engine path. Values 5 and 16
+sit above the T2 (4) and T3 (10) safety margins so slot scoring stays
+live. Regeneration from the pinned generator reproduces the committed
+bytes exactly.
 
-- GCC debug and Clang debug: byte-identical to each other and 2699
-  lines from the committed release bytes.
-- Clang self-release: 77 lines from the committed bytes.
-- Largest absolute bit distance anywhere: 4 ULP in a resulting-state
-  value, 2 ULP in an evaluation value, 1 ULP in resulting-state
-  accumulation. Every integer, enum, flag, row, and cell field is
-  identical in all four builds.
-- The variation tracks optimization level, not compiler: both debug
-  builds agree with each other exactly.
-- Parity gate allowance: observed 4 ULP plus one, capped at 5 ULP,
-  under the 8 ULP ceiling from the review.
+Cross-compiler comparison against the committed bytes, fresh on the
+final corpus:
 
-Legacy pin: the corpus was generated at commit
-41c41706c56e5bfbccc94ae239cbde7456e76043 with src/ai_zzz.h and
-src/ai_zzz.cpp unmodified from that commit. The generator pins
-`ai_config()->safe` to 0 alongside the other engine settings after
-validation found that field uninitialized on the engine path;
-regeneration from the pinned generator reproduces the committed bytes
-exactly (verified with cmp), so the pin preserves the corpus while
-removing heap dependence from future runs. The generator uses
-production default parameters and the frozen combo table:
+- GCC debug and Clang debug: 3,313 lines differ, all floating point,
+  maxima 7 ULP in a resulting-state value, 2 ULP in an evaluation
+  value, 64 ULP in one accumulation (case 5353). Zero non-floating
+  differences. Both debug builds agree with each other exactly.
+- Clang self-release: 117 lines differ, maxima 1 ULP. Zero
+  non-floating differences.
+- The variation tracks fused multiply-add contraction, not compiler:
+  rebuilding legacy with `-ffp-contract=off` or generic `-march`
+  reproduces the debug-side bytes exactly, while `-O3
+  -march=native` reproduces the committed bytes bit-exactly. The
+  64 ULP outlier is rounding amplified by cancellation in a
+  death-penalty accumulation, measured legacy-versus-legacy on
+  identical inputs with all integer fields equal.
+- Parity gate allowance: 5 ULP on doubles, exact on everything else.
+  Cases beyond oracle precision in a given build (5 under debug, 0
+  under release) use a same-build legacy comparison at the same
+  bound, with frozen drift reported, never gated.
+
+Legacy pin: the corpus was generated with src/ai_zzz.h and
+src/ai_zzz.cpp unmodified from their pre-migration commit. The
+generator uses production default parameters and the frozen combo
+table:
 
 c5b523f889c5720f11baca1b1172333eee7c6a1c8ef85ae1accd88be942202e6  parameter words (29 hex doubles from production_default_theta)
 948edb403954a86da361511488d752ad947325e4fa23ac444d0e6f70730850a8  combo table (values 0,0,0,1,1,2,2,3,3,4)

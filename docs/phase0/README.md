@@ -451,22 +451,32 @@ in the sanitizer build excluding perft.
 ## Phase 5 status
 
 Implemented in `src/toj_policy.h` and `src/toj_policy.cpp`, gated by
-`tests/toj_policy_tests.cpp` (CTest `toj_policy_tests`, 60451 checks,
-0 failures) against the lossless `docs/phase5` fixture corpus:
+`tests/toj_policy_tests.cpp` (CTest `toj_policy_tests`, 64731 checks,
+0 failures in all five builds) against the lossless `docs/phase5`
+fixture corpus of 7167 cases over 44 board tags:
 
 - Native value interface with no legacy types: piece, candidate,
-  rule outcome, result board, parent policy state, and decision
-  context in; board evaluation and new policy state out. The legacy
-  `ai_zzz` policy is unchanged and production targets still use it.
+  rule outcome, result board, parent policy state, decision context,
+  and caller-held evaluation in; board evaluation and new policy
+  state out. The legacy `ai_zzz` policy is unchanged and production
+  targets still use it.
 - Evaluation converts the result board to local rows once per call,
   derives side columns on demand, and names policy height 40 as the
-  only row boundary; rows above 40 do not affect results.
+  only row boundary; rows above 40 do not affect evaluation, and
+  perfect-clear detection uses full-board emptiness with a high-row
+  regression pinning the difference.
 - Danger masks come from compile-time spawn geometry and match the
   legacy spawn rows for every piece; parameter handling preserves
   the 29-value production contract bit-exactly.
 - Lockout uses the lowest occupied mino row. The corpus split is
-  6024 shared with 0 divergent cases, and directed tests cover the
+  7167 shared with 0 divergent cases, and directed tests cover the
   approved semantic over every piece and rotation.
-- Floating fields match within the documented 5 ULP allowance with
-  peak drift 0 ULP in optimized builds and 2 ULP in debug and
-  sanitizer builds; every non-floating field matches exactly.
+- Transitions compare directly against frozen expected fields with
+  peak frozen drift 0 ULP in GCC self-release, at most 1 ULP in
+  Clang self-release, and at most 5 ULP in debug and sanitizer builds
+  against the 5 ULP allowance; every non-floating field matches exactly. Five
+  debug-only cases beyond oracle precision (proven FMA contraction
+  effects) use a same-build legacy comparison with frozen drift
+  reported. Engine safety variants 0, 5, and 16 keep hold, clear,
+  waste, slot, and bonus scoring live, and two synthetic directed
+  cases pin the non-spin triple and high-row formulas.
