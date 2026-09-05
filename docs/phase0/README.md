@@ -447,3 +447,26 @@ exceeds the buffer, and each search runs once per board and piece. The
 differential runs in 0.04 seconds optimized and CTest is 12 of 12 in GCC
 Debug, Clang Debug, GCC self-release, and Clang self-release, and 11 of 11
 in the sanitizer build excluding perft.
+
+## Phase 5 status
+
+Implemented in `src/toj_policy.h` and `src/toj_policy.cpp`, gated by
+`tests/toj_policy_tests.cpp` (CTest `toj_policy_tests`, 60451 checks,
+0 failures) against the lossless `docs/phase5` fixture corpus:
+
+- Native value interface with no legacy types: piece, candidate,
+  rule outcome, result board, parent policy state, and decision
+  context in; board evaluation and new policy state out. The legacy
+  `ai_zzz` policy is unchanged and production targets still use it.
+- Evaluation converts the result board to local rows once per call,
+  derives side columns on demand, and names policy height 40 as the
+  only row boundary; rows above 40 do not affect results.
+- Danger masks come from compile-time spawn geometry and match the
+  legacy spawn rows for every piece; parameter handling preserves
+  the 29-value production contract bit-exactly.
+- Lockout uses the lowest occupied mino row. The corpus split is
+  6024 shared with 0 divergent cases, and directed tests cover the
+  approved semantic over every piece and rotation.
+- Floating fields match within the documented 5 ULP allowance with
+  peak drift 0 ULP in optimized builds and 2 ULP in debug and
+  sanitizer builds; every non-floating field matches exactly.

@@ -39,7 +39,34 @@ in `fixture_hashes.txt`.
 
 ## Gate status
 
-Slice 1 (this directory plus `tests/toj_policy_tests.cpp`): generator,
-corpus, schema, hashes, and corpus-coverage validation green. Policy
-implementation parity (`toj_policy::Policy` matching every expected
-evaluation and resulting state bit-exactly) follows in slice 2.
+Slice 1: generator, corpus, schema, hashes, and corpus-coverage
+validation green. Slice 2: `toj_policy::Policy` implementation with
+full fixture parity green (`tests/toj_policy_tests.cpp`, 60,451
+checks, 0 failures).
+
+Parity result: all 6,024 cases match with peak drift 0 ULP under GCC
+and Clang self-release (bit-exact), 2 ULP under both debug builds and
+the sanitizer build, against the documented 5 ULP allowance. All
+non-floating fields match exactly in every configuration. The
+corpus-side lockout split is 6,024 shared with 0 divergent cases;
+approved lockout-semantic differences are covered instead by directed
+`is_lockout` tests over every piece and rotation on floor boards plus
+the rule-layer orientation corpus, which pins lowest-row lockout
+against the legacy bounding row where they agree.
+
+Implementation notes: evaluation converts the result board to local
+rows once and derives side columns on demand; placement emptiness
+uses the local roof; danger masks come from compile-time spawn
+geometry verified per piece against legacy spawn rows; the transition
+takes the rule outcome spin directly with no reclassification; the
+lockout threshold uses the lowest occupied mino row. The transition
+signature omits the plan's source-board input because neither legacy
+`eval` nor `get` reads it; the result board is the sole board input,
+exactly like the legacy code paths.
+
+Sensitivity: the scaffold failed 6,033 checks, a danger-mask shift
+failed 4,431, and a spin-double constant change failed exactly its 3
+affected cases. A heap-garbage `ai_config()->safe` read found during
+validation is pinned to 0 in both the test engine and the fixture
+generator; regeneration from the pinned generator reproduces the
+committed corpus byte for byte.
