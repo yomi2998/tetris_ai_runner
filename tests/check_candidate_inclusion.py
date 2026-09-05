@@ -94,6 +94,8 @@ def main():
     print(f"CORPUS comparator {other_corpus}")
     print(f"GRID {len(EXPECTED_PIECES)} pieces {EXPECTED_BOARD_COUNT} boards complete on both sides")
     print(f"DENOM checked {len(new_rows)} new and {len(other_rows)} comparator rows")
+    if total_new == 0 or total_other == 0:
+        raise SystemExit("empty candidate contract: a side with no dumped keys proves nothing")
     if missing_keys or missing_cases:
         raise SystemExit(f"comparator emitted {missing_keys} keys the new implementation does not contain")
     print("PASS comparator candidate set is contained in the new implementation, key by key")

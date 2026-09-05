@@ -120,7 +120,7 @@ namespace
 
     CellKey cells_key(Piece piece, Placement placement)
     {
-        return sorted_cells(toj::cells(piece, placement));
+        return sorted_cells(toj::cells(piece, placement).value());
     }
 
     CellKey legacy_cells_key(m_tetris::TetrisNode const *node)
@@ -209,6 +209,177 @@ namespace
         return legacy_cells_key(&node);
     }
 
+    struct LegacyReplay
+    {
+        static constexpr int min_x = -4;
+        static constexpr int max_x = 15;
+        static constexpr int min_y = -4;
+        static constexpr int max_y = 48;
+
+        Engine &engine;
+        m_tetris::TetrisMap const &map;
+        Board const &board;
+        std::uint8_t visited[4][max_x - min_x][max_y - min_y] = {};
+
+        bool fits_status(char piece, int x, int y, int r) const
+        {
+            m_tetris::TetrisNode node;
+            if (!create_legacy(engine, piece, x, y, r, node))
+            {
+                return false;
+            }
+            for (int ry = 0; ry < node.height; ++ry)
+            {
+                for (int rx = 0; rx < node.width; ++rx)
+                {
+                    if ((node.data[ry] >> (node.col + rx)) & 1)
+                    {
+                        int const cx = node.col + rx;
+                        int const cy = node.row + ry;
+                        if (board.full(cx, cy))
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        void visit(int r, int x, int y, int channel)
+        {
+            visited[r][x - min_x][y - min_y] |= static_cast<std::uint8_t>(1 << channel);
+        }
+
+        void explore(int r, int x, int y, int channel,
+            std::vector<std::tuple<int, int, int, int>> &queue)
+        {
+            std::uint8_t bit = static_cast<std::uint8_t>(1 << channel);
+            std::uint8_t &slot = visited[r][x - min_x][y - min_y];
+            if ((slot & bit) != 0)
+            {
+                return;
+            }
+            slot |= bit;
+            queue.push_back({r, x, y, channel});
+        }
+
+        void run(char piece)
+        {
+            std::vector<std::tuple<int, int, int, int>> queue;
+            if (fits_status(piece, 3, 21, 0))
+            {
+                visit(0, 3, 21, 0);
+                queue.push_back({0, 3, 21, 0});
+            }
+            std::size_t head = 0;
+            while (head < queue.size())
+            {
+                auto [r, x, y, channel] = queue[head++];
+                (void)channel;
+                for (auto [dx, dy] : {std::pair{-1, 0}, std::pair{1, 0}, std::pair{0, -1}})
+                {
+                    int const nx = x + dx;
+                    int const ny = y + dy;
+                    if (nx < min_x || nx >= max_x || ny < min_y || ny >= max_y)
+                    {
+                        continue;
+                    }
+                    if (fits_status(piece, nx, ny, r))
+                    {
+                        explore(r, nx, ny, 0, queue);
+                    }
+                }
+                m_tetris::TetrisNode const *node = engine.context()->get(
+                    m_tetris::TetrisBlockStatus(piece, static_cast<int8_t>(x),
+                        static_cast<int8_t>(y), static_cast<uint8_t>(r)));
+                if (node == nullptr)
+                {
+                    continue;
+                }
+                m_tetris::TetrisMapSnap snap;
+                node->build_snap(map, engine.context().get(), snap);
+                for (int to : {(r + 1) % 4, (r + 3) % 4, (r + 2) % 4})
+                {
+                    m_tetris::TetrisNode const *const *table = to == (r + 1) % 4
+                        ? node->wall_kick_clockwise
+                        : (to == (r + 3) % 4 ? node->wall_kick_counterclockwise
+                            : node->wall_kick_opposite);
+                    for (std::size_t i = 0; i < m_tetris::max_wall_kick; ++i)
+                    {
+                        if (table[i] == nullptr)
+                        {
+                            break;
+                        }
+                        if (!table[i]->check(snap))
+                        {
+                            continue;
+                        }
+                        int const nx = table[i]->status.x;
+                        int const ny = table[i]->status.y;
+                        if (nx < min_x || nx >= max_x || ny < min_y || ny >= max_y)
+                        {
+                            break;
+                        }
+                        explore(to, nx, ny, 1, queue);
+                        break;
+                    }
+                }
+            }
+        }
+
+        bool landable_reachable(char piece, CellKey const &cells, int channel) const
+        {
+            for (int r = 0; r < 4; ++r)
+            {
+                for (int x = min_x; x < max_x; ++x)
+                {
+                    for (int y = min_y; y < max_y; ++y)
+                    {
+                        if ((visited[r][x - min_x][y - min_y] & (1 << channel)) == 0)
+                        {
+                            continue;
+                        }
+                        m_tetris::TetrisNode node;
+                        if (!create_legacy(engine, piece, x, y, r, node))
+                        {
+                            continue;
+                        }
+                        if (legacy_cells_key(&node) != cells)
+                        {
+                            continue;
+                        }
+                        m_tetris::TetrisNode down;
+                        if (create_legacy(engine, piece, x, y - 1, r, down))
+                        {
+                            bool blocked = false;
+                            for (int ry = 0; ry < down.height && !blocked; ++ry)
+                            {
+                                for (int rx = 0; rx < down.width; ++rx)
+                                {
+                                    if ((down.data[ry] >> (down.col + rx)) & 1)
+                                    {
+                                        if (board.full(down.col + rx, down.row + ry))
+                                        {
+                                            blocked = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (!blocked)
+                            {
+                                continue;
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    };
+
     void run_transform_tests()
     {
         for (char const *p = piece_order; *p; ++p)
@@ -269,9 +440,12 @@ namespace
                         else
                         {
                             bool bounds_only = !placement.has_value();
-                            if (placement)
+                            auto maybe_cells = placement
+                                ? toj::cells(piece_of(*p), *placement)
+                                : std::optional<std::array<std::pair<int, int>, 4>>{};
+                            if (maybe_cells)
                             {
-                                for (auto const &cell : toj::cells(piece_of(*p), *placement))
+                                for (auto const &cell : *maybe_cells)
                                 {
                                     if (cell.first < 0 || cell.first >= 10 || cell.second < 0 || cell.second >= 40)
                                     {
@@ -399,13 +573,15 @@ namespace
                                         bool const new_invalid = result.rot == r
                                             && result.x == placement->x() && result.y == placement->y();
                                         bool const above_legacy_domain = result.rot == to
-                                            && std::any_of(toj::cells(piece,
-                                                Placement::unchecked(result.x, result.y, result.rot)).begin(),
-                                                toj::cells(piece,
-                                                Placement::unchecked(result.x, result.y, result.rot)).end(),
-                                                [](std::pair<int, int> const &cell) {
-                                                    return cell.second >= 40;
-                                                });
+                                            && [&] {
+                                                auto maybe_cells = toj::cells(piece,
+                                                    Placement::unchecked(result.x, result.y, result.rot));
+                                                return maybe_cells && std::any_of(maybe_cells->begin(),
+                                                    maybe_cells->end(),
+                                                    [](std::pair<int, int> const &cell) {
+                                                        return cell.second >= 40;
+                                                    });
+                                            }();
                                         check(new_invalid || above_legacy_domain, what + " first-valid agreement");
                                     }
                                     else
@@ -455,8 +631,12 @@ namespace
         {
             maps.push_back(seeded_map(b));
         }
-        for (auto const &map : maps)
+        for (std::size_t board_index = 0; board_index < maps.size(); ++board_index)
         {
+            auto const &map = maps[board_index];
+            std::string const board_label = board_index == 0
+                ? "empty"
+                : "seeded " + std::to_string(board_index - 1);
             Board const board = Board::from_rows(rows_of(map));
             for (char const *p = piece_order; *p; ++p)
             {
@@ -523,10 +703,18 @@ namespace
                         bool const class_ok = land.last_rotate
                             ? terminal.count(land.cells) > 0
                             : normal.count(land.cells) > 0;
+                        std::string cells_text;
+                        for (auto const &cell : land.cells)
+                        {
+                            cells_text += "(" + std::to_string(cell.first) + ","
+                                + std::to_string(cell.second) + ")";
+                        }
+                        check(class_ok, std::string("shared T candidate preserves its legacy arrival class for ")
+                            + *p + " on " + board_label + " at" + cells_text
+                            + (land.last_rotate ? " reached by rotation" : " reached without rotation"));
                         if (!class_ok)
                         {
                             ++class_mismatch;
-                            std::println(stderr, "T arrival class mismatch on a shared placement");
                         }
                     }
                     auto applied = apply(board, piece, *candidate);
@@ -568,6 +756,8 @@ namespace
                 {
                     legacy_keys.insert(land.cells);
                 }
+                LegacyReplay replay{engine, map, board};
+                replay.run(*p);
                 call_with_block<SRS>(piece, [&]<block B>() {
                     scalar_arrival::ScalarConfig oracle_config{};
                     oracle_config.allow_180 = true;
@@ -593,18 +783,27 @@ namespace
                             continue;
                         }
                         ++new_only;
-                        bool const reachable = piece == Piece::T
+                        bool const table_reachable = piece == Piece::T
                             ? (candidate.arrival == ArrivalClass::TerminalRotation
                                 ? bit_at(rotation_words, candidate)
                                 : bit_at(normal_words, candidate))
                             : (bit_at(normal_words, candidate) || bit_at(rotation_words, candidate));
-                        check(reachable,
+                        check(table_reachable,
                             std::string("new-only candidate is reachable through the scalar oracle for ") + *p);
+                        int const channel = piece == Piece::T
+                            && candidate.arrival == ArrivalClass::TerminalRotation ? 1 : 0;
+                        bool const command_reachable = piece == Piece::T
+                            ? replay.landable_reachable(*p, key, channel)
+                            : (replay.landable_reachable(*p, key, 0)
+                                || replay.landable_reachable(*p, key, 1));
+                        check(command_reachable,
+                            std::string("new-only candidate is reachable through legacy commands for ") + *p);
                     }
                     return 0;
                 });
             }
         }
+        check(class_mismatch == 0, "no shared T arrival class mismatches on the corpus");
         std::println("candidates: {} legacy landings, {} shared, {} new-only, {} class mismatch, "
             "{} clear mismatch, {} spin mismatch, {} lockout mismatch",
             legacy_total, shared, new_only, class_mismatch, clear_mismatch, spin_mismatch, lockout_mismatch);
@@ -720,7 +919,6 @@ namespace
         auto rows = read_rows("tspin.csv");
         std::size_t compared = 0;
         std::size_t live_agreed = 0;
-        std::size_t documented = 0;
         for (auto const &fields : rows)
         {
             if (fields.size() != 8)
@@ -757,43 +955,101 @@ namespace
             SpinType const expected_type = expected == 1 ? SpinType::Full
                 : (expected == 2 ? SpinType::Mini : SpinType::None);
             bool const ok = spin.has_value() && *spin == expected_type;
+            check(ok, std::string("tspin fixture row classification matches the new rule: board ")
+                + fields[0] + " x" + fields[1] + " y" + fields[2] + " r" + fields[3]
+                + " last_rotate " + fields[5] + " clear " + fields[6] + " expected " + fields[7]
+                + (spin ? (std::string(" got ") + (*spin == SpinType::Full ? "full"
+                    : (*spin == SpinType::Mini ? "mini" : "none"))) : " got invalid"));
             if (ok)
             {
                 ++compared;
-                continue;
-            }
-            bool const legacy_full_new_mini = expected_type == SpinType::Full
-                && spin.has_value() && *spin == SpinType::Mini;
-            bool kicked_rotation_possible = false;
-            if (legacy_full_new_mini)
-            {
-                call_with_block<SRS>(Piece::T, [&]<block B>() {
-                    search::search_workspace<B, Board::occupancy_t> ws(board.occupancy());
-                    auto checker = ws.checker();
-                    for (int to = 0; to < 4 && !kicked_rotation_possible; ++to)
-                    {
-                        if (to == r)
-                        {
-                            continue;
-                        }
-                        auto result = checker.try_rotate(r, to, placement->x(), placement->y());
-                        kicked_rotation_possible = result.rot == to
-                            && (result.x != placement->x() || result.y != placement->y());
-                    }
-                    return 0;
-                });
-            }
-            check(legacy_full_new_mini && kicked_rotation_possible,
-                std::string("tspin fixture row classification difference is the documented wall-kick mini case: board ")
-                    + fields[0] + " x" + fields[1] + " y" + fields[2] + " r" + fields[3]
-                    + " last_rotate " + fields[5] + " clear " + fields[6] + " expected " + fields[7]);
-            if (legacy_full_new_mini && kicked_rotation_possible)
-            {
-                ++documented;
             }
         }
-        std::println("tspin fixture: {} rows agree with the new rule, {} documented wall-kick mini differences, "
-            "{} rows reproduce live", compared, documented, live_agreed);
+        std::println("tspin fixture: {} rows agree with the new rule, {} rows reproduce live",
+            compared, live_agreed);
+    }
+
+    void run_input_validation_tests()
+    {
+        Board empty;
+        for (char const *p = piece_order; *p; ++p)
+        {
+            Piece const piece = piece_of(*p);
+            int const valid_rotations = piece == Piece::O ? 1 : 4;
+            for (int r = 0; r < 4; ++r)
+            {
+                bool const rotation_valid = r < valid_rotations;
+                Placement const placement = Placement::unchecked(4, 20, r);
+                bool const geometry_valid = toj::cells(piece, placement).has_value()
+                    && toj::lowest_occupied_row(piece, placement).has_value()
+                    && toj::occupancy_mask(piece, placement).has_value();
+                check(geometry_valid == rotation_valid,
+                    std::string("geometry rejects piece-invalid rotations for ") + *p
+                        + " r" + std::to_string(r));
+                check(toj::fits(piece, placement, empty) == rotation_valid,
+                    std::string("fits rejects piece-invalid rotations for ") + *p
+                        + " r" + std::to_string(r));
+                if (!rotation_valid)
+                {
+                    Candidate candidate{placement, ArrivalClass::Normal};
+                    check(!apply(empty, piece, candidate).has_value(),
+                        std::string("apply rejects piece-invalid rotations for ") + *p
+                            + " r" + std::to_string(r));
+                }
+            }
+        }
+        Candidate floating_j{Placement::unchecked(4, 10, 0), ArrivalClass::Normal};
+        check(!apply(empty, Piece::J, floating_j).has_value(),
+            "apply rejects floating non-T candidates");
+        Candidate floating_t{Placement::unchecked(4, 10, 0), ArrivalClass::TerminalRotation};
+        check(!apply(empty, Piece::T, floating_t).has_value(), "apply rejects floating T candidates");
+        Candidate resting_j{Placement::unchecked(4, 0, 0), ArrivalClass::Normal};
+        check(apply(empty, Piece::J, resting_j).has_value(),
+            "apply accepts resting non-T candidates");
+        Candidate resting_t{Placement::unchecked(4, 0, 0), ArrivalClass::Normal};
+        check(apply(empty, Piece::T, resting_t).has_value(), "apply accepts resting T candidates");
+        std::println("input validation: O rotations 1 through 3 rejected through the value API, "
+            "floating candidates rejected for every piece");
+    }
+
+    void run_arrival_class_tests()
+    {
+        Board empty;
+        auto t_candidates = enumerate_candidates(empty, Piece::T, MovementConfig{true});
+        bool has_normal = false;
+        bool has_terminal = false;
+        for (auto const &candidate : t_candidates)
+        {
+            if (candidate.arrival == ArrivalClass::Normal)
+            {
+                has_normal = true;
+            }
+            else
+            {
+                has_terminal = true;
+            }
+        }
+        check(has_normal, "empty board T enumeration keeps normal arrivals");
+        check(has_terminal, "empty board T enumeration keeps terminal rotation arrivals");
+        for (char const *p = piece_order; *p; ++p)
+        {
+            Piece const piece = piece_of(*p);
+            if (piece == Piece::T)
+            {
+                continue;
+            }
+            bool all_normal = true;
+            for (auto const &candidate : enumerate_candidates(empty, piece, MovementConfig{true}))
+            {
+                if (candidate.arrival != ArrivalClass::Normal)
+                {
+                    all_normal = false;
+                }
+            }
+            check(all_normal,
+                std::string("empty board non-T enumeration carries no terminal metadata for ") + *p);
+        }
+        std::println("arrival classes: both T classes represented on the empty board");
     }
 
     void run_directed_rule_tests(Engine &engine)
@@ -875,7 +1131,7 @@ namespace
                     {
                         continue;
                     }
-                    if (placement->y() != lowest_occupied_row(piece, *placement))
+                    if (placement->y() != lowest_occupied_row(piece, *placement).value_or(placement->y()))
                     {
                         ++anchor_disagreements;
                     }
@@ -901,8 +1157,9 @@ namespace
                         {
                             continue;
                         }
-                        bool const lowest_rule = lowest_occupied_row(piece, rest_pose) >= 20;
-                        check(applied->lockout == lowest_rule,
+                        bool const lowest_rule = lowest_occupied_row(piece, rest_pose).value_or(-1) >= 20;
+                        check(lowest_occupied_row(piece, rest_pose).has_value()
+                            && applied->lockout == lowest_rule,
                             std::string("lockout uses the lowest occupied row for ") + *p
                                 + " r" + std::to_string(r));
                         m_tetris::TetrisNode node;
@@ -963,6 +1220,8 @@ int main()
     search_tspin::Search legacy_search;
     legacy_search.init(engine.context().get(), engine.search_config());
     run_transform_tests();
+    run_input_validation_tests();
+    run_arrival_class_tests();
     run_geometry_tests(engine);
     run_geometry_fixture_tests(engine);
     run_kick_tests(engine);

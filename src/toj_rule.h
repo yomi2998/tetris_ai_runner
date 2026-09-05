@@ -17,6 +17,8 @@
 
 namespace tetris::toj
 {
+    using reachability::operator""_szc;
+
     using Board = tetris::Board;
     using Piece = tetris::Piece;
     using Placement = tetris::Placement;
@@ -105,7 +107,6 @@ namespace tetris::toj
     namespace detail
     {
         using reachability::operator""_szc;
-        using reachability::operator+;
 
         template <auto B>
             requires reachability::block_spec<decltype(B)>
@@ -126,10 +127,20 @@ namespace tetris::toj
         };
     }
 
-    inline std::array<std::pair<int, int>, 4> cells(Piece piece, Placement placement)
+    inline constexpr int orientation_count(Piece piece)
     {
+        return piece == Piece::O ? 1 : 4;
+    }
+
+    inline std::optional<std::array<std::pair<int, int>, 4>> cells(Piece piece, Placement placement)
+    {
+        int const rotation = placement.rotation();
+        if (rotation < 0 || rotation >= orientation_count(piece))
+        {
+            return std::nullopt;
+        }
         return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::array<std::pair<int, int>, 4> {
-            auto const &offsets = detail::PieceCells<B>::offsets[placement.rotation()];
+            auto const &offsets = detail::PieceCells<B>::offsets[rotation];
             std::array<std::pair<int, int>, 4> out{};
             for (int k = 0; k < 4; ++k)
             {
@@ -139,9 +150,31 @@ namespace tetris::toj
         });
     }
 
-    inline bool fits(Piece piece, Placement placement, Board const &board)
+    inline bool in_bounds(Piece piece, Placement placement)
     {
-        for (auto const &cell : cells(piece, placement))
+        auto maybe = cells(piece, placement);
+        if (!maybe)
+        {
+            return false;
+        }
+        for (auto const &cell : *maybe)
+        {
+            if (cell.first < 0 || cell.first >= Board::width || cell.second < 0 || cell.second >= Board::height)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    inline bool cells_empty(Piece piece, Placement placement, Board const &board)
+    {
+        auto maybe = cells(piece, placement);
+        if (!maybe)
+        {
+            return false;
+        }
+        for (auto const &cell : *maybe)
         {
             if (cell.first < 0 || cell.first >= Board::width || cell.second < 0 || cell.second >= Board::height)
             {
@@ -155,26 +188,45 @@ namespace tetris::toj
         return true;
     }
 
+    inline bool fits(Piece piece, Placement placement, Board const &board)
+    {
+        return cells_empty(piece, placement, board);
+    }
+
     inline bool can_spawn(Board const &board, Piece piece)
     {
         return fits(piece, Placement::unchecked(spawn_x, spawn_y, 0), board);
     }
 
-    inline int lowest_occupied_row(Piece piece, Placement placement)
+    inline std::optional<int> lowest_occupied_row(Piece piece, Placement placement)
     {
+        auto maybe = cells(piece, placement);
+        if (!maybe)
+        {
+            return std::nullopt;
+        }
         int low = Board::height;
-        for (auto const &cell : cells(piece, placement))
+        for (auto const &cell : *maybe)
         {
             low = std::min(low, cell.second);
         }
         return low;
     }
 
-    inline Board::occupancy_t occupancy_mask(Piece piece, Placement placement)
+    inline std::optional<Board::occupancy_t> occupancy_mask(Piece piece, Placement placement)
     {
-        Board::occupancy_t mask{};
-        for (auto const &cell : cells(piece, placement))
+        auto maybe = cells(piece, placement);
+        if (!maybe)
         {
+            return std::nullopt;
+        }
+        Board::occupancy_t mask{};
+        for (auto const &cell : *maybe)
+        {
+            if (cell.first < 0 || cell.first >= Board::width || cell.second < 0 || cell.second >= Board::height)
+            {
+                return std::nullopt;
+            }
             mask.set(cell.first, cell.second);
         }
         return mask;
@@ -210,7 +262,12 @@ namespace tetris::toj
             bool const is_t = B.piece_identity == reachability::piece_id("T");
             std::map<Key, Candidate> found;
             auto add = [&](Placement placement, ArrivalClass arrival) {
-                Key key{cells(piece, placement), is_t ? static_cast<int>(arrival) : 0};
+                auto maybe_cells = cells(piece, placement);
+                if (!maybe_cells)
+                {
+                    return;
+                }
+                Key key{*maybe_cells, is_t ? static_cast<int>(arrival) : 0};
                 found.emplace(key, Candidate{placement, is_t ? arrival : ArrivalClass::Normal});
             };
             reachability::search::dispatch_with_height<B, 20>(board.occupancy(), board.roof(),
@@ -274,12 +331,40 @@ namespace tetris::toj
                 return SpinType::None;
             }
             bool mini_ready = true;
-            for (int other = 0; other < B.orientations; ++other)
+            for (int other = 0; other < B.orientations && mini_ready; ++other)
             {
-                if (other != rotation && checker.is_valid(other, x, y))
+                if (other == rotation)
+                {
+                    continue;
+                }
+                bool decided = false;
+                bool rotation_open = false;
+                reachability::static_for<std::tuple_size_v<decltype(B.kicks)>>([&](auto i) {
+                    constexpr auto entry = B.kicks[i];
+                    constexpr auto diff = entry[0_szc];
+                    if (diff[0_szc] != rotation || diff[1_szc] != other)
+                    {
+                        return;
+                    }
+                    constexpr auto table = entry[1_szc];
+                    reachability::static_for<std::tuple_size_v<std::remove_const_t<decltype(table)>>>([&](auto j) {
+                        if (decided)
+                        {
+                            return;
+                        }
+                        constexpr auto kick = table[j];
+                        auto target = Placement::try_make(x + kick[0_szc], y + kick[1_szc], other);
+                        if (!target || !in_bounds(piece, *target))
+                        {
+                            return;
+                        }
+                        decided = true;
+                        rotation_open = cells_empty(piece, *target, board);
+                    });
+                });
+                if (decided && rotation_open)
                 {
                     mini_ready = false;
-                    break;
                 }
             }
             if (mini_ready)
@@ -301,29 +386,43 @@ namespace tetris::toj
 
     inline std::optional<RuleResult> apply(Board const &board, Piece piece, Candidate candidate)
     {
-        if (!fits(piece, candidate.placement, board))
-        {
-            return std::nullopt;
-        }
-        Board next = board;
-        next.apply_unchecked(occupancy_mask(piece, candidate.placement));
-        Board::ClearResult cleared = next.cleared();
-        SpinType spin = SpinType::None;
-        if (piece == Piece::T)
-        {
-            auto classified = classify_spin(board, piece, candidate, cleared.count);
-            if (!classified)
+        int const rotation = candidate.placement.rotation();
+        int const x = candidate.placement.x();
+        int const y = candidate.placement.y();
+        return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::optional<RuleResult> {
+            reachability::search::search_workspace<B, Board::occupancy_t> ws(board.occupancy());
+            auto checker = ws.checker();
+            if (rotation < 0 || rotation >= B.orientations
+                || !checker.is_valid(rotation, x, y) || checker.is_valid(rotation, x, y - 1))
             {
                 return std::nullopt;
             }
-            spin = *classified;
-        }
-        RuleResult result;
-        result.board = cleared.board;
-        result.clear_count = cleared.count;
-        result.perfect_clear = cleared.board.empty();
-        result.lockout = lowest_occupied_row(piece, candidate.placement) >= death_row;
-        result.spin = spin;
-        return result;
+            auto mask = occupancy_mask(piece, candidate.placement);
+            auto lowest = lowest_occupied_row(piece, candidate.placement);
+            if (!mask || !lowest)
+            {
+                return std::nullopt;
+            }
+            Board next = board;
+            next.apply_unchecked(*mask);
+            Board::ClearResult cleared = next.cleared();
+            SpinType spin = SpinType::None;
+            if (piece == Piece::T)
+            {
+                auto classified = classify_spin(board, piece, candidate, cleared.count);
+                if (!classified)
+                {
+                    return std::nullopt;
+                }
+                spin = *classified;
+            }
+            RuleResult result;
+            result.board = cleared.board;
+            result.clear_count = cleared.count;
+            result.perfect_clear = cleared.board.empty();
+            result.lockout = *lowest >= death_row;
+            result.spin = spin;
+            return result;
+        });
     }
 }
