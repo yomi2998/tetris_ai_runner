@@ -366,13 +366,17 @@ namespace
             check(path.size <= Path::max_payload, what + " fits the exported buffer");
             tallies.longest = std::max(tallies.longest, path.size);
             ReplayResult replayed = replay_path(board, piece, start, path.view(), path_config, true);
+            ReplayResult open = replay_path(board, piece, start, path.view(), path_config, false);
             bool const arrival_ok = piece == Piece::T
                 ? replayed.arrival == candidate.arrival
                 : true;
             check(replayed.valid && replayed.placement == candidate.placement && arrival_ok,
                 what + " replays exactly");
+            check(open.valid, what + " replays without lock");
             auto independent = published_replay::replay(model, rows, piece_char, 3, 21, 0,
                 path.view(), true, allow_180);
+            auto independent_open = published_replay::replay(model, rows, piece_char, 3, 21, 0,
+                path.view(), false, allow_180);
             auto expected_cells = sorted_cells_of(piece, candidate.placement);
             bool const independent_arrival_ok = piece == Piece::T
                 ? independent.arrival
@@ -381,7 +385,10 @@ namespace
             check(independent.valid && independent.cells == expected_cells
                 && independent_arrival_ok,
                 what + " replays through the independent interpreter");
-            if (piece != Piece::T && replayed.arrival == ArrivalClass::TerminalRotation)
+            check((open.arrival == ArrivalClass::TerminalRotation)
+                    == (independent_open.arrival == 1),
+                what + " replay layers agree on the pre-lock arrival");
+            if (piece != Piece::T && open.arrival == ArrivalClass::TerminalRotation)
             {
                 check(!finder.normal_path_exists(candidate),
                     what + " ends with rotation only where no normal path exists");

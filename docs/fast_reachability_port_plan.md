@@ -1095,7 +1095,7 @@ Rollback:
 | Roof | `highest_y()` oracle | Exact after every mutation |
 | T-spin | Legacy classifier fixture and direct rule cases | Observable TOJ parity on shared cases |
 | Perfect clear | Board emptiness | Exact attack trigger |
-| Pathfinder | Independent scalar SRS interpreter | Exact placement and arrival class |
+| Pathfinder | Independent scalar SRS interpreter | Exact placement and, for T, exact arrival class |
 | Hold | Scenario fixtures | Exact piece consumption and hold state |
 | Policy eval | Legacy fixture | Exact or approved floating tolerance |
 | Policy transition | Legacy fixture | Exact state and score |
@@ -1410,7 +1410,7 @@ The task is complete only when all statements below are true.
 - Every new-only candidate independently replays.
 - T-spin behavior matches observable TOJ fixtures.
 - Board, clear, roof, perfect clear, garbage, hold, and top-out tests pass.
-- Every selected path replays to exact placement and arrival class.
+- Every selected path replays to exact placement and, for T, exact arrival class.
 - Exported ABI and path protocol remain accepted by `match`.
 
 ### Performance
