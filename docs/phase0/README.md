@@ -382,7 +382,7 @@ self-release, and 10 of 10 in the sanitizer build excluding perft.
 ## Phase 4 status
 
 Implemented in `src/toj_pathfinder.h` and gated by
-`tests/path_differential.cpp` (CTest `path_differential`, 135772 checks,
+`tests/path_differential.cpp` (CTest `path_differential`, 147690 checks,
 0 failures):
 
 - Fixed-array breadth-first search over pose and arrival class on the full
@@ -410,7 +410,9 @@ Implemented in `src/toj_pathfinder.h` and gated by
   path endpoint so a moving final hard drop cannot hide an invalid
   rotation ending, with fallback totals of 81 and 62 pinned for the
   seeded corpus and 116 and 85 for the reach corpus. Both replay layers
-  must agree on the pre-lock arrival. Floating terminal candidates
+  must agree on the pre-lock arrival, and T candidates must show the
+  candidate arrival before lock in both layers so a moving final hard
+  drop cannot hide a rotation ending as normal. Floating terminal candidates
   receive no path.
 - A production replay interpreter over the same legality and kick routines
   proves every command legal, first-valid kicks, exact final placement and
