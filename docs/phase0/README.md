@@ -315,7 +315,7 @@ after later code commits requires checking out the recorded commit `0d03459`.
 ## Phase 3 status
 
 Implemented in `src/toj_rule.h` and gated by `tests/rule_differential.cpp`
-(CTest `rule_differential`, 464635 checks, 0 failures):
+(CTest `rule_differential`, 469094 checks, 0 failures):
 
 - Canonical spawn and dispatch: every piece spawns at kernel anchor
   `(4, 20, 0)`, and the adapter enumerates through the kernel's
@@ -331,6 +331,12 @@ Implemented in `src/toj_rule.h` and gated by `tests/rule_differential.cpp`
   `(2, -3)` and `(1, -3)` at r1 and r3 of I). One constant translation does
   not work for every orientation, which the plan called out and the
   differential proves.
+- The value API rejects piece-invalid input before indexing geometry: O
+  rotations 1 through 3 return empty or false through `cells`, `fits`,
+  `lowest_occupied_row`, `occupancy_mask`, and `apply`, and `apply` rejects
+  floating candidates for every piece, not only T. Directed tests pin both
+  behaviors, including resting acceptances and a spawn obstruction that
+  blocks T but not I.
 - Geometry proof: 7790 exhaustive pose comparisons over every piece,
   rotation, x, and y in the legacy domain, plus all 816 comparable
   `geometry.csv` fixture rows, with occupied cells equal everywhere and every
@@ -342,21 +348,22 @@ Implemented in `src/toj_rule.h` and gated by `tests/rule_differential.cpp`
 - Candidate enumeration: both arrival channels convert to four-state
   placements, duplicate I, S, and Z occupancies canonicalize by occupied
   cells, and T keeps at most one normal and one terminal-rotation candidate
-  per physical placement.
+  per physical placement. Every T arrival-class mismatch fails the suite,
+  and a directed empty-board case proves both T classes remain represented
+  while non-T candidates carry no terminal metadata.
 - Differential coverage: all 4070 legacy landings across the corpus have an
   equivalent new candidate, with no legacy-invalid placements to document;
-  the 198 new-only candidates are each replay-verified through the
-  independent scalar command oracle; zero arrival-class, clear-count, spin,
-  or lockout mismatches on shared candidates; all 3908 `reach.csv` rows are
-  reproduced live and covered.
+  the 198 new-only candidates are each verified through two independent
+  layers, the scalar command oracle over the kernel tables and a legacy
+  command BFS that walks only the legacy context net and wall-kick arrays
+  with explicit per-command arrival channels; zero arrival-class,
+  clear-count, spin, or lockout mismatches on shared candidates; all 3908
+  `reach.csv` rows are reproduced live and covered.
 - T-spin classification: the seven plan conditions, with non-landable input
-  rejected. It agrees with the legacy classifier on 3320 of 3328 `tspin.csv`
-  rows and with the live legacy classifier on all 3328. The eight
-  differences are pinned as the documented change: the legacy mini readiness
-  asks whether any kicked rotation exists, while the plan's rule asks
-  whether the same-anchor rotations are all invalid, and the differing rows
-  are exactly the wall poses where a kick enables a rotation that an
-  in-place rotation does not.
+  rejected and mini readiness asking whether any kick-enabled rotation can
+  succeed, which is exactly what the legacy net's rotation pointers encode.
+  It agrees with the legacy classifier on all 3328 `tspin.csv` rows and with
+  the live legacy classifier on all 3328.
 - Lockout, spawn death, and perfect clear: lockout is computed from the
   lowest occupied row (the corpus contains 13 orientations whose anchor row
   disagrees with it, all pinned, and the legacy bounding row agrees on every
@@ -364,7 +371,7 @@ Implemented in `src/toj_rule.h` and gated by `tests/rule_differential.cpp`
   that blocks T but not I, and the perfect-clear trigger is detected exactly.
 
 Phase 3 gates: every legacy physical placement has an equivalent new
-candidate, new-only candidates pass the independent replay oracle, shared T
+candidate, new-only candidates pass independent replay, shared T
 candidates preserve normal-versus-terminal semantics, and rule outcomes match
 fixtures for shared candidates. The differential runs in 0.12 seconds
 optimized and 2.0 seconds under ASan and UBSan with no sanitizer reports,

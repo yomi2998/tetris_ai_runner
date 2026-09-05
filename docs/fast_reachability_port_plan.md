@@ -401,7 +401,7 @@ T-spin truth belongs to the rule boundary and uses:
 2. Arrival class is `TerminalRotation`.
 3. Candidate came from the landable set, so downward movement is invalid by search invariant.
 4. At least three center corners are occupied or outside the board.
-5. Mini readiness is true only when the same-anchor CW, CCW, and 180 T orientations are all invalid.
+5. Mini readiness is true only when no CW, CCW, or 180 rotation from the final pose can succeed: for each direction, the first kick result whose cells lie inside the board must be occupied. The legacy net's rotation pointers are exactly those first in-bounds kick results, so this rule reproduces the observable legacy classification, including at wall poses where a kick enables a rotation that an in-place rotation does not.
 6. Zero-line spins become none.
 7. A mini with more than one cleared line becomes full.
 
