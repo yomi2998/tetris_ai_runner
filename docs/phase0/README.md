@@ -382,7 +382,7 @@ self-release, and 10 of 10 in the sanitizer build excluding perft.
 ## Phase 4 status
 
 Implemented in `src/toj_pathfinder.h` and gated by
-`tests/path_differential.cpp` (CTest `path_differential`, 97682 checks,
+`tests/path_differential.cpp` (CTest `path_differential`, 97688 checks,
 0 failures):
 
 - Fixed-array breadth-first search over pose and arrival class on the full
@@ -398,8 +398,8 @@ Implemented in `src/toj_pathfinder.h` and gated by
 - Command edges through the kernel move checker and first-valid kicks:
   unit `l`, `r`, and `d`, CW `c`, CCW `z`, conditional 180 `x`, and sonic
   drop `D` to rest without locking. No wall commands and no removed
-  `X`, `Z`, or `C` commands are emitted, and both replay interpreters
-  reject them.
+  `X`, `Z`, or `C` commands are emitted; both replay interpreters accept
+  the preserved `L` and `R` wall slides and reject removed commands.
 - Goal semantics by arrival class: a terminal candidate ends exactly at its
   placement with a rotation as the last successful command, and a normal
   candidate ends at a non-rotation arrival whose hard drop lands exactly on
@@ -428,11 +428,12 @@ Implemented in `src/toj_pathfinder.h` and gated by
   reach corpus adds 4535 candidates with 180 on and 4416 with 180 off, 640
   terminal in each mode, longest paths of 24 and 26 commands, and 114
   spawn-obstructed pairs skipped with the obstruction asserted, and those
-  totals are pinned as well. A selection integration fixture proves exactly
-  one pathfinder construction per selected move.
+  totals are pinned as well. A selection-shaped fixture models one finder
+  per selection with deterministic reuse; counting constructions per
+  selected move belongs to Phase 6 engine integration.
 
-Phase 4 gates: every emitted candidate has a valid path from the spawn
-pose, terminal candidates reach the landable pose with rotation last, replay
+Phase 4 gates: every emitted candidate has a valid path from its tested
+start pose, terminal candidates reach the landable pose with rotation last, replay
 is exact through both interpreters, no path uses removed commands, no path
 exceeds the buffer, and each search runs once per board and piece. The
 differential runs in 0.04 seconds optimized and CTest is 12 of 12 in GCC
