@@ -378,3 +378,48 @@ fixtures for shared candidates. The differential runs in 0.12 seconds
 optimized and 2.0 seconds under ASan and UBSan with no sanitizer reports,
 and CTest is 11 of 11 in GCC Debug, Clang Debug, GCC self-release, and Clang
 self-release, and 10 of 10 in the sanitizer build excluding perft.
+
+## Phase 4 status
+
+Implemented in `src/toj_pathfinder.h` and gated by
+`tests/path_differential.cpp` (CTest `path_differential`, 51026 checks,
+0 failures):
+
+- Fixed-array breadth-first search over pose and arrival class on the full
+  10 by 48 board, one search per board and piece with per-candidate
+  reconstruction, so pathfinding cost is paid once per selected move batch.
+  Visited, parent, parent command, queue, and drop-landing storage are all
+  fixed-capacity arrays; there is no priority queue, hash map, or
+  per-candidate allocation, and the reconstructed path is a 1024-byte
+  stack buffer that fails closed on overflow.
+- Command edges through the kernel move checker and first-valid kicks:
+  unit `l`, `r`, and `d`, CW `c`, CCW `z`, conditional 180 `x`, and sonic
+  drop `D` to rest without locking. No wall commands and no removed
+  `X`, `Z`, or `C` commands are emitted, and both replay interpreters
+  reject them.
+- Goal semantics by arrival class: a terminal candidate ends exactly at its
+  placement with a rotation as the last successful command, and a normal
+  candidate ends at a non-rotation arrival whose hard drop lands exactly on
+  the placement. Non-T candidates keep the conventional normal label while
+  their goal accepts either channel, since the class is ignored for them.
+- A production replay interpreter over the same legality and kick routines
+  proves every command legal, first-valid kicks, exact final placement and
+  arrival class (placement only for non-T), an unmoved terminal placement
+  under the final hard drop, and a fitting buffer.
+- An independent row-and-cell scalar interpreter in the legacy status frame
+  with runtime-measured frames and hand-authored published kick tables,
+  sharing no rule data with the kernel, replays the same paths and agrees
+  on final cells and arrival class, plus hand-authored command outcomes
+  that pin the interpreter itself.
+- Corpus coverage: all 4980 enumerated candidates with 180 on and all 4935
+  with 180 off across the empty board and the 24 seeded boards have a valid
+  path, with 721 terminal candidates in each mode and longest paths of 16
+  and 13 commands.
+
+Phase 4 gates: every emitted candidate has a valid path from the spawn
+pose, terminal candidates reach the landable pose with rotation last, replay
+is exact through both interpreters, no path uses removed commands, no path
+exceeds the buffer, and each search runs once per board and piece. The
+differential runs in 0.04 seconds optimized and CTest is 12 of 12 in GCC
+Debug, Clang Debug, GCC self-release, and Clang self-release, and 11 of 11
+in the sanitizer build excluding perft.
