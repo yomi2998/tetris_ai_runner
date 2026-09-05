@@ -78,15 +78,17 @@ f578390595ee3b356d0ea204bb722d8dc10fe4a139ddecb198e0fab006ef906e  src/producer_i
 53996b33f012829babb8c356d3aecdf7ef5855269faf70470a4e111186d27925  tests/reach_corpus.h
 98f63ffc5c78bf6b619c4be5bfd6b970f9e12e708f7f536329781c640671312b  tests/raw_bench_main.cpp
 769ca3cd01d5c851e07403535cd35ad29d1bb84b94aeb8bb3b0ea5ba10650e29  tests/reference_a_frozen_main.cpp
-6d480f9adeac8b18a879d719d4fcfd84a7602222a7f621886f34fdd4a4e56185  tests/check_candidate_inclusion.py
+9c6b7e73d13d0ca06c1f7e81f82c9f4afb2a2f560f009ddaef68f446ad887fd7  tests/check_candidate_inclusion.py
 00db5d52a8f546bf860bd35ceab079974b0da6564b791eeaeb6843204561afe1  src/arrival_candidates.cpp
 272e9369dcdc41d958a3fd74b782821d76716100c41237b53cffac8118196557  tests/run_perf_gate.py
-58da8976cbcd21938442038f348b3bd39bdffa18588954d2032b9112bbcc399b  cmake/reach_parity_check.cmake
-22ff2f5fc356c4fb55a9eef37c12f5ff5ca27b562220f8bf69306e791a0c888b  CMakeLists.txt
+856a5116b40fc26661cba259b86add6cbb6d422551bde271e4d02117e5bb722b  cmake/reach_parity_check.cmake
+7e644b55c30ed9a1cc55f3be7f65c4befc7c411d74eba3ba44f435fe73e4e6ab  CMakeLists.txt
 fb924b6fe6403e71a5e9077a47cbe986354204ddebd91dfefc517449e1c55466  tests/scalar_arrival_oracle.h
-673b3766476cd7f124a720d44be8b8b16d3abfe2554f434f4470362d1d4b2f77  tests/fast_reachability_tests.cpp
+f5c1907d579992e2dd7afec6ea55083070c63d0639d64505717508c04ed05492  tests/fast_reachability_tests.cpp
 76b2460769f95ef6cebf20441fe80140a54055ae21587f17fea18994289e092c  src/fast-reachability/search.hpp
 b9d6ea6dc7f07c990164fcfee9bcb7ebe0594a51ae2d513723909b8861ca57f3  src/fast-reachability/search_tests.cpp
+20eb5e000a388becd378e12b43d4c0028394d84f0e06580573776a42e2956315  src/toj_rule.h
+bc924bc254ec233df6e89a2614ba7c3b5ada96c566afc164d653f8155e7f183f  tests/rule_differential.cpp
 
 # Reference A sources compiled into reference_a_frozen
 refa_root=e9a90d8dbc8e2e5f513691c1c83b211097fb21eb refa_src_worktree=clean refa_kernel=0c35e130abb733caefababe0d08c8faf466740e7
@@ -101,13 +103,13 @@ a718d0010e2e26530f9b0a15da362e8f0a26be869a83783c4d2f051257df89b9  refa/src/core/
 
 # Campaign build and verification commands, chained so a failed build cannot be
 # mistaken for a passing test
-cmake -B out/build/linux-gcc-self-release -S . && cmake --build out/build/linux-gcc-self-release && (cd out/build/linux-gcc-self-release && ctest)   # 10 of 10
+cmake -B out/build/linux-gcc-self-release -S . && cmake --build out/build/linux-gcc-self-release && (cd out/build/linux-gcc-self-release && ctest)   # 11 of 11
 PERF_GATE_CORE=6 PERF_GATE_REPS=5 PERF_GATE_ITERS_T=300 PERF_GATE_ITERS_RAW=3000 \
   python3 tests/run_perf_gate.py out/build/linux-gcc-self-release
 cmake -B out/build/san -S . -DCMAKE_BUILD_TYPE=Debug -DTETRIS_SANITIZERS=ON \
-  && cmake --build out/build/san && (cd out/build/san && ctest -E perft)                      # 9 of 9
-cmake --preset linux-gcc-debug && cmake --build --preset build-linux-gcc-debug && ctest --preset ... # 10 of 10
-cmake --preset linux-clang-debug && cmake --build --preset build-linux-clang-debug            # 10 of 10
-cmake --preset linux-clang-self-release && cmake --build --preset build-linux-clang-self-release  # 10 of 10
+  && cmake --build out/build/san && (cd out/build/san && ctest -E perft)                      # 10 of 10
+cmake --preset linux-gcc-debug && cmake --build --preset build-linux-gcc-debug && ctest --preset ... # 11 of 11
+cmake --preset linux-clang-debug && cmake --build --preset build-linux-clang-debug            # 11 of 11
+cmake --preset linux-clang-self-release && cmake --build --preset build-linux-clang-self-release  # 11 of 11
 # Comparator targets compile with -O3 -march=native -DNDEBUG; the root scope adds -flto
 # except in the sanitizer build. gcc (GCC) 16.2.1 and clang 22.1.8 both build and pass.

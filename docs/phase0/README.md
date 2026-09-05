@@ -311,3 +311,62 @@ same-mode, 568 cross-mode) and the corpus and contract hashes are unchanged.
 The Phase 2 campaign record stays pinned to its recorded commit: the comparator
 bytes embed the last code commit, so reproducing the recorded binary hashes
 after later code commits requires checking out the recorded commit `0d03459`.
+
+## Phase 3 status
+
+Implemented in `src/toj_rule.h` and gated by `tests/rule_differential.cpp`
+(CTest `rule_differential`, 464635 checks, 0 failures):
+
+- Canonical spawn and dispatch: every piece spawns at kernel anchor
+  `(4, 20, 0)`, and the adapter enumerates through the kernel's
+  `dispatch_with_height` and `arrival_search` with the production movement
+  flags (softdrop and sonicdrop on, 180 runtime, no 20G).
+- `ExternalPoseTransform` maps every legacy `(x, y, r)` status to the kernel
+  anchor per piece and rotation, with the inverse for diagnostics. The table
+  is deliberately per rotation: the kernel's anchor space is the raw shape
+  space, with the orientation translations folded into the rebased kick
+  tables, so the legacy-to-kernel delta is `(1, -1)` for T, J, L, O, and
+  rotation 0 of every piece but differs for the offset orientations of S, Z,
+  and I (`(2, -1)` at r1 of S and Z, `(1, -2)` at r2 of S, Z, and I,
+  `(2, -3)` and `(1, -3)` at r1 and r3 of I). One constant translation does
+  not work for every orientation, which the plan called out and the
+  differential proves.
+- Geometry proof: 7790 exhaustive pose comparisons over every piece,
+  rotation, x, and y in the legacy domain, plus all 816 comparable
+  `geometry.csv` fixture rows, with occupied cells equal everywhere and every
+  legacy creation failure shown to be a pure bounds failure.
+- SRS first-valid proof: 401174 CW, CCW, and 180 comparisons against the
+  legacy wall-kick arrays on the empty board and the 24 seeded boards. The
+  180 comparison cannot pass vacuously because both implementations carry
+  identity-only 180 tables.
+- Candidate enumeration: both arrival channels convert to four-state
+  placements, duplicate I, S, and Z occupancies canonicalize by occupied
+  cells, and T keeps at most one normal and one terminal-rotation candidate
+  per physical placement.
+- Differential coverage: all 4070 legacy landings across the corpus have an
+  equivalent new candidate, with no legacy-invalid placements to document;
+  the 198 new-only candidates are each replay-verified through the
+  independent scalar command oracle; zero arrival-class, clear-count, spin,
+  or lockout mismatches on shared candidates; all 3908 `reach.csv` rows are
+  reproduced live and covered.
+- T-spin classification: the seven plan conditions, with non-landable input
+  rejected. It agrees with the legacy classifier on 3320 of 3328 `tspin.csv`
+  rows and with the live legacy classifier on all 3328. The eight
+  differences are pinned as the documented change: the legacy mini readiness
+  asks whether any kicked rotation exists, while the plan's rule asks
+  whether the same-anchor rotations are all invalid, and the differing rows
+  are exactly the wall poses where a kick enables a rotation that an
+  in-place rotation does not.
+- Lockout, spawn death, and perfect clear: lockout is computed from the
+  lowest occupied row (the corpus contains 13 orientations whose anchor row
+  disagrees with it, all pinned, and the legacy bounding row agrees on every
+  directed case), spawn obstruction is detected per piece including a case
+  that blocks T but not I, and the perfect-clear trigger is detected exactly.
+
+Phase 3 gates: every legacy physical placement has an equivalent new
+candidate, new-only candidates pass the independent replay oracle, shared T
+candidates preserve normal-versus-terminal semantics, and rule outcomes match
+fixtures for shared candidates. The differential runs in 0.12 seconds
+optimized and 2.0 seconds under ASan and UBSan with no sanitizer reports,
+and CTest is 11 of 11 in GCC Debug, Clang Debug, GCC self-release, and Clang
+self-release, and 10 of 10 in the sanitizer build excluding perft.
