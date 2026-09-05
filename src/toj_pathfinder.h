@@ -32,6 +32,7 @@ namespace tetris::path
     struct Path
     {
         static constexpr std::size_t capacity = 1024;
+        static constexpr std::size_t max_payload = capacity - 3;
         std::array<char, capacity> data{};
         std::size_t size = 0;
         bool valid = false;
@@ -59,10 +60,10 @@ namespace tetris::path
 
         Pathfinder() = default;
 
-        Pathfinder(Board const &board, Piece piece, PathConfig config)
+        Pathfinder(Board const &board, Piece piece, Placement start, PathConfig config)
         {
             *this = reachability::call_with_block<toj::SRS>(piece, [&]<reachability::block B>() {
-                return build<B>(board, config);
+                return build<B>(board, start, config);
             });
         }
 
@@ -170,6 +171,10 @@ namespace tetris::path
                 out.data[out.size++] = parent_command[cursor];
                 cursor = parent[cursor];
             }
+            if (out.size > Path::max_payload)
+            {
+                return Path{};
+            }
             for (std::size_t i = 0; i < out.size / 2; ++i)
             {
                 char const swap = out.data[i];
@@ -182,7 +187,7 @@ namespace tetris::path
 
         template <auto B>
             requires reachability::block_spec<decltype(B)>
-        static Pathfinder build(Board const &board, PathConfig config)
+        static Pathfinder build(Board const &board, Placement start, PathConfig config)
         {
             Pathfinder out;
             out.orientations = B.orientations;
@@ -218,7 +223,7 @@ namespace tetris::path
                 out.parent_command[to] = command;
                 out.queue[out.queue_tail++] = static_cast<std::uint16_t>(to);
             };
-            push(0, toj::spawn_x, toj::spawn_y, 0, 0, none);
+            push(start.rotation(), start.x(), start.y(), 0, 0, none);
             while (head < out.queue_tail)
             {
                 std::size_t const state = out.queue[head++];
@@ -351,9 +356,14 @@ namespace tetris::path
             }
             if (lock)
             {
+                int const pre_lock_y = y;
                 while (checker.is_valid(rotation, x, y - 1))
                 {
                     --y;
+                }
+                if (y != pre_lock_y)
+                {
+                    arrival = ArrivalClass::Normal;
                 }
             }
             auto placement = Placement::try_make(x, y, rotation);

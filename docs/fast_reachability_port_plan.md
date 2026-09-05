@@ -538,7 +538,7 @@ The external adapter adds `v` before the piece path when hold changes and append
 
 ### 11.4 Goal semantics
 
-For a normal candidate, the last successful movement before `V` must be non-rotation or absent, and `V` must hard-drop to the selected placement. If the piece is already at the selected placement, an empty pre-`V` path is valid.
+For a normal candidate, the last successful movement before `V` must be non-rotation or absent, and `V` must hard-drop to the selected placement. If the piece is already at the selected placement, an empty pre-`V` path is valid. Non-T candidates keep the conventional normal label while preferring a non-rotation ending; a rotation ending is allowed only where no normal path exists, because rotation-only placements cannot supply a normal-ending witness.
 
 For a terminal-rotation candidate, the last successful movement before `V` must be a successful CW, CCW, or 180 rotation and `V` must not move the selected already-landable placement. A hard drop that changes `y` would erase terminal-rotation semantics under the preserved protocol and is invalid for this candidate class.
 
@@ -976,7 +976,7 @@ Tasks:
 Gate:
 
 - Every emitted candidate has a valid path from its tested start pose, and every terminal-rotation candidate reaches its final landable pose with rotation as the last successful pre-lock command.
-- Replay produces exact placement and arrival class.
+- Replay produces exact placement and, for T candidates, exact arrival class. Non-T candidates carry the conventional normal label with history ignored, so their paths may end with a rotation where no normal path exists; the differential pins that fallback per candidate.
 - No path uses removed commands.
 - No path exceeds the exported buffer.
 - Pathfinding occurs once per selected move in integration tests.

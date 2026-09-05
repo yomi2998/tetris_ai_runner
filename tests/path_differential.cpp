@@ -1,6 +1,7 @@
 #include "toj_pathfinder.h"
 #include "toj_rule.h"
 #include "published_srs_replay.h"
+#include "reach_corpus.h"
 
 #include "tetris_core.h"
 #include "rule_toj.h"
@@ -166,12 +167,147 @@ namespace
         std::println("directed interpreter: hand-authored command outcomes replay exactly");
     }
 
-    void run_corpus_path_tests(Engine &engine, bool allow_180)
+    void run_directed_replay_tests()
     {
-        auto model = published_replay::measure_frames(engine);
+        Board empty;
+        Placement const spawn = Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+        PathConfig on{};
+        on.allow_180 = true;
+        PathConfig off{};
+        off.allow_180 = false;
+        for (char command : {'X', 'Z', 'C', 'L', 'R'})
+        {
+            std::string input(1, command);
+            check(!replay_path(empty, Piece::T, spawn, input, on, true).valid,
+                std::string("production replay rejects removed command ") + command);
+        }
+        check(!replay_path(empty, Piece::T, spawn, "x", off, true).valid,
+            "production replay rejects disabled 180");
+        {
+            auto accepted = replay_path(empty, Piece::T, spawn, "x", on, true);
+            check(accepted.valid, "production replay accepts enabled 180");
+        }
+        {
+            std::array<std::uint16_t, 48> rows = {};
+            rows[20] |= static_cast<std::uint16_t>(1u << 2);
+            Board blocked = Board::from_rows(rows);
+            check(!replay_path(blocked, Piece::T, spawn, "l", on, true).valid,
+                "production replay rejects blocked translations");
+        }
+        {
+            std::array<std::uint16_t, 48> rows = {};
+            rows[19] |= static_cast<std::uint16_t>(1u << 4);
+            rows[19] |= static_cast<std::uint16_t>(1u << 3);
+            rows[22] |= static_cast<std::uint16_t>(1u << 3);
+            rows[17] |= static_cast<std::uint16_t>(1u << 4);
+            rows[18] |= static_cast<std::uint16_t>(1u << 3);
+            Board walled = Board::from_rows(rows);
+            check(!replay_path(walled, Piece::T, spawn, "c", on, false).valid,
+                "production replay rejects failed rotations");
+        }
+        {
+            std::array<std::uint16_t, 48> rows = {};
+            rows[20] |= static_cast<std::uint16_t>(1u << 4);
+            Board covered = Board::from_rows(rows);
+            check(!replay_path(covered, Piece::T, spawn, "", on, true).valid,
+                "production replay rejects invalid starting placements");
+        }
+        {
+            Placement bad = Placement::unchecked(4, 20, 2);
+            check(!replay_path(empty, Piece::O, bad, "", on, true).valid,
+                "production replay rejects piece-invalid rotations");
+        }
+        for (auto [command, locked_cells, locked_arrival] : {
+                std::tuple<std::string, published_replay::Cells, ArrivalClass>{"c",
+                    {{{4, 0}, {4, 1}, {4, 2}, {5, 1}}}, ArrivalClass::Normal},
+                std::tuple<std::string, published_replay::Cells, ArrivalClass>{"z",
+                    {{{3, 1}, {4, 0}, {4, 1}, {4, 2}}}, ArrivalClass::Normal},
+                std::tuple<std::string, published_replay::Cells, ArrivalClass>{"x",
+                    {{{3, 1}, {4, 0}, {4, 1}, {5, 1}}}, ArrivalClass::Normal},
+            })
+        {
+            auto unlocked = replay_path(empty, Piece::T, spawn, command, on, false);
+            check(unlocked.valid && unlocked.arrival == ArrivalClass::TerminalRotation,
+                "production replay keeps terminal arrival without lock for " + command);
+            auto locked = replay_path(empty, Piece::T, spawn, command, on, true);
+            auto expected = sorted_cells_of(Piece::T, locked.placement);
+            check(locked.valid && locked.arrival == locked_arrival && expected == locked_cells,
+                "production replay resets arrival when lock moves the piece for " + command);
+        }
+        std::println("directed replay: production rejections and lock arrival reset");
+    }
+
+    struct PathTallies
+    {
         std::size_t candidates = 0;
         std::size_t terminal = 0;
         std::size_t longest = 0;
+    };
+
+    void check_piece_paths(Board const &board, std::array<std::uint16_t, 48> const &rows,
+        published_replay::Model const &model, Piece piece, char piece_char, bool allow_180,
+        std::vector<Candidate> const &listed, PathTallies &tallies)
+    {
+        PathConfig path_config{};
+        path_config.allow_180 = allow_180;
+        Placement const spawn_pose =
+            Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+        Pathfinder finder(board, piece, spawn_pose, path_config);
+        Placement const start = Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+        for (auto const &candidate : listed)
+        {
+            ++tallies.candidates;
+            if (candidate.arrival == ArrivalClass::TerminalRotation)
+            {
+                ++tallies.terminal;
+            }
+            Path path = finder.find(candidate);
+            std::string what = std::string("path for ") + piece_char + " arrival "
+                + (candidate.arrival == ArrivalClass::TerminalRotation ? "terminal" : "normal")
+                + (allow_180 ? " 180 on" : " 180 off");
+            check(path.valid, what + " exists");
+            if (!path.valid)
+            {
+                continue;
+            }
+            check(alphabet_clean(path.view()), what + " uses only shipped commands");
+            check(path.size <= Path::max_payload, what + " fits the exported buffer");
+            tallies.longest = std::max(tallies.longest, path.size);
+            ReplayResult replayed = replay_path(board, piece, start, path.view(), path_config, true);
+            bool const arrival_ok = piece == Piece::T
+                ? replayed.arrival == candidate.arrival
+                : true;
+            check(replayed.valid && replayed.placement == candidate.placement && arrival_ok,
+                what + " replays exactly");
+            auto independent = published_replay::replay(model, rows, piece_char, 3, 21, 0,
+                path.view(), true, allow_180);
+            auto expected_cells = sorted_cells_of(piece, candidate.placement);
+            bool const independent_arrival_ok = piece == Piece::T
+                ? independent.arrival
+                    == (candidate.arrival == ArrivalClass::TerminalRotation ? 1 : 0)
+                : true;
+            check(independent.valid && independent.cells == expected_cells
+                && independent_arrival_ok,
+                what + " replays through the independent interpreter");
+            if (piece != Piece::T && replayed.arrival == ArrivalClass::TerminalRotation)
+            {
+                check(!finder.normal_path_exists(candidate),
+                    what + " ends with rotation only where no normal path exists");
+            }
+            if (candidate.arrival == ArrivalClass::TerminalRotation)
+            {
+                auto unlocked = published_replay::replay(model, rows, piece_char, 3, 21, 0,
+                    path.view(), false, allow_180);
+                check(unlocked.valid && unlocked.cells == expected_cells,
+                    what + " hard drop does not move the terminal placement");
+            }
+        }
+    }
+
+    PathTallies run_corpus_path_tests(Engine &engine, bool allow_180)
+    {
+        auto model = published_replay::measure_frames(engine);
+        PathTallies tallies;
         std::vector<m_tetris::TetrisMap> maps;
         maps.push_back(m_tetris::TetrisMap(legacy_width, legacy_height));
         for (std::size_t b = 0; b < board_count; ++b)
@@ -188,62 +324,146 @@ namespace
                 MovementConfig movement{};
                 movement.allow_180 = allow_180;
                 auto listed = enumerate_candidates(board, piece, movement);
-                PathConfig path_config{};
-                path_config.allow_180 = allow_180;
-                Pathfinder finder(board, piece, path_config);
-                Placement const start = Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
-                for (auto const &candidate : listed)
-                {
-                    ++candidates;
-                    if (candidate.arrival == ArrivalClass::TerminalRotation)
-                    {
-                        ++terminal;
-                    }
-                    Path path = finder.find(candidate);
-                    std::string what = std::string("path for ") + *p + " arrival "
-                        + (candidate.arrival == ArrivalClass::TerminalRotation ? "terminal" : "normal")
-                        + (allow_180 ? " 180 on" : " 180 off");
-                    check(path.valid, what + " exists");
-                    if (!path.valid)
-                    {
-                        continue;
-                    }
-                    check(alphabet_clean(path.view()), what + " uses only shipped commands");
-                    check(path.size + 3 <= Path::capacity, what + " fits the exported buffer");
-                    longest = std::max(longest, path.size);
-                    ReplayResult replayed = replay_path(board, piece, start, path.view(), path_config, true);
-                    bool const arrival_ok = piece == Piece::T
-                        ? replayed.arrival == candidate.arrival
-                        : true;
-                    check(replayed.valid && replayed.placement == candidate.placement && arrival_ok,
-                        what + " replays exactly");
-                    auto independent = published_replay::replay(model, rows, *p, 3, 21, 0,
-                        path.view(), true, allow_180);
-                    auto expected_cells = sorted_cells_of(piece, candidate.placement);
-                    bool const independent_arrival_ok = piece == Piece::T
-                        ? independent.arrival
-                            == (candidate.arrival == ArrivalClass::TerminalRotation ? 1 : 0)
-                        : true;
-                    check(independent.valid && independent.cells == expected_cells
-                        && independent_arrival_ok,
-                        what + " replays through the independent interpreter");
-                    if (piece != Piece::T && replayed.arrival == ArrivalClass::TerminalRotation)
-                    {
-                        check(!finder.normal_path_exists(candidate),
-                            what + " ends with rotation only where no normal path exists");
-                    }
-                    if (candidate.arrival == ArrivalClass::TerminalRotation)
-                    {
-                        auto unlocked = published_replay::replay(model, rows, *p, 3, 21, 0,
-                            path.view(), false, allow_180);
-                        check(unlocked.valid && unlocked.cells == expected_cells,
-                            what + " hard drop does not move the terminal placement");
-                    }
-                }
+                check_piece_paths(board, rows, model, piece, *p, allow_180, listed, tallies);
             }
         }
         std::println("corpus paths{}: {} candidates, {} terminal, longest {} commands", allow_180 ? "" : " 180 off",
-            candidates, terminal, longest);
+            tallies.candidates, tallies.terminal, tallies.longest);
+        return tallies;
+    }
+    void run_start_placement_tests()
+    {
+        Board empty;
+        PathConfig config{};
+        Candidate const target{Placement::unchecked(4, 0, 0), ArrivalClass::Normal};
+        {
+            Placement const translated = Placement::unchecked(6, 20, 0);
+            Pathfinder finder(empty, Piece::T, translated, config);
+            Path path = finder.find(target);
+            check(path.valid, "translated start reaches the floor candidate");
+            if (path.valid)
+            {
+                auto replayed = replay_path(empty, Piece::T, translated, path.view(), config, true);
+                check(replayed.valid && replayed.placement == target.placement
+                    && replayed.arrival == ArrivalClass::Normal,
+                    "translated start replays from the actual start");
+            }
+        }
+        {
+            Placement const rotated = Placement::unchecked(4, 21, 1);
+            Pathfinder finder(empty, Piece::T, rotated, config);
+            Path path = finder.find(target);
+            check(path.valid, "rotated start reaches the floor candidate");
+            if (path.valid)
+            {
+                auto replayed = replay_path(empty, Piece::T, rotated, path.view(), config, true);
+                check(replayed.valid && replayed.placement == target.placement
+                    && replayed.arrival == ArrivalClass::Normal,
+                    "rotated start replays from the actual start");
+            }
+        }
+        {
+            std::array<std::uint16_t, 48> rows = {};
+            rows[20] |= static_cast<std::uint16_t>(1u << 4);
+            Board blocked = Board::from_rows(rows);
+            Placement const spawn = Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+            Pathfinder finder(blocked, Piece::T, spawn, config);
+            check(!finder.find(target).valid, "obstructed start finds no path");
+        }
+        {
+            Placement const spawn = Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+            Pathfinder held(empty, Piece::T, spawn, config);
+            Pathfinder canonical(empty, Piece::T, spawn, config);
+            Path held_path = held.find(target);
+            Path canonical_path = canonical.find(target);
+            check(held_path.valid && canonical_path.valid
+                && held_path.view() == canonical_path.view(),
+                "post-hold spawn search matches the canonical spawn search");
+        }
+        std::println("start placements: translated, rotated, obstructed, and post-hold starts");
+    }
+
+    void run_selection_integration_tests()
+    {
+        std::vector<std::pair<Board, Piece>> cases;
+        cases.push_back({Board{}, Piece::T});
+        cases.push_back({Board::from_rows(rows_of(seeded_map(0))), Piece::J});
+        cases.push_back({Board::from_rows(rows_of(seeded_map(7))), Piece::S});
+        cases.push_back({Board::from_rows(rows_of(seeded_map(12))), Piece::I});
+        for (auto const &[board, piece] : cases)
+        {
+            auto listed = enumerate_candidates(board, piece, MovementConfig{true});
+            check(!listed.empty(), "selection fixture has candidates");
+            if (listed.empty())
+            {
+                continue;
+            }
+            Candidate selected = listed[0];
+            for (auto const &candidate : listed)
+            {
+                if (candidate.arrival == ArrivalClass::TerminalRotation)
+                {
+                    selected = candidate;
+                    break;
+                }
+            }
+            int constructions = 0;
+            Path selected_path;
+            {
+                ++constructions;
+                PathConfig config{};
+                Placement const spawn =
+                    Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+                Pathfinder finder(board, piece, spawn, config);
+                selected_path = finder.find(selected);
+                Path again = finder.find(selected);
+                check(again.valid == selected_path.valid && again.view() == selected_path.view(),
+                    "repeated finds reuse the single search");
+            }
+            check(constructions == 1, "selection builds exactly one pathfinder");
+            check(selected_path.valid, "selected candidate has a path");
+            if (selected_path.valid)
+            {
+                PathConfig config{};
+                Placement const spawn =
+                    Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+                auto replayed = replay_path(board, piece, spawn, selected_path.view(), config, true);
+                check(replayed.valid && replayed.placement == selected.placement,
+                    "selected path replays to the selected placement");
+            }
+        }
+        std::println("selection integration: one pathfinder construction per selected move");
+    }
+
+    PathTallies run_reach_corpus_path_tests(Engine &engine, bool allow_180)
+    {
+        auto model = published_replay::measure_frames(engine);
+        auto corpus = reach_corpus::make();
+        check(corpus.size() == 37, "reach corpus holds 37 boards");
+        PathTallies tallies;
+        std::size_t skipped = 0;
+        for (auto const &rows : corpus)
+        {
+            Board const board = Board::from_rows(rows);
+            for (char const *p = piece_order; *p; ++p)
+            {
+                Piece const piece = piece_of(*p);
+                MovementConfig movement{};
+                movement.allow_180 = allow_180;
+                auto listed = enumerate_candidates(board, piece, movement);
+                if (listed.empty())
+                {
+                    check(!toj_alias::can_spawn(board, piece),
+                        "empty candidate set only under spawn obstruction");
+                    ++skipped;
+                    continue;
+                }
+                check_piece_paths(board, rows, model, piece, *p, allow_180, listed, tallies);
+            }
+        }
+        std::println("reach corpus paths{}: {} candidates, {} terminal, longest {} commands, {} skipped",
+            allow_180 ? "" : " 180 off", tallies.candidates, tallies.terminal, tallies.longest, skipped);
+        return tallies;
     }
 }
 
@@ -251,8 +471,23 @@ int main()
 {
     Engine engine = make_engine();
     run_directed_interpreter_tests(engine);
-    run_corpus_path_tests(engine, true);
-    run_corpus_path_tests(engine, false);
+    run_directed_replay_tests();
+    run_start_placement_tests();
+    run_selection_integration_tests();
+    PathTallies on = run_corpus_path_tests(engine, true);
+    check(on.candidates == 4980 && on.terminal == 721,
+        "seeded corpus candidate totals are pinned");
+    PathTallies off = run_corpus_path_tests(engine, false);
+    check(off.candidates == 4935 && off.terminal == 721,
+        "seeded corpus 180-off candidate totals are pinned");
+    PathTallies reach_on = run_reach_corpus_path_tests(engine, true);
+    check(reach_on.candidates == 4535 && reach_on.terminal == 640,
+        "reach corpus candidate totals are pinned");
+    PathTallies reach_off = run_reach_corpus_path_tests(engine, false);
+    check(reach_off.candidates == 4416 && reach_off.terminal == 640,
+        "reach corpus 180-off candidate totals are pinned");
+    std::println("reach corpus totals: {} candidates 180 on, {} candidates 180 off",
+        reach_on.candidates, reach_off.candidates);
     std::println("path_differential: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }

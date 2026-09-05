@@ -256,9 +256,14 @@ namespace published_replay
         }
         if (lock)
         {
+            int const pre_lock_y = y;
             while (cells_fit(cells_at(model, piece, r, x, y - 1), rows))
             {
                 --y;
+            }
+            if (y != pre_lock_y)
+            {
+                arrival = 0;
             }
         }
         return {cells_at(model, piece, r, x, y), r, arrival, true};
