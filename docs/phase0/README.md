@@ -382,7 +382,7 @@ self-release, and 10 of 10 in the sanitizer build excluding perft.
 ## Phase 4 status
 
 Implemented in `src/toj_pathfinder.h` and gated by
-`tests/path_differential.cpp` (CTest `path_differential`, 51026 checks,
+`tests/path_differential.cpp` (CTest `path_differential`, 51169 checks,
 0 failures):
 
 - Fixed-array breadth-first search over pose and arrival class on the full
@@ -401,11 +401,14 @@ Implemented in `src/toj_pathfinder.h` and gated by
   placement with a rotation as the last successful command, and a normal
   candidate ends at a non-rotation arrival whose hard drop lands exactly on
   the placement. Non-T candidates keep the conventional normal label while
-  their goal accepts either channel, since the class is ignored for them.
+  preferring a non-rotation ending; a rotation ending is allowed only where
+  the finder proves no normal path exists, which the suite asserts per
+  candidate.
 - A production replay interpreter over the same legality and kick routines
   proves every command legal, first-valid kicks, exact final placement and
-  arrival class (placement only for non-T), an unmoved terminal placement
-  under the final hard drop, and a fitting buffer.
+  arrival class (placement only for non-T), and an unmoved terminal
+  placement under the final hard drop, and the suite checks every emitted
+  path against the exported buffer bound.
 - An independent row-and-cell scalar interpreter in the legacy status frame
   with runtime-measured frames and hand-authored published kick tables,
   sharing no rule data with the kernel, replays the same paths and agrees
@@ -413,7 +416,7 @@ Implemented in `src/toj_pathfinder.h` and gated by
   that pin the interpreter itself.
 - Corpus coverage: all 4980 enumerated candidates with 180 on and all 4935
   with 180 off across the empty board and the 24 seeded boards have a valid
-  path, with 721 terminal candidates in each mode and longest paths of 16
+  path, with 721 terminal candidates in each mode and longest paths of 17
   and 13 commands.
 
 Phase 4 gates: every emitted candidate has a valid path from the spawn
