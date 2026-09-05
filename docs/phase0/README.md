@@ -382,16 +382,19 @@ self-release, and 10 of 10 in the sanitizer build excluding perft.
 ## Phase 4 status
 
 Implemented in `src/toj_pathfinder.h` and gated by
-`tests/path_differential.cpp` (CTest `path_differential`, 51169 checks,
+`tests/path_differential.cpp` (CTest `path_differential`, 97682 checks,
 0 failures):
 
 - Fixed-array breadth-first search over pose and arrival class on the full
   10 by 48 board, one search per board and piece with per-candidate
   reconstruction, so pathfinding cost is paid once per selected move batch.
+  The search takes the actual start placement and seeds from it, with
+  translated, rotated, obstructed, and post-hold spawn cases proving the
+  contract; an unfitting start yields an empty search rather than a path.
   Visited, parent, parent command, queue, and drop-landing storage are all
   fixed-capacity arrays; there is no priority queue, hash map, or
-  per-candidate allocation, and the reconstructed path is a 1024-byte
-  stack buffer that fails closed on overflow.
+  per-candidate allocation, and the reconstructed path fails closed at the
+  framed payload limit below the 1024-byte storage capacity.
 - Command edges through the kernel move checker and first-valid kicks:
   unit `l`, `r`, and `d`, CW `c`, CCW `z`, conditional 180 `x`, and sonic
   drop `D` to rest without locking. No wall commands and no removed
@@ -408,7 +411,11 @@ Implemented in `src/toj_pathfinder.h` and gated by
   proves every command legal, first-valid kicks, exact final placement and
   arrival class (placement only for non-T), and an unmoved terminal
   placement under the final hard drop, and the suite checks every emitted
-  path against the exported buffer bound.
+  path against the exported buffer bound. Both interpreters reset arrival
+  to normal when the final hard drop moves the piece, with directed locked
+  and unlocked rotation cases. Directed rejection tests cover removed
+  commands, disabled 180, blocked translations, failed rotations, invalid
+  starts, and piece-invalid rotations for the production replay.
 - An independent row-and-cell scalar interpreter in the legacy status frame
   with runtime-measured frames and hand-authored published kick tables,
   sharing no rule data with the kernel, replays the same paths and agrees
@@ -417,7 +424,12 @@ Implemented in `src/toj_pathfinder.h` and gated by
 - Corpus coverage: all 4980 enumerated candidates with 180 on and all 4935
   with 180 off across the empty board and the 24 seeded boards have a valid
   path, with 721 terminal candidates in each mode and longest paths of 17
-  and 13 commands.
+  and 13 commands, and the per-mode totals are pinned. The full 37-board
+  reach corpus adds 4535 candidates with 180 on and 4416 with 180 off, 640
+  terminal in each mode, longest paths of 24 and 26 commands, and 114
+  spawn-obstructed pairs skipped with the obstruction asserted, and those
+  totals are pinned as well. A selection integration fixture proves exactly
+  one pathfinder construction per selected move.
 
 Phase 4 gates: every emitted candidate has a valid path from the spawn
 pose, terminal candidates reach the landable pose with rotation last, replay
