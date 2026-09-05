@@ -2,6 +2,7 @@
 #include "toj_rule.h"
 #include "published_srs_replay.h"
 #include "reach_corpus.h"
+#include "scalar_arrival_oracle.h"
 
 #include "tetris_core.h"
 #include "rule_toj.h"
@@ -161,6 +162,18 @@ namespace
                 "directed wall command slides to the right wall");
         }
         {
+            auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "cL", false, true);
+            published_replay::Cells expected{{{0, 19}, {0, 20}, {0, 21}, {1, 20}}};
+            check(result.valid && result.cells == expected && result.rotation == 1 && result.arrival == 0,
+                "directed rotation then wall slide resets arrival");
+        }
+        {
+            auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "zR", false, true);
+            published_replay::Cells expected{{{8, 20}, {9, 19}, {9, 20}, {9, 21}}};
+            check(result.valid && result.cells == expected && result.rotation == 3 && result.arrival == 0,
+                "directed counter rotation then wall slide resets arrival");
+        }
+        {
             auto result = published_replay::replay(model, rows, 'T', 3, 21, 0, "x", true, false);
             check(!result.valid, "directed disabled 180 fails the replay");
         }
@@ -229,6 +242,14 @@ namespace
             check(right.valid && right.placement == Placement::unchecked(8, 20, 0)
                 && right.arrival == ArrivalClass::Normal,
                 "production replay slides wall commands to the right wall");
+            auto rotated_left = replay_path(empty, Piece::T, spawn, "cL", on, false);
+            check(rotated_left.valid && rotated_left.placement == Placement::unchecked(0, 20, 1)
+                && rotated_left.arrival == ArrivalClass::Normal,
+                "production replay resets arrival after rotation then wall slide");
+            auto rotated_right = replay_path(empty, Piece::T, spawn, "zR", on, false);
+            check(rotated_right.valid && rotated_right.placement == Placement::unchecked(9, 20, 3)
+                && rotated_right.arrival == ArrivalClass::Normal,
+                "production replay resets arrival after counter rotation then wall slide");
         }
         check(!replay_path(empty, Piece::T, spawn, "x", off, true).valid,
             "production replay rejects disabled 180");
@@ -292,6 +313,7 @@ namespace
         std::size_t terminal = 0;
         std::size_t longest = 0;
         std::size_t skipped = 0;
+        std::size_t fallbacks = 0;
     };
 
     void check_piece_paths(Board const &board, std::array<std::uint16_t, 48> const &rows,
@@ -304,6 +326,26 @@ namespace
             Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
         Pathfinder finder(board, piece, spawn_pose, path_config);
         Placement const start = Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+        std::array<std::array<std::uint64_t, 8>, 4> oracle_normal{};
+        call_with_block<SRS>(piece, [&]<block B>() {
+            scalar_arrival::ScalarConfig oracle_config{};
+            oracle_config.allow_180 = allow_180;
+            oracle_config.allow_softdrop = true;
+            oracle_config.allow_sonicdrop = true;
+            oracle_config.allow_20g = false;
+            auto geometry = scalar_arrival::make_geometry<B>();
+            scalar_arrival::ScalarOracle<B> oracle{geometry, oracle_config, rows};
+            oracle.run(reachability::coord{toj_alias::spawn_x, toj_alias::spawn_y}, 0);
+            auto words = oracle.landable_words(0, true);
+            for (int o = 0; o < B.orientations; ++o)
+            {
+                for (int w = 0; w < 8; ++w)
+                {
+                    oracle_normal[o][w] = words[o][w];
+                }
+            }
+            return 0;
+        });
         for (auto const &candidate : listed)
         {
             ++tallies.candidates;
@@ -343,6 +385,15 @@ namespace
             {
                 check(!finder.normal_path_exists(candidate),
                     what + " ends with rotation only where no normal path exists");
+                int const rotation = candidate.placement.rotation();
+                int const x = candidate.placement.x();
+                int const y = candidate.placement.y();
+                bool const oracle_has_normal = rotation >= 0 && rotation < 4
+                    && (oracle_normal[rotation][y / 6]
+                        & (std::uint64_t(1) << ((y % 6) * 10 + x))) != 0;
+                check(!oracle_has_normal,
+                    what + " independent channel oracle agrees no normal landing exists");
+                ++tallies.fallbacks;
             }
             if (candidate.arrival == ArrivalClass::TerminalRotation)
             {
@@ -377,8 +428,9 @@ namespace
                 check_piece_paths(board, rows, model, piece, *p, allow_180, listed, tallies);
             }
         }
-        std::println("corpus paths{}: {} candidates, {} terminal, longest {} commands", allow_180 ? "" : " 180 off",
-            tallies.candidates, tallies.terminal, tallies.longest);
+        std::println("corpus paths{}: {} candidates, {} terminal, longest {} commands, {} fallbacks",
+            allow_180 ? "" : " 180 off",
+            tallies.candidates, tallies.terminal, tallies.longest, tallies.fallbacks);
         return tallies;
     }
     void run_start_placement_tests()
@@ -550,9 +602,9 @@ namespace
                 check_piece_paths(board, rows, model, piece, *p, allow_180, listed, tallies);
             }
         }
-        std::println("reach corpus paths{}: {} candidates, {} terminal, longest {} commands, {} skipped",
+        std::println("reach corpus paths{}: {} candidates, {} terminal, longest {} commands, {} skipped, {} fallbacks",
             allow_180 ? "" : " 180 off", tallies.candidates, tallies.terminal, tallies.longest,
-            tallies.skipped);
+            tallies.skipped, tallies.fallbacks);
         return tallies;
     }
 }
@@ -563,20 +615,21 @@ int main()
     run_directed_interpreter_tests(engine);
     run_directed_replay_tests();
     run_start_placement_tests();
+    run_terminal_validity_tests();
     run_selection_integration_tests();
     PathTallies on = run_corpus_path_tests(engine, true);
-    check(on.candidates == 4980 && on.terminal == 721 && on.longest == 17,
+    check(on.candidates == 4980 && on.terminal == 721 && on.longest == 17 && on.fallbacks == 81,
         "seeded corpus candidate totals are pinned");
     PathTallies off = run_corpus_path_tests(engine, false);
-    check(off.candidates == 4935 && off.terminal == 721 && off.longest == 13,
+    check(off.candidates == 4935 && off.terminal == 721 && off.longest == 13 && off.fallbacks == 62,
         "seeded corpus 180-off candidate totals are pinned");
     PathTallies reach_on = run_reach_corpus_path_tests(engine, true);
     check(reach_on.candidates == 4535 && reach_on.terminal == 640 && reach_on.longest == 24
-        && reach_on.skipped == 114,
+        && reach_on.skipped == 114 && reach_on.fallbacks == 116,
         "reach corpus candidate totals are pinned");
     PathTallies reach_off = run_reach_corpus_path_tests(engine, false);
     check(reach_off.candidates == 4416 && reach_off.terminal == 640 && reach_off.longest == 26
-        && reach_off.skipped == 114,
+        && reach_off.skipped == 114 && reach_off.fallbacks == 85,
         "reach corpus 180-off candidate totals are pinned");
     std::println("reach corpus totals: {} candidates 180 on, {} candidates 180 off",
         reach_on.candidates, reach_off.candidates);
