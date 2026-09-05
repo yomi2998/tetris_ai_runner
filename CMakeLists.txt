@@ -125,6 +125,20 @@ target_link_libraries(tetris_board_tests PRIVATE fast_reachability)
 target_include_directories(tetris_board_tests PRIVATE src tests)
 add_test(NAME tetris_board_tests COMMAND tetris_board_tests)
 
+add_executable(rule_differential
+    tests/rule_differential.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_link_libraries(rule_differential PRIVATE fast_reachability)
+target_include_directories(rule_differential PRIVATE src tests src/fast-reachability)
+target_compile_definitions(rule_differential PRIVATE
+    TETRIS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/docs/phase0/fixtures")
+add_test(NAME rule_differential COMMAND rule_differential)
+
 add_executable(fast_reachability_tests
     tests/fast_reachability_tests.cpp
 )
@@ -259,7 +273,8 @@ add_test(NAME raw_parity_frozen_180off
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
 )
 
-set_tests_properties(tetris_board_tests fast_reachability_tests fast_reachability_perft
+set_tests_properties(tetris_board_tests rule_differential fast_reachability_tests
+    fast_reachability_perft
     raw_bench_warmup_smoke raw_bench_warmup_smoke_frozen raw_bench_warmup_smoke_frozen_plain
     raw_parity_frozen_180fix raw_parity_frozen_180off
     PROPERTIES FAIL_REGULAR_EXPRESSION "runtime error:"
