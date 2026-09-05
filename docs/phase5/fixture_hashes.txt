@@ -1,18 +1,22 @@
 # Phase 5 policy fixture provenance
 
-Corpus:
+Corpora, one per contraction contract:
 
 9d1bdf59d8f5f50a694ab60f8436cbf6966c9aac212e4257b9216b4988dc2a29  fixtures/toj_policy_v2.csv
+7ae9e6c240a431a5f9758d440a2ad1adec4c828afb7b42b803909d60252cdba8  fixtures/toj_policy_v2_nofma.csv
 
-The corpus holds 7,167 cases over 44 board tags (24 seeded stacks
-plus empty, tall, o1, o2, t1, iwell3, iwell4, slotS, slotM, mini0,
-mini1, mini2, double0 through double3, and pci through pci4). Clears
-0 through 4, spin inputs none, full, and mini, full spins at clears
-1, 2, and 3, T2 and T3 gains, death, perfect clear, all parent,
-hold, next, arrival, and witness categories are present, with
-config-safe variants 0, 5, and 16 cycling by case;
-tests/toj_policy_tests.cpp asserts each one, including full doubles
-and live-bonus perfect clears at nonzero safety.
+Both hold 7,167 cases over the same 44 board tags with identical
+non-floating fields in every row (asserted per row by the test).
+The FMA file comes from the release command below; the non-FMA file
+comes from `./out/build/linux-gcc-debug/migration_fixtures policy_v2
+/tmp/nofma 24 1` (both debug builds agree byte-exactly). The test
+gates the file matching its declared build contract.
+
+Category coverage (asserted per category by the test): clears 0
+through 4, spin inputs none, full, and mini, full spins at clears 1,
+2, and 3, T2 and T3 gains, death, perfect clear with live bonuses at
+nonzero safety, all parent, hold, next, arrival, and witness
+categories, and config-safe variants 0, 5, and 16 cycling by case.
 
 Generator command (run from the repository root):
 
@@ -44,10 +48,13 @@ final corpus:
   64 ULP outlier is rounding amplified by cancellation in a
   death-penalty accumulation, measured legacy-versus-legacy on
   identical inputs with all integer fields equal.
-- Parity gate allowance: 5 ULP on doubles, exact on everything else.
-  Cases beyond oracle precision in a given build (5 under debug, 0
-  under release) use a same-build legacy comparison at the same
-  bound, with frozen drift reported, never gated.
+- Parity gate allowance: 5 ULP on finite doubles, exact on
+  everything else, enforced directly against the selected frozen
+  file. Measured frozen peaks: 0 ULP in GCC self-release, at most 1
+  ULP in Clang self-release, 0 ULP in both debug builds and the
+  sanitizer build against their non-FMA file. A committed negative
+  suite plus file-level corruption probes prove corrupted frozen
+  integers and nonfinite frozen floats fail.
 
 Legacy pin: the corpus was generated with src/ai_zzz.h and
 src/ai_zzz.cpp unmodified from their pre-migration commit. The

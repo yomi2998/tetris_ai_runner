@@ -1,5 +1,13 @@
 # `toj_policy_v2.csv` schema
 
+Two frozen files share this schema: `toj_policy_v2.csv` holds the
+FMA-contract expectations from `-O3 -march=native` builds, and
+`toj_policy_v2_nofma.csv` holds the non-FMA expectations from
+unoptimized builds. The test asserts both files carry the same cases
+with identical non-floating fields, then gates the file matching its
+declared build contract (Release builds use FMA, all others use
+non-FMA). CMake sets the selection; see `fixture_hashes.txt`.
+
 One self-contained policy case per line. Lines starting with `#`
 carry generator metadata (command, 29 parameter words, combo table)
 and the column header. All other lines hold 46 space-separated
@@ -41,12 +49,11 @@ The corpus bytes embody fused multiply-add contraction from
 (`-O0`, `-ffp-contract=off`, or generic `-march`) drifts by up to
 64 ULP on one cancellation-sensitive accumulation, up to 7 ULP on a
 few more values, and at most 2 ULP elsewhere, with zero non-floating
-differences. The 5 ULP ceiling therefore holds for every case the
-oracle itself can reproduce; the few cases beyond oracle precision
-(5 under debug builds, 0 under release builds) fall back to a
-same-build legacy comparison at the same 5 ULP bound, with their
-frozen drift reported rather than gated. See `fixture_hashes.txt`
-for the measured per-configuration tables.
+differences. That is why the corpus ships both contraction
+behaviors as peer frozen files instead of one file plus an escape:
+each build gates the file matching its declared contract, and the
+test additionally asserts both files share every non-floating field.
+See `fixture_hashes.txt` for the measured per-configuration tables.
 
 ## Spin encoding
 

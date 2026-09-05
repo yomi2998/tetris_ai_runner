@@ -451,9 +451,9 @@ in the sanitizer build excluding perft.
 ## Phase 5 status
 
 Implemented in `src/toj_policy.h` and `src/toj_policy.cpp`, gated by
-`tests/toj_policy_tests.cpp` (CTest `toj_policy_tests`, 64731 checks,
+`tests/toj_policy_tests.cpp` (CTest `toj_policy_tests`, 71906 checks,
 0 failures in all five builds) against the lossless `docs/phase5`
-fixture corpus of 7167 cases over 44 board tags:
+fixture corpus pair of 7167 cases over 44 board tags:
 
 - Native value interface with no legacy types: piece, candidate,
   rule outcome, result board, parent policy state, decision context,

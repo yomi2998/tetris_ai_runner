@@ -42,24 +42,33 @@ in `fixture_hashes.txt`.
 
 ## Gate status
 
-`tests/toj_policy_tests.cpp` (CTest `toj_policy_tests`, 64,731
-checks, 0 failures in all five builds) gates the corpus, the directed
-contracts, and two synthetic formula cases.
+`tests/toj_policy_tests.cpp` (CTest `toj_policy_tests`, 71,906
+checks, 0 failures in all five builds) gates the corpus pair, the
+directed contracts, negative oracle cases, and two synthetic formula
+cases.
 
-Parity result: all 7,167 shared cases compare new outputs directly
-against the frozen expected fields. Peak frozen drift is 0 ULP under
-GCC self-release, at most 1 ULP under Clang self-release, and at
-most 5 ULP under debug and sanitizer builds, against the 5 ULP
-allowance; every non-floating field matches exactly
-in every configuration. The 5 debug-only cases beyond oracle
-precision (proven FMA contraction effects, integers exact) use a
-same-build legacy comparison at the same bound, with frozen drift
-reported, never gated. The corpus-side lockout split is 7,167 shared
-with 0 divergent cases; approved lockout-semantic differences are
-covered instead by directed `is_lockout` tests over every piece and
-rotation on floor boards plus the rule-layer orientation corpus,
-which pins lowest-row lockout against the legacy bounding row where
-they agree.
+Frozen-oracle design: the corpus ships two byte-frozen expectations
+per case, FMA and non-FMA, which share every non-floating field
+(asserted per case by the test itself). CMake selects the file by
+declared build contract (Release builds use FMA expectations, all
+other builds use non-FMA expectations). Every shared case compares
+new outputs directly against the selected frozen fields: exact
+integers plus at most 5 ULP on finite doubles. There is no
+mismatch-triggered escape: corrupting a frozen integer or injecting
+a nonfinite frozen float fails loudly, proven by committed negative
+tests and by file-level corruption probes. Live legacy output
+remains as provenance (per-case synthesis agreement) alongside the
+frozen gate, never as a substitute.
+
+Parity result: peak frozen drift is 0 ULP under GCC self-release,
+GCC debug, Clang debug, and sanitizer builds, and at most 1 ULP
+under Clang self-release; every non-floating field matches exactly
+in every configuration. The corpus-side lockout split is 7,167
+shared with 0 divergent cases; approved lockout-semantic
+differences are covered instead by directed `is_lockout` tests over
+every piece and rotation on floor boards plus the rule-layer
+orientation corpus, which pins lowest-row lockout against the
+legacy bounding row where they agree.
 
 Implementation notes: evaluation converts the result board to local
 rows once and derives side columns on demand; perfect-clear detection
