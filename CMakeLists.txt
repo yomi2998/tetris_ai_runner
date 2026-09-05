@@ -162,8 +162,14 @@ add_executable(toj_policy_tests
 )
 target_link_libraries(toj_policy_tests PRIVATE fast_reachability)
 target_include_directories(toj_policy_tests PRIVATE src tests src/fast-reachability)
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(TETRIS_POLICY_FIXTURE "toj_policy_v2.csv")
+else()
+    set(TETRIS_POLICY_FIXTURE "toj_policy_v2_nofma.csv")
+endif()
 target_compile_definitions(toj_policy_tests PRIVATE
-    TETRIS_POLICY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/docs/phase5/fixtures")
+    TETRIS_POLICY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/docs/phase5/fixtures"
+    TETRIS_POLICY_FIXTURE="${TETRIS_POLICY_FIXTURE}")
 add_test(NAME toj_policy_tests COMMAND toj_policy_tests)
 
 add_executable(fast_reachability_tests

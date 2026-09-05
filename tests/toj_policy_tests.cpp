@@ -16,6 +16,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <print>
 #include <sstream>
 #include <string>
@@ -24,6 +25,10 @@
 
 #ifndef TETRIS_POLICY_FIXTURE_DIR
 #define TETRIS_POLICY_FIXTURE_DIR "docs/phase5/fixtures"
+#endif
+
+#ifndef TETRIS_POLICY_FIXTURE
+#define TETRIS_POLICY_FIXTURE "toj_policy_v2.csv"
 #endif
 
 namespace
@@ -248,9 +253,66 @@ namespace
         std::uint64_t out_acc = 0;
         std::uint64_t out_like = 0;
         std::uint64_t out_value = 0;
-        std::size_t fallback_cases = 0;
-        std::uint64_t fallback_frozen = 0;
     };
+
+    constexpr std::uint64_t frozen_allowance = 5;
+
+    bool frozen_float_match(double got, std::uint64_t want_bits)
+    {
+        if (!std::isfinite(got))
+        {
+            return false;
+        }
+        double want = std::bit_cast<double>(want_bits);
+        if (!std::isfinite(want))
+        {
+            return false;
+        }
+        return ulp_distance(got, want) <= frozen_allowance;
+    }
+
+    bool state_matches_frozen(toj_policy::State const &got, std::int8_t death, std::int8_t combo,
+        std::int8_t b2b, std::int8_t under_attack, std::int8_t map_rise, std::int16_t t2,
+        std::int16_t t3, std::uint64_t acc_bits, std::uint64_t like_bits, std::uint64_t value_bits)
+    {
+        return got.death == death && got.combo == combo && got.b2b == b2b
+            && got.under_attack == under_attack && got.map_rise == map_rise
+            && got.t2_value == t2 && got.t3_value == t3
+            && frozen_float_match(got.acc_value, acc_bits)
+            && frozen_float_match(got.like, like_bits)
+            && frozen_float_match(got.value, value_bits);
+    }
+
+    bool eval_matches_frozen(toj_policy::Evaluation const &got, long long t2, long long t3,
+        std::uint64_t value_bits)
+    {
+        return got.t2_value == t2 && got.t3_value == t3
+            && frozen_float_match(got.value, value_bits);
+    }
+
+    void run_negative_oracle_tests()
+    {
+        toj_policy::State exact;
+        check(state_matches_frozen(exact, 0, 0, 0, 0, 0, 0, 0,
+            std::bit_cast<std::uint64_t>(0.0), std::bit_cast<std::uint64_t>(0.0),
+            std::bit_cast<std::uint64_t>(0.0)),
+            "uncorrupted frozen state matches");
+        check(!state_matches_frozen(exact, 9, 0, 0, 0, 0, 0, 0,
+            std::bit_cast<std::uint64_t>(0.0), std::bit_cast<std::uint64_t>(0.0),
+            std::bit_cast<std::uint64_t>(0.0)),
+            "corrupted frozen integer fails");
+        check(!state_matches_frozen(exact, 0, 0, 0, 0, 0, 0, 0,
+            std::bit_cast<std::uint64_t>(std::numeric_limits<double>::infinity()),
+            std::bit_cast<std::uint64_t>(0.0), std::bit_cast<std::uint64_t>(0.0)),
+            "nonfinite frozen float fails");
+        toj_policy::Evaluation eval_exact;
+        check(eval_matches_frozen(eval_exact, 0, 0, std::bit_cast<std::uint64_t>(0.0)),
+            "uncorrupted frozen evaluation matches");
+        check(!eval_matches_frozen(eval_exact, 0, 0,
+            std::bit_cast<std::uint64_t>(std::numeric_limits<double>::infinity())),
+            "nonfinite frozen evaluation fails");
+        std::println("negative oracle: corrupted frozen outputs fail the gate");
+    }
 
     search_tspin::Search::TSpinType legacy_spin(long long spin_eff)
     {
@@ -528,9 +590,72 @@ namespace
         std::println("synthetic formula: non-spin triple and high-row perfect clear");
     }
 
+    void check_contract_pair(std::string const &dir)
+    {
+        std::vector<std::string> names{ "toj_policy_v2.csv", "toj_policy_v2_nofma.csv" };
+        std::vector<std::vector<std::string>> files;
+        for (auto const &name : names)
+        {
+            std::ifstream file(dir + "/" + name);
+            check(file.good(), "contract file opens: " + name);
+            if (!file.good())
+            {
+                return;
+            }
+            std::vector<std::string> lines;
+            std::string line;
+            while (std::getline(file, line))
+            {
+                if (!line.empty() && line[0] != '#')
+                {
+                    lines.push_back(line);
+                }
+            }
+            files.push_back(std::move(lines));
+        }
+        check(files[0].size() == files[1].size() && !files[0].empty(),
+            "contract files hold the same case count");
+        if (files[0].size() != files[1].size() || files[0].empty())
+        {
+            return;
+        }
+        std::size_t float_cells = 0;
+        for (std::size_t k = 0; k < files[0].size(); ++k)
+        {
+            auto left = split_fields(files[0][k]);
+            auto right = split_fields(files[1][k]);
+            if (left.size() != 46 || right.size() != 46 || left[0] != right[0])
+            {
+                check(false, "contract pair aligns case " + std::to_string(k));
+                return;
+            }
+            for (int f = 0; f < 46; ++f)
+            {
+                bool is_float = f == 23 || f == 24 || f == 25 || f == 31 || f == 41 || f == 42
+                    || f == 43;
+                if (is_float)
+                {
+                    std::uint64_t a = 0;
+                    std::uint64_t b = 0;
+                    if (parse_hex16(left[f], a) && parse_hex16(right[f], b) && a != b)
+                    {
+                        ++float_cells;
+                    }
+                    continue;
+                }
+                if (left[f] != right[f])
+                {
+                    check(false, "contract pair shares non-floating fields");
+                    return;
+                }
+            }
+        }
+        check(float_cells > 0, "contract files differ in proven float cells");
+        std::println("contract pair: {} cases share all non-floating fields", files[0].size());
+    }
+
     void run_parity(std::string const &path)
     {
-        constexpr std::uint64_t ulp_allowance = 5;
         Engine engine = make_engine();
         ai_zzz::TOJ &legacy = *engine.ai();
         toj_policy::Config config;
@@ -553,7 +678,6 @@ namespace
         ParityMax peak;
         std::size_t agree_count = 0;
         std::size_t divergent_count = 0;
-        std::size_t bridge_failed = 0;
         std::string line;
         while (std::getline(file, line))
         {
@@ -672,7 +796,7 @@ namespace
             parse_int(fields[32], eval_t2);
             parse_int(fields[33], eval_t3);
             bool eval_faithful = ulp_distance(legacy_eval.value, std::bit_cast<double>(eval_bits))
-                    <= ulp_allowance
+                    <= frozen_allowance
                 && legacy_eval.t2_value == eval_t2 && legacy_eval.t3_value == eval_t3;
             check(eval_faithful, what + " legacy synthesis reproduces the evaluation");
             auto legacy_out = legacy.get(ex, legacy_eval, static_cast<std::size_t>(clear),
@@ -696,14 +820,12 @@ namespace
                 && legacy_out.map_rise == o_maprise && legacy_out.t2_value == o_t2
                 && legacy_out.t3_value == o_t3
                 && ulp_distance(legacy_out.acc_value, std::bit_cast<double>(acc_bits))
-                    <= ulp_allowance
-                && ulp_distance(legacy_out.like, std::bit_cast<double>(like_bits)) <= ulp_allowance
+                    <= frozen_allowance
+                && ulp_distance(legacy_out.like, std::bit_cast<double>(like_bits))
+                    <= frozen_allowance
                 && ulp_distance(legacy_out.value, std::bit_cast<double>(value_bits))
-                    <= ulp_allowance;
-            if (!out_faithful)
-            {
-                ++bridge_failed;
-            }
+                    <= frozen_allowance;
+            check(out_faithful, what + " legacy synthesis reproduces the transition");
             if (!eval_faithful)
             {
                 check(false, what + " legacy synthesis reproduces the evaluation");
@@ -755,23 +877,10 @@ namespace
             outcome.clear_count = static_cast<int>(clear);
             outcome.lockout = false;
             toj_policy::Evaluation got_eval = policy.evaluate(boards);
-            std::uint64_t eval_drift =
-                ulp_distance(got_eval.value, std::bit_cast<double>(eval_bits));
-            peak.eval_value = std::max(peak.eval_value, eval_drift);
-            check(eval_drift <= ulp_allowance && got_eval.t2_value == eval_t2
-                && got_eval.t3_value == eval_t3,
-                what + " evaluation matches within allowance");
-            toj_policy::State want_frozen;
-            want_frozen.death = static_cast<std::int8_t>(o_death);
-            want_frozen.combo = static_cast<std::int8_t>(o_combo);
-            want_frozen.b2b = static_cast<std::int8_t>(o_b2b);
-            want_frozen.under_attack = static_cast<std::int8_t>(o_under);
-            want_frozen.map_rise = static_cast<std::int8_t>(o_maprise);
-            want_frozen.t2_value = static_cast<std::int16_t>(o_t2);
-            want_frozen.t3_value = static_cast<std::int16_t>(o_t3);
-            want_frozen.acc_value = std::bit_cast<double>(acc_bits);
-            want_frozen.like = std::bit_cast<double>(like_bits);
-            want_frozen.value = std::bit_cast<double>(value_bits);
+            peak.eval_value = std::max(peak.eval_value,
+                ulp_distance(got_eval.value, std::bit_cast<double>(eval_bits)));
+            check(eval_matches_frozen(got_eval, eval_t2, eval_t3, eval_bits),
+                what + " evaluation matches the frozen fields");
             long long arrival_class = 0;
             parse_int(fields[6], arrival_class);
             tetris::Candidate value_candidate{ *candidate,
@@ -782,10 +891,6 @@ namespace
             if (legacy_lockout != value_lockout)
             {
                 ++divergent_count;
-                if (!out_faithful)
-                {
-                    ++peak.fallback_cases;
-                }
                 m_tetris::TetrisNode patched_node{};
                 bool patched_made = engine.context()->create(
                     m_tetris::TetrisBlockStatus(fields[2][0], static_cast<std::int8_t>(x),
@@ -810,66 +915,42 @@ namespace
                     && got.b2b == approved.b2b && got.under_attack == approved.under_attack
                     && got.map_rise == approved.map_rise && got.t2_value == approved.t2_value
                     && got.t3_value == approved.t3_value
-                    && ulp_distance(got.acc_value, approved.acc_value) <= ulp_allowance
-                    && ulp_distance(got.like, approved.like) <= ulp_allowance
-                    && ulp_distance(got.value, approved.value) <= ulp_allowance;
+                    && ulp_distance(got.acc_value, approved.acc_value) <= frozen_allowance
+                    && ulp_distance(got.like, approved.like) <= frozen_allowance
+                    && ulp_distance(got.value, approved.value) <= frozen_allowance;
                 check(approved_ok, what + " divergent transition follows the approved semantic");
                 continue;
             }
             ++agree_count;
-            if (!out_faithful)
-            {
-                ++peak.fallback_cases;
-                peak.fallback_frozen = std::max({ peak.fallback_frozen,
-                    ulp_distance(got.acc_value, want_frozen.acc_value),
-                    ulp_distance(got.like, want_frozen.like),
-                    ulp_distance(got.value, want_frozen.value) });
-                bool live_ok = got.death == legacy_out.death && got.combo == legacy_out.combo
-                    && got.b2b == legacy_out.b2b
-                    && got.under_attack == legacy_out.under_attack
-                    && got.map_rise == legacy_out.map_rise
-                    && got.t2_value == legacy_out.t2_value
-                    && got.t3_value == legacy_out.t3_value
-                    && ulp_distance(got.acc_value, legacy_out.acc_value) <= ulp_allowance
-                    && ulp_distance(got.like, legacy_out.like) <= ulp_allowance
-                    && ulp_distance(got.value, legacy_out.value) <= ulp_allowance;
-                check(live_ok, what + " fallback transition matches same-build legacy");
-                continue;
-            }
-            peak.out_acc =
-                std::max(peak.out_acc, ulp_distance(got.acc_value, want_frozen.acc_value));
-            peak.out_like =
-                std::max(peak.out_like, ulp_distance(got.like, want_frozen.like));
-            peak.out_value =
-                std::max(peak.out_value, ulp_distance(got.value, want_frozen.value));
-            bool out_ok = got.death == want_frozen.death && got.combo == want_frozen.combo
-                && got.b2b == want_frozen.b2b && got.under_attack == want_frozen.under_attack
-                && got.map_rise == want_frozen.map_rise && got.t2_value == want_frozen.t2_value
-                && got.t3_value == want_frozen.t3_value
-                && ulp_distance(got.acc_value, want_frozen.acc_value) <= ulp_allowance
-                && ulp_distance(got.like, want_frozen.like) <= ulp_allowance
-                && ulp_distance(got.value, want_frozen.value) <= ulp_allowance;
-            check(out_ok, what + " transition matches the frozen fields");
+            peak.out_acc = std::max(peak.out_acc,
+                ulp_distance(got.acc_value, std::bit_cast<double>(acc_bits)));
+            peak.out_like = std::max(peak.out_like,
+                ulp_distance(got.like, std::bit_cast<double>(like_bits)));
+            peak.out_value = std::max(peak.out_value,
+                ulp_distance(got.value, std::bit_cast<double>(value_bits)));
+            check(state_matches_frozen(got, static_cast<std::int8_t>(o_death),
+                    static_cast<std::int8_t>(o_combo), static_cast<std::int8_t>(o_b2b),
+                    static_cast<std::int8_t>(o_under), static_cast<std::int8_t>(o_maprise),
+                    static_cast<std::int16_t>(o_t2), static_cast<std::int16_t>(o_t3), acc_bits,
+                    like_bits, value_bits),
+                what + " transition matches the frozen fields");
         }
         check(agree_count == 7167 && divergent_count == 0,
             "lockout split pins 7167 shared and 0 divergent corpus cases");
-        check(bridge_failed == peak.fallback_cases,
-            "every bridge miss is handled through the fallback gate");
-        check(peak.eval_value <= ulp_allowance, "evaluation drift stays within allowance");
-        check(peak.out_acc <= ulp_allowance, "accumulation drift stays within allowance");
-        check(peak.out_like <= ulp_allowance, "affinity drift stays within allowance");
-        check(peak.out_value <= ulp_allowance, "value drift stays within allowance");
+        check(peak.eval_value <= frozen_allowance, "evaluation drift stays within allowance");
+        check(peak.out_acc <= frozen_allowance, "accumulation drift stays within allowance");
+        check(peak.out_like <= frozen_allowance, "affinity drift stays within allowance");
+        check(peak.out_value <= frozen_allowance, "value drift stays within allowance");
         std::println("parity peak ULP: eval {} acc {} like {} value {} over {} shared and {} divergent",
             peak.eval_value, peak.out_acc, peak.out_like, peak.out_value, agree_count,
             divergent_count);
-        std::println("parity fallback: {} cases beyond oracle precision, max frozen drift {} ULP",
-            peak.fallback_cases, peak.fallback_frozen);
     }
 }
 
 int main()
 {
-    std::string const path = std::string(TETRIS_POLICY_FIXTURE_DIR) + "/toj_policy_v2.csv";
+    std::string const dir = std::string(TETRIS_POLICY_FIXTURE_DIR);
+    std::string const path = dir + "/" + std::string(TETRIS_POLICY_FIXTURE);
     std::ifstream file(path);
     check(file.good(), "policy v2 fixture opens at " + path);
     if (!file.good())
@@ -1147,6 +1228,8 @@ int main()
         "config-safe variants 0, 5, and 16 present");
     check(tallies.full_double_hot, "full T-spin double at nonzero safety present");
     check(tallies.perfect_bonus_hot, "perfect clear with live bonus at nonzero safety present");
+    run_negative_oracle_tests();
+    check_contract_pair(dir);
     run_parity(path);
     run_synthetic_formula_tests();
     std::println("toj_policy_tests: {} checks, {} failures", checks, failures);
