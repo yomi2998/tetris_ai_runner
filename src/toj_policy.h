@@ -100,7 +100,8 @@ namespace toj_policy
         Evaluation evaluate(Board const &result) const;
 
         State transition(Piece piece, Candidate candidate, Outcome outcome, Board const &result,
-            State const &parent, DecisionContext const &context) const;
+            State const &parent, DecisionContext const &context,
+            Evaluation const &evaluation) const;
 
         static bool is_lockout(Piece piece, Placement placement);
 

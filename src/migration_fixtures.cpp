@@ -385,7 +385,7 @@ namespace
         out += "# generator: migration_fixtures policy_v2 <dir> <count> <seed>\n";
         out += "# param: " + param_hex(engine.ai_config()->param) + "\n";
         out += "# combo: 0,0,0,1,1,2,2,3,3,4\n";
-        out += "# columns: id board piece x y r arrival spin_in spin_eff is_check is_last_rotate is_ready is_mini_ready clear src_rows result_rows p_death p_combo p_under p_maprise p_b2b p_t2 p_t3 p_acc p_like p_value next hold node is_hold depth eval_value eval_t2 eval_t3 o_death o_combo o_b2b o_under o_maprise o_t2 o_t3 o_acc o_like o_value safe\n";
+        out += "# columns: id board piece x y r arrival spin_in spin_eff is_check is_last_rotate is_ready is_mini_ready clear src_rows result_rows p_death p_combo p_under p_maprise p_b2b p_t2 p_t3 p_acc p_like p_value next hold node is_hold depth eval_value eval_t2 eval_t3 o_death o_combo o_b2b o_under o_maprise o_t2 o_t3 o_acc o_like o_value safe cfg_safe\n";
         char const *next_options[] = { "IOSZLJT", "T", "IOSZLI", "", "STLI", "IOT" };
         size_t const next_lengths[] = { 7, 1, 6, 0, 4, 3 };
         char const hold_options[] = { ' ', 'T', 'I', 'O' };
@@ -415,6 +415,16 @@ namespace
             bank_board({ { 0, 0b1111101011 }, { 1, 0b1110101111 }, { 2, 0b1110101111 }, { 3, 0b1101011111 }, { 4, 0b1111100011 }, { 5, 0b1111010011 } }) });
         tagged.push_back({ "double0",
             bank_board({ { 0, 0b1110011111 }, { 1, 0b1111111111 }, { 2, 0b0100011001 }, { 3, 0b1110111111 }, { 4, 0b1100011111 }, { 5, 0b1100111111 } }) });
+        tagged.push_back({ "double1",
+            bank_board({ { 0, 0b1101001111 }, { 1, 0b1111011111 }, { 2, 0b1111110111 }, { 3, 0b1111100011 }, { 4, 0b0100100111 }, { 5, 0b1011100111 } }) });
+        tagged.push_back({ "double2",
+            bank_board({ { 0, 0b1101010110 }, { 1, 0b1110101111 }, { 2, 0b1101111101 }, { 3, 0b1111111011 }, { 4, 0b1111110001 }, { 5, 0b1111110011 } }) });
+        tagged.push_back({ "double3",
+            bank_board({ { 0, 0b1111110111 }, { 1, 0b1101000101 }, { 2, 0b1100000111 }, { 3, 0b1110111111 }, { 4, 0b1100011111 }, { 5, 0b1110011111 } }) });
+        tagged.push_back({ "pci", bank_board({ { 0, 0x3ff & ~0xf0 } }) });
+        tagged.push_back({ "pci2", bank_board({ { 0, 0x3ff & ~0x0f } }) });
+        tagged.push_back({ "pci3", bank_board({ { 0, 0x3ff & ~0x1e } }) });
+        tagged.push_back({ "pci4", bank_board({ { 0, 0x3ff & ~0x1e0 } }) });
         size_t id = 0;
         for (auto const &[tag, src_map] : tagged)
         {
@@ -450,6 +460,9 @@ namespace
                     m_tetris::TetrisContext::Env env{ next_text.c_str(), next_lengths[env_pick],
                         *p, hold, ((id / 4) % 2) != 0 };
                     auto result = ai.eval(ex, map, src_map);
+                    int cfg_options[] = { 0, 5, 16 };
+                    int cfg_safe = cfg_options[id % 3];
+                    engine.ai_config()->safe = cfg_safe;
                     ai_zzz::TOJ::Status transition = ai.get(ex, result, clear, map, id % 3, status, env);
                     out += std::to_string(id) + " " + tag + " " + *p
                         + " " + std::to_string(land.node->status.x)
@@ -492,7 +505,8 @@ namespace
                         + " " + double_hex(transition.acc_value)
                         + " " + double_hex(transition.like)
                         + " " + double_hex(transition.value)
-                        + " " + std::to_string(safe) + "\n";
+                        + " " + std::to_string(safe)
+                        + " " + std::to_string(cfg_safe) + "\n";
                     ++id;
                 }
             }

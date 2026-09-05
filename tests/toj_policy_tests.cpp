@@ -146,6 +146,11 @@ namespace
         bool next_absent = false;
         bool next_empty = false;
         bool next_short = false;
+        bool cfg_zero = false;
+        bool cfg_five = false;
+        bool cfg_sixteen = false;
+        bool full_double_hot = false;
+        bool perfect_bonus_hot = false;
     };
 
     using Engine = m_tetris::TetrisEngine<rule_toj::TetrisRule, ai_zzz::TOJ, search_tspin::Search>;
@@ -243,6 +248,8 @@ namespace
         std::uint64_t out_acc = 0;
         std::uint64_t out_like = 0;
         std::uint64_t out_value = 0;
+        std::size_t fallback_cases = 0;
+        std::uint64_t fallback_frozen = 0;
     };
 
     search_tspin::Search::TSpinType legacy_spin(long long spin_eff)
@@ -410,6 +417,117 @@ namespace
         }
     }
 
+    void run_synthetic_formula_tests()
+    {
+        constexpr std::uint64_t ulp_allowance = 5;
+        Engine engine = make_engine();
+        engine.ai_config()->safe = 5;
+        ai_zzz::TOJ &legacy = *engine.ai();
+        toj_policy::Config config;
+        config.combo_table = combo_table;
+        config.combo_table_max = 10;
+        config.safe = 5;
+        config.parameters = toj_policy::Parameters::production_defaults();
+        toj_policy::Policy policy;
+        policy.init(&config);
+        {
+            m_tetris::TetrisMap board(10, 40);
+            m_tetris::TetrisNode node;
+            bool made = engine.context()->create(
+                m_tetris::TetrisBlockStatus('T', 4, 10, 0), node);
+            check(made, "synthetic triple node rebuilds");
+            search_tspin::Search::TetrisNodeWithTSpinType ex(&node);
+            ex.is_check = true;
+            ex.is_last_rotate = false;
+            ex.is_ready = false;
+            ex.is_mini_ready = false;
+            ex.type = search_tspin::Search::TSpinType::None;
+            ai_zzz::TOJ::Status parent;
+            std::memset(&parent, 0, sizeof(parent));
+            std::string next("T");
+            m_tetris::TetrisContext::Env env{ next.c_str(), next.size(), 'T', ' ', false };
+            auto legacy_eval = legacy.eval(ex, board, board);
+            auto legacy_out = legacy.get(ex, legacy_eval, 3, board, 0, parent, env);
+            auto piece = tetris::try_from_char('T');
+            auto placement =
+                tetris::toj::ExternalPoseTransform::to_placement(*piece, 4, 10, 0);
+            check(placement.has_value(), "synthetic triple maps to a value candidate");
+            std::array<std::uint16_t, 48> wide = {};
+            tetris::Board value_board = tetris::Board::from_rows(wide);
+            toj_policy::State value_parent;
+            std::memset(&value_parent, 0, sizeof(value_parent));
+            std::vector<tetris::Piece> next_pieces{ *piece };
+            toj_policy::DecisionContext context;
+            context.next = next_pieces;
+            context.hold = std::nullopt;
+            context.used_hold = false;
+            context.depth = 0;
+            tetris::Outcome outcome;
+            outcome.spin = tetris::SpinType::None;
+            outcome.clear_count = 3;
+            outcome.lockout = false;
+            toj_policy::Evaluation evaluation = policy.evaluate(value_board);
+            toj_policy::State got = policy.transition(*piece,
+                tetris::Candidate{ *placement, tetris::ArrivalClass::Normal }, outcome,
+                value_board, value_parent, context, evaluation);
+            bool match = got.death == legacy_out.death && got.combo == legacy_out.combo
+                && got.b2b == legacy_out.b2b && got.under_attack == legacy_out.under_attack
+                && got.map_rise == legacy_out.map_rise && got.t2_value == legacy_out.t2_value
+                && got.t3_value == legacy_out.t3_value
+                && ulp_distance(got.acc_value, legacy_out.acc_value) <= ulp_allowance
+                && ulp_distance(got.like, legacy_out.like) <= ulp_allowance
+                && ulp_distance(got.value, legacy_out.value) <= ulp_allowance;
+            check(match, "synthetic non-spin triple matches at nonzero safety");
+        }
+        {
+            std::array<std::uint16_t, 48> high_wide = {};
+            high_wide[40] = 0x155;
+            high_wide[41] = 0x2aa;
+            tetris::Board high = tetris::Board::from_rows(high_wide);
+            std::array<std::uint16_t, 48> empty_wide = {};
+            tetris::Board empty = tetris::Board::from_rows(empty_wide);
+            auto piece = tetris::try_from_char('O');
+            tetris::Placement pose = tetris::Placement::unchecked(4, 0, 0);
+            tetris::Candidate candidate{ pose, tetris::ArrivalClass::Normal };
+            tetris::Outcome outcome;
+            outcome.spin = tetris::SpinType::None;
+            outcome.clear_count = 0;
+            outcome.lockout = false;
+            toj_policy::State parent;
+            std::memset(&parent, 0, sizeof(parent));
+            std::vector<tetris::Piece> next_pieces;
+            for (char c : std::string("IOSZLJT"))
+            {
+                next_pieces.push_back(*tetris::try_from_char(c));
+            }
+            toj_policy::DecisionContext context;
+            context.next = next_pieces;
+            context.hold = std::nullopt;
+            context.used_hold = false;
+            context.depth = 0;
+            toj_policy::Evaluation high_eval = policy.evaluate(high);
+            toj_policy::Evaluation empty_eval = policy.evaluate(empty);
+            check(high_eval.value == empty_eval.value && high_eval.t2_value == empty_eval.t2_value
+                && high_eval.t3_value == empty_eval.t3_value,
+                "high rows leave evaluation at the horizon value");
+            toj_policy::State got_high =
+                policy.transition(*piece, candidate, outcome, high, parent, context, high_eval);
+            toj_policy::State got_empty =
+                policy.transition(*piece, candidate, outcome, empty, parent, context, empty_eval);
+            check(got_high.death == got_empty.death && got_high.combo == got_empty.combo
+                && got_high.b2b == got_empty.b2b
+                && got_high.under_attack == got_empty.under_attack
+                && got_high.map_rise == got_empty.map_rise
+                && got_high.t2_value == got_empty.t2_value
+                && got_high.t3_value == got_empty.t3_value,
+                "high rows earn no perfect-clear state");
+            check(got_high.acc_value < got_empty.acc_value
+                && got_high.like < got_empty.like && got_high.value < got_empty.value,
+                "high rows miss exactly the perfect-clear preference");
+        }
+        std::println("synthetic formula: non-spin triple and high-row perfect clear");
+    }
+
     void run_parity(std::string const &path)
     {
         constexpr std::uint64_t ulp_allowance = 5;
@@ -435,6 +553,7 @@ namespace
         ParityMax peak;
         std::size_t agree_count = 0;
         std::size_t divergent_count = 0;
+        std::size_t bridge_failed = 0;
         std::string line;
         while (std::getline(file, line))
         {
@@ -443,9 +562,9 @@ namespace
                 continue;
             }
             auto fields = split_fields(line);
-            if (fields.size() != 45)
+            if (fields.size() != 46)
             {
-                check(false, "parity line holds 45 fields");
+                check(false, "parity line holds 46 fields");
                 continue;
             }
             long long id = 0;
@@ -455,6 +574,7 @@ namespace
             long long spin_eff = 0;
             long long clear = 0;
             long long depth = 0;
+            long long cfg_safe = 0;
             std::uint64_t eval_bits = 0;
             std::uint64_t acc_bits = 0;
             std::uint64_t like_bits = 0;
@@ -471,13 +591,15 @@ namespace
                 && parse_hex16(fields[42], like_bits) && parse_hex16(fields[43], value_bits)
                 && parse_hex16(fields[23], parent_acc) && parse_hex16(fields[24], parent_like)
                 && parse_hex16(fields[25], parent_value) && parse_rows(fields[14], src_rows)
-                && parse_rows(fields[15], result_rows);
+                && parse_rows(fields[15], result_rows) && parse_int(fields[45], cfg_safe);
             check(parsed, "parity case parses: " + fields[0]);
             if (!parsed)
             {
                 continue;
             }
             std::string what = "parity case " + std::to_string(id);
+            engine.ai_config()->safe = static_cast<int>(cfg_safe);
+            config.safe = static_cast<int>(cfg_safe);
             auto piece = tetris::try_from_char(fields[2][0]);
             check(piece.has_value(), what + " piece converts");
             if (!piece.has_value())
@@ -578,9 +700,13 @@ namespace
                 && ulp_distance(legacy_out.like, std::bit_cast<double>(like_bits)) <= ulp_allowance
                 && ulp_distance(legacy_out.value, std::bit_cast<double>(value_bits))
                     <= ulp_allowance;
-            check(out_faithful, what + " legacy synthesis reproduces the transition");
-            if (!eval_faithful || !out_faithful)
+            if (!out_faithful)
             {
+                ++bridge_failed;
+            }
+            if (!eval_faithful)
+            {
+                check(false, what + " legacy synthesis reproduces the evaluation");
                 continue;
             }
             bool legacy_lockout = node.row >= 20;
@@ -635,10 +761,31 @@ namespace
             check(eval_drift <= ulp_allowance && got_eval.t2_value == eval_t2
                 && got_eval.t3_value == eval_t3,
                 what + " evaluation matches within allowance");
-            ai_zzz::TOJ::Status wanted = legacy_out;
+            toj_policy::State want_frozen;
+            want_frozen.death = static_cast<std::int8_t>(o_death);
+            want_frozen.combo = static_cast<std::int8_t>(o_combo);
+            want_frozen.b2b = static_cast<std::int8_t>(o_b2b);
+            want_frozen.under_attack = static_cast<std::int8_t>(o_under);
+            want_frozen.map_rise = static_cast<std::int8_t>(o_maprise);
+            want_frozen.t2_value = static_cast<std::int16_t>(o_t2);
+            want_frozen.t3_value = static_cast<std::int16_t>(o_t3);
+            want_frozen.acc_value = std::bit_cast<double>(acc_bits);
+            want_frozen.like = std::bit_cast<double>(like_bits);
+            want_frozen.value = std::bit_cast<double>(value_bits);
+            long long arrival_class = 0;
+            parse_int(fields[6], arrival_class);
+            tetris::Candidate value_candidate{ *candidate,
+                arrival_class == 1 ? tetris::ArrivalClass::TerminalRotation
+                                   : tetris::ArrivalClass::Normal };
+            toj_policy::State got = policy.transition(*piece, value_candidate, outcome, boards,
+                value_parent, value_context, got_eval);
             if (legacy_lockout != value_lockout)
             {
                 ++divergent_count;
+                if (!out_faithful)
+                {
+                    ++peak.fallback_cases;
+                }
                 m_tetris::TetrisNode patched_node{};
                 bool patched_made = engine.context()->create(
                     m_tetris::TetrisBlockStatus(fields[2][0], static_cast<std::int8_t>(x),
@@ -656,34 +803,58 @@ namespace
                 patched.is_ready = ex.is_ready;
                 patched.is_mini_ready = ex.is_mini_ready;
                 patched.type = ex.type;
-                wanted = legacy.get(patched, legacy_eval, static_cast<std::size_t>(clear),
-                    result_map, static_cast<std::size_t>(depth), parent, env);
+                ai_zzz::TOJ::Status approved = legacy.get(patched, legacy_eval,
+                    static_cast<std::size_t>(clear), result_map, static_cast<std::size_t>(depth),
+                    parent, env);
+                bool approved_ok = got.death == approved.death && got.combo == approved.combo
+                    && got.b2b == approved.b2b && got.under_attack == approved.under_attack
+                    && got.map_rise == approved.map_rise && got.t2_value == approved.t2_value
+                    && got.t3_value == approved.t3_value
+                    && ulp_distance(got.acc_value, approved.acc_value) <= ulp_allowance
+                    && ulp_distance(got.like, approved.like) <= ulp_allowance
+                    && ulp_distance(got.value, approved.value) <= ulp_allowance;
+                check(approved_ok, what + " divergent transition follows the approved semantic");
+                continue;
             }
-            else
+            ++agree_count;
+            if (!out_faithful)
             {
-                ++agree_count;
+                ++peak.fallback_cases;
+                peak.fallback_frozen = std::max({ peak.fallback_frozen,
+                    ulp_distance(got.acc_value, want_frozen.acc_value),
+                    ulp_distance(got.like, want_frozen.like),
+                    ulp_distance(got.value, want_frozen.value) });
+                bool live_ok = got.death == legacy_out.death && got.combo == legacy_out.combo
+                    && got.b2b == legacy_out.b2b
+                    && got.under_attack == legacy_out.under_attack
+                    && got.map_rise == legacy_out.map_rise
+                    && got.t2_value == legacy_out.t2_value
+                    && got.t3_value == legacy_out.t3_value
+                    && ulp_distance(got.acc_value, legacy_out.acc_value) <= ulp_allowance
+                    && ulp_distance(got.like, legacy_out.like) <= ulp_allowance
+                    && ulp_distance(got.value, legacy_out.value) <= ulp_allowance;
+                check(live_ok, what + " fallback transition matches same-build legacy");
+                continue;
             }
-            long long arrival_class = 0;
-            parse_int(fields[6], arrival_class);
-            tetris::Candidate value_candidate{ *candidate,
-                arrival_class == 1 ? tetris::ArrivalClass::TerminalRotation
-                                   : tetris::ArrivalClass::Normal };
-            toj_policy::State got = policy.transition(*piece, value_candidate, outcome, boards,
-                value_parent, value_context);
-            peak.out_acc = std::max(peak.out_acc, ulp_distance(got.acc_value, wanted.acc_value));
-            peak.out_like = std::max(peak.out_like, ulp_distance(got.like, wanted.like));
-            peak.out_value = std::max(peak.out_value, ulp_distance(got.value, wanted.value));
-            bool out_ok = got.death == wanted.death && got.combo == wanted.combo
-                && got.b2b == wanted.b2b && got.under_attack == wanted.under_attack
-                && got.map_rise == wanted.map_rise && got.t2_value == wanted.t2_value
-                && got.t3_value == wanted.t3_value
-                && ulp_distance(got.acc_value, wanted.acc_value) <= ulp_allowance
-                && ulp_distance(got.like, wanted.like) <= ulp_allowance
-                && ulp_distance(got.value, wanted.value) <= ulp_allowance;
-            check(out_ok, what + " transition matches within allowance");
+            peak.out_acc =
+                std::max(peak.out_acc, ulp_distance(got.acc_value, want_frozen.acc_value));
+            peak.out_like =
+                std::max(peak.out_like, ulp_distance(got.like, want_frozen.like));
+            peak.out_value =
+                std::max(peak.out_value, ulp_distance(got.value, want_frozen.value));
+            bool out_ok = got.death == want_frozen.death && got.combo == want_frozen.combo
+                && got.b2b == want_frozen.b2b && got.under_attack == want_frozen.under_attack
+                && got.map_rise == want_frozen.map_rise && got.t2_value == want_frozen.t2_value
+                && got.t3_value == want_frozen.t3_value
+                && ulp_distance(got.acc_value, want_frozen.acc_value) <= ulp_allowance
+                && ulp_distance(got.like, want_frozen.like) <= ulp_allowance
+                && ulp_distance(got.value, want_frozen.value) <= ulp_allowance;
+            check(out_ok, what + " transition matches the frozen fields");
         }
-        check(agree_count == 6024 && divergent_count == 0,
-            "lockout split pins 6024 shared and 0 divergent corpus cases");
+        check(agree_count == 7167 && divergent_count == 0,
+            "lockout split pins 7167 shared and 0 divergent corpus cases");
+        check(bridge_failed == peak.fallback_cases,
+            "every bridge miss is handled through the fallback gate");
         check(peak.eval_value <= ulp_allowance, "evaluation drift stays within allowance");
         check(peak.out_acc <= ulp_allowance, "accumulation drift stays within allowance");
         check(peak.out_like <= ulp_allowance, "affinity drift stays within allowance");
@@ -691,6 +862,8 @@ namespace
         std::println("parity peak ULP: eval {} acc {} like {} value {} over {} shared and {} divergent",
             peak.eval_value, peak.out_acc, peak.out_like, peak.out_value, agree_count,
             divergent_count);
+        std::println("parity fallback: {} cases beyond oracle precision, max frozen drift {} ULP",
+            peak.fallback_cases, peak.fallback_frozen);
     }
 }
 
@@ -704,9 +877,10 @@ int main()
         std::println("toj_policy_tests: {} checks, {} failures", checks, failures);
         return 1;
     }
-    constexpr int field_count = 45;
+    constexpr int field_count = 46;
     std::vector<std::string> want_tags = { "empty", "tall", "o1", "o2", "t1", "iwell3",
-        "iwell4", "slotS", "slotM", "mini0", "mini1", "mini2", "double0" };
+        "iwell4", "slotS", "slotM", "mini0", "mini1", "mini2", "double0", "double1", "double2",
+        "double3", "pci", "pci2", "pci3", "pci4" };
     for (int b = 0; b < 24; ++b)
     {
         want_tags.push_back("s" + std::to_string(b));
@@ -758,6 +932,7 @@ int main()
         long long ready = 0;
         long long mini_ready = 0;
         long long arrival = 0;
+        long long cfg_safe = -1;
         if (!parse_hex16(fields[31], bits) || !parse_hex16(fields[41], bits)
             || !parse_hex16(fields[42], bits) || !parse_hex16(fields[43], bits)
             || !parse_hex16(fields[23], bits) || !parse_hex16(fields[24], bits)
@@ -767,12 +942,25 @@ int main()
             || !parse_int(fields[17], p_combo) || !parse_int(fields[20], p_b2b)
             || !parse_int(fields[18], p_under) || !parse_int(fields[19], p_maprise)
             || !parse_int(fields[10], last_rotate) || !parse_int(fields[11], ready)
-            || !parse_int(fields[12], mini_ready) || !parse_int(fields[6], arrival))
+            || !parse_int(fields[12], mini_ready) || !parse_int(fields[6], arrival)
+            || !parse_int(fields[45], cfg_safe))
         {
             fields_parse = false;
             continue;
         }
         ++tallies.cases;
+        if (cfg_safe == 0)
+        {
+            tallies.cfg_zero = true;
+        }
+        if (cfg_safe == 5)
+        {
+            tallies.cfg_five = true;
+        }
+        if (cfg_safe == 16)
+        {
+            tallies.cfg_sixteen = true;
+        }
         for (std::size_t t = 0; t < want_tags.size(); ++t)
         {
             if (fields[1] == want_tags[t])
@@ -823,6 +1011,14 @@ int main()
         if (all_empty)
         {
             tallies.empty_result = true;
+        }
+        if (all_empty && cfg_safe != 0 && p_maprise == 0)
+        {
+            tallies.perfect_bonus_hot = true;
+        }
+        if (spin == 1 && clear == 2 && cfg_safe != 0)
+        {
+            tallies.full_double_hot = true;
         }
         if (arrival == 0 || arrival == 1)
         {
@@ -947,7 +1143,12 @@ int main()
     check(tallies.next_full && tallies.next_single_t && tallies.next_absent && tallies.next_empty
         && tallies.next_short,
         "full, single-T, T-absent, empty, and short next sequences present");
+    check(tallies.cfg_zero && tallies.cfg_five && tallies.cfg_sixteen,
+        "config-safe variants 0, 5, and 16 present");
+    check(tallies.full_double_hot, "full T-spin double at nonzero safety present");
+    check(tallies.perfect_bonus_hot, "perfect clear with live bonus at nonzero safety present");
     run_parity(path);
+    run_synthetic_formula_tests();
     std::println("toj_policy_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }

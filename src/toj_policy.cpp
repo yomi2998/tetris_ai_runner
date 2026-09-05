@@ -492,7 +492,7 @@ namespace toj_policy
     }
 
     State Policy::transition(Piece piece, Candidate candidate, Outcome outcome, Board const &result,
-        State const &parent, DecisionContext const &context) const
+        State const &parent, DecisionContext const &context, Evaluation const &evaluation) const
     {
         char piece_char = tetris::to_char(piece);
         tetris::SpinType spin = outcome.spin;
@@ -600,7 +600,6 @@ namespace toj_policy
                 attack += 2;
                 next.b2b = false;
                 update_like((piece_char == 'I') * p.waste_i);
-                update_like((piece_char == 'T') * p.waste_t);
                 update_like(p.clear_3);
             }
             attack += combo_attack(config_->combo_table, config_->combo_table_max, ++next.combo);
@@ -650,41 +649,40 @@ namespace toj_policy
             next.death = 1;
             safe = 0;
         }
-        if (roof == 0 && next.map_rise == 0)
+        if (result.empty() && next.map_rise == 0)
         {
             like += perfect_like;
             attack += perfect_attack;
         }
-        Evaluation self = evaluate(result);
         double field =
-            self.value * static_cast<double>(field_window - config_safe) / field_scale;
+            evaluation.value * static_cast<double>(field_window - config_safe) / field_scale;
         double t_like = 0;
         double t_dislike = 0;
         if (t_attack == 0)
         {
             double t2_safe = std::max(0, config_safe - t2_safe_margin);
             double t3_safe = std::max(0, config_safe - t3_safe_margin);
-            if (self.t2_value > parent.t2_value)
+            if (evaluation.t2_value > parent.t2_value)
             {
-                t_like += (self.t2_value - parent.t2_value) * t2_safe
+                t_like += (evaluation.t2_value - parent.t2_value) * t2_safe
                     * std::max(t_expect_near - t_expect, 5) * p.t2_slot;
             }
             else
             {
-                t_dislike += (parent.t2_value - self.t2_value) * t2_safe * 3 * p.t2_slot;
+                t_dislike += (parent.t2_value - evaluation.t2_value) * t2_safe * 3 * p.t2_slot;
             }
-            if (self.t3_value > parent.t3_value)
+            if (evaluation.t3_value > parent.t3_value)
             {
-                t_like += (self.t3_value - parent.t3_value) * t3_safe
+                t_like += (evaluation.t3_value - parent.t3_value) * t3_safe
                     * std::max(t_expect_near - t_expect, 4) * (3 + next.b2b) * p.t3_slot;
             }
             else
             {
-                t_dislike += (parent.t3_value - self.t3_value) * t3_safe * 4 * p.t3_slot;
+                t_dislike += (parent.t3_value - evaluation.t3_value) * t3_safe * 4 * p.t3_slot;
             }
         }
-        next.t2_value = self.t2_value;
-        next.t3_value = self.t3_value;
+        next.t2_value = evaluation.t2_value;
+        next.t3_value = evaluation.t3_value;
         next.acc_value += (0 + attack * (config_safe + attack_window) * p.attack
             + combo_attack(config_->combo_table, config_->combo_table_max, next.combo) * next.combo
                 * (combo_window - config_safe) * p.combo
