@@ -315,7 +315,7 @@ after later code commits requires checking out the recorded commit `0d03459`.
 ## Phase 3 status
 
 Implemented in `src/toj_rule.h` and gated by `tests/rule_differential.cpp`
-(CTest `rule_differential`, 469094 checks, 0 failures):
+(CTest `rule_differential`, 473942 checks, 0 failures):
 
 - Canonical spawn and dispatch: every piece spawns at kernel anchor
   `(4, 20, 0)`, and the adapter enumerates through the kernel's
@@ -333,10 +333,10 @@ Implemented in `src/toj_rule.h` and gated by `tests/rule_differential.cpp`
   differential proves.
 - The value API rejects piece-invalid input before indexing geometry: O
   rotations 1 through 3 return empty or false through `cells`, `fits`,
-  `lowest_occupied_row`, `occupancy_mask`, and `apply`, and `apply` rejects
-  floating candidates for every piece, not only T. Directed tests pin both
-  behaviors, including resting acceptances and a spawn obstruction that
-  blocks T but not I.
+  `lowest_occupied_row`, `occupancy_mask`, and `apply`, each pinned by its
+  own assertion, and `apply` rejects floating candidates for every piece,
+  with the accept and reject checks looped over all seven pieces. Valid
+  piece identity is an explicit caller precondition of the value API.
 - Geometry proof: 7790 exhaustive pose comparisons over every piece,
   rotation, x, and y in the legacy domain, plus all 816 comparable
   `geometry.csv` fixture rows, with occupied cells equal everywhere and every
@@ -356,9 +356,10 @@ Implemented in `src/toj_rule.h` and gated by `tests/rule_differential.cpp`
   the 198 new-only candidates are each verified through two independent
   layers, the scalar command oracle over the kernel tables and a legacy
   command BFS that walks only the legacy context net and wall-kick arrays
-  with explicit per-command arrival channels; zero arrival-class,
-  clear-count, spin, or lockout mismatches on shared candidates; all 3908
-  `reach.csv` rows are reproduced live and covered.
+  with explicit per-command arrival channels, and every one of the 4980
+  emitted candidate variants is replayed through the legacy command layer;
+  zero arrival-class, clear-count, spin, or lockout mismatches on shared
+  candidates; all 3908 `reach.csv` rows are reproduced live and covered.
 - T-spin classification: the seven plan conditions, with non-landable input
   rejected and mini readiness asking whether any kick-enabled rotation can
   succeed, which is exactly what the legacy net's rotation pointers encode.
