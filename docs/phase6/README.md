@@ -49,9 +49,13 @@ rejects capacities beyond the `NodeId` range or the arena byte
 allowance without allocating, and rejects an over-wide reservation
 after the fact, so the allowance holds on any standard library
 (reserve guarantees at least the request; the tested libraries
-reserve exactly it, asserted per configuration). Allocation peaks
-therefore equal the allowance because storage never grows or
-relocates, and node addresses stay stable from materialization
+reserve exactly it, asserted per configuration). On the tested
+implementations the arena allocation peak equals the allowance
+because storage never grows or relocates. A standard library that
+over-reserves would transiently allocate more than the request;
+the post-reservation rejection bounds retained storage only and
+cannot retract that transient peak, so the universal peak claim is
+not made. Node addresses stay stable from materialization
 onward. Rejected configurations behave as zero-capacity engines. Queue input is capped at 256
 pieces, per-expansion scratch is bounded by the enumerated candidate
 count, and materialization additionally refuses to exceed the
