@@ -18,10 +18,13 @@ Timed and iteration budgets on the shared search machinery:
   the iteration kind runs `max(1, n)` passes. Exhaustion and
   invariant stops break the loop with best-so-far selection intact.
 - The clock is injectable through `EngineConfig::clock_nanos`
-  (nanoseconds on a monotonic scale), defaulting to
-  `steady_clock`, so deadline semantics are tested deterministically
-  with a controllable fake clock and saturating budgets are
-  overflow-safe. The production throughput gate for timed mode
+  (nanoseconds on a monotonic scale), defaulting to `steady_clock`,
+  so deadline semantics are tested deterministically with a
+  controllable fake clock and saturating budgets are overflow-safe.
+  The engine move constructor moves the configuration, so an
+  injectable clock with a throwing copy constructor is never copied
+  by the move, and a regression gate arms such a clock before the
+  move. The production throughput gate for timed mode
   remains the measured performance gate in the plan, not a unit
   assertion.
 - The deterministic `run(max_passes)` entry keeps its exact-pass
@@ -196,7 +199,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 671
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 677
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -240,6 +243,9 @@ clock matching the deterministic budget bit for bit, a real-clock
 smoke run that returns with at least one pass without asserting
 completion, arena exhaustion under a large time budget with intact
 best-so-far selection, and a saturating budget without overflow.
+A clock-move gate arms a callable whose copy throws after
+initialization and proves the engine move transfers it without
+copying, with the destination completing a timed search.
 Mutation probes confirm
 the gates: zeroed transitions, child-cursor policy contexts, and
 danger-mask shifts all fail.
