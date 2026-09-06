@@ -76,9 +76,10 @@ against the retained nodes.
   overwritten by the fresh run. The public range-linking entry
   rejects before writing when the count exceeds the remaining arena
   tail, so wrapping or oversized ranges preserve existing linkage.
-  Linking cost observation: appending walks the sibling chain, so
-  per-expansion link work grows linearly with the owning parent's
-  degree. The debug engine suite runs 16.4s at 15939 checks including
+  Linking cost observation: each append walks the sibling chain,
+  so one append is linear in the current sibling count and
+  constructing or rescanning an entire sibling group can be
+  quadratic. The debug engine suite runs 16.4s at 15939 checks including
   bidirectional membership verification over every parent of every
   reuse tree, versus 21.0s at 879 checks before the reuse gates;
   that suite-time comparison is an observation, not an isolated
