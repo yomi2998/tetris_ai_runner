@@ -28,9 +28,11 @@ Deterministic frontier search over the slice 6.1 primitive:
   hold slot is occupied and the legacy raw next length
   (`piece_count - 1 + marker_count`) exceeds one or the hold is
   unlocked. `Queue::marker_count` preserves the raw `?` count that
-  boundary bits alone cannot reconstruct; directly built queues are
-  validated for nonempty pieces, matching boundary length, and the
-  queue cap.
+  boundary bits alone cannot reconstruct; the engine consumes only
+  the predicate that the raw length exceeds one, computed without
+  overflow for any supplied marker count, and directly built queues
+  are validated for nonempty pieces, matching boundary length, and
+  the queue cap.
 - Ranking is legacy `Status::operator<`: cumulative `State::value`
   only, with an explicit lower-`NodeId` tie-breaker where legacy order
   was incidental. Frontier pending sets are intrusive two-pass pairing
@@ -47,7 +49,11 @@ Deterministic frontier search over the slice 6.1 primitive:
   once; cross-root equivalents deliberately stay separate, so no
   attribution indirection exists and projection walks the parent
   chain. Table exhaustion stops the run incomplete with best-so-far
-  selection intact.
+  selection intact. Promotion is failure-safe: the popped parent
+  joins the expanded trackers before any child materializes, the
+  transposition probe precedes allocation for depth-two and deeper
+  children, child links finalize even when exhaustion breaks the
+  child loop, and every promotion path checks exhaustion immediately.
 - Projection follows legacy `get_best()`: deepest frontier with any
   content wins, pending top versus expanded best compared by strict
   value with expanded winning ties, then the parent chain walks back
@@ -115,39 +121,54 @@ measured structure sizes. The full 256 MiB budget is split once in
 `init` between the node arena and the fixed search workspace: the
 candidate buffer (full search-domain bound per source), the child
 buffer and evaluation memo (the same bound for both sources), the
-8,192-entry transposition table, the 257-frontier metadata arrays,
-and the width cache. `engine_fixed_workspace` computes the sum from
-`sizeof` at compile time; `default_arena_capacity` is the remainder
-divided by measured `sizeof(Node)` (320 bytes; the pinned values are
-a 6,577,184-byte fixed workspace and an 818,307-node arena with the
-heap links, root identity, and played-piece fields added in
-slice 6.2). Every buffer is a single reservation requested before any
+8,192-entry transposition table, the 257-frontier metadata arrays
+(pending-heap roots and counts plus the expanded trackers and width
+cache), the queue reservation, and a conservative stack peak
+allowance covering the measured kernel and expansion frames (the
+largest kernel workspace instantiates to 320 bytes and the frames
+nest only a few deep). `engine_buffer_reservation` computes the
+identical inventory for the compile-time constant
+`engine_fixed_workspace` and for the post-reservation check over
+actual capacities, so both sides cover the same structures.
+`default_arena_capacity` is the remainder divided by measured
+`sizeof(Node)` (320 bytes; the pinned values are a 6,644,000-byte
+fixed workspace and an 818,098-node arena with the heap links, root
+identity, and played-piece fields added in slice 6.2). Every buffer is a single reservation requested before any
 storage is committed: `init` rejects capacities beyond the `NodeId`
 range or the byte allowance without allocating, re-checks the actual
 arena reservation, and rejects the whole configuration if the
-post-reservation total across all buffers exceeds the budget. On the
+post-reservation total across all buffers exceeds the budget.
+`retained_bytes()` reports the same inventory after the fact. Adopted
+queue storage is normalized: `set_root` copies at most
+`max_queue_length` pieces and boundary bits into the engine-owned
+reservations, so a caller's oversized vector capacity is never
+retained. On the
 tested implementations the retained allocation peak equals the
 allowance because storage never grows or relocates; a standard
 library that over-reserves would transiently allocate more than the
 request, and the post-reservation rejection bounds retained storage
 only. Node addresses stay stable from materialization onward.
-Rejected configurations behave as zero-capacity engines. Queue input
+Rejected configurations behave as zero-capacity engines, and
+reinitialization resets every run-state field, frontier sentinel, and
+transposition entry on success and on rejection. Queue input
 is capped at 256 pieces, the frontier pool is bounded by one heap
 entry per materialized node (intrusive links live inside `Node` and
 are part of its measured size), and materialization additionally
-refuses to exceed the `NodeId` range. Tests assert reserved bytes
-equal capacity times node size including a non-power-of-two
-capacity, address stability across fills, and no growth beyond the
-reservation. Node pointers are invalidated only by root replacement;
-callers still re-fetch by id after any mutation. Small capacities
-prove fail-closed materialization with exhaustion reporting. The
+refuses to exceed the `NodeId` range. Tests assert retained bytes
+within the budget including a non-power-of-two capacity, bounded
+queue adoption from oversized reservations, address stability across
+fills, and no growth beyond the reservation. Node pointers are
+invalidated only by root replacement; callers still re-fetch by
+id after any mutation. Small capacities prove fail-closed
+materialization with exhaustion reporting and correct best-so-far
+attribution. The
 persistent cache share of the total budget arrives with the cache
-slice; the frontier, transposition, and scratch shares are now part
-of the validated accounting above.
+slice; the frontier, transposition, and scratch shares are part of
+the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 534
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 602
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -168,8 +189,16 @@ separate, the depth-one attribution invariant over the whole arena,
 projection evidence against an independent deepest-frontier oracle,
 immediate root state separated from deeper evidence, arena and
 transposition exhaustion with best-so-far selection, and bit-for-bit
-determinism across repeated searches. Mutation probes confirm the
-gates: zeroed transitions, child-cursor policy contexts, and
+determinism across repeated searches. The repair gates add direct
+pairing-heap tests (equal scores, long sibling chains, repeated
+extraction), the complete memory inventory with retained bytes and
+bounded queue adoption from oversized reservations, overflow-free
+marker boundary values, reinitialization state resets on success and
+rejection, exhaustion projection that preserves the best evidence and
+attribution under the tie-break, adapter canonical keys verified
+strictly increasing so the representative rule is deterministic, and
+the four remaining policy-key negative cases. Mutation probes confirm
+the gates: zeroed transitions, child-cursor policy contexts, and
 danger-mask shifts all fail.
 
 ## Kernel corner note
