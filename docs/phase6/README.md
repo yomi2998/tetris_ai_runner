@@ -30,8 +30,13 @@ Bounded board-evaluation cache with explicit identity and lifecycle:
   are per-search and reset with the run state while entries survive
   `set_root` as groundwork for root reuse without implementing it,
   and enabled-cache geometry (nonzero entries, positive ways,
-  divisibility, power-of-two set count) is validated in `init`
-  before allocation with rejected configurations fail-closed.
+  divisibility, power-of-two set count, and a byte product within
+  the budget) is validated in `init` before allocation with
+  rejected configurations fail-closed: the non-cache fixed
+  reservation is established first, cache bytes must fit the
+  remaining budget with checked arithmetic, and an over-budget
+  cache is rejected regardless of the arena capacity, including
+  zero-capacity configurations.
 - Telemetry distinguishes board-evaluation requests, local memo
   hits, cache requests, hits, misses, replacements, and actual
   evaluations; with the cache enabled every miss computes exactly
@@ -40,14 +45,16 @@ Bounded board-evaluation cache with explicit identity and lifecycle:
 - Layout selection is measured, not assumed: direct-mapped forces
   one way per set and set-associative uses the configured count, so
   the benchmark compares genuinely different structures. At an equal
-  2,097,152 byte budget (16,384 entries), direct-mapped beat
-  set-associative-4 by median wall time (90.868 versus 91.348 ms per
-  16-board workload) and both beat disabled (93.441 ms) with a 34.9
-  percent hit rate reducing evaluations 127,663 to 83,053 at
-  identical completed work (4,790 passes) and identical per-board
-  result fingerprints. Per-search accounting identity holds
-  (computed evaluations equal cache misses). Direct-mapped is the
-  production default. Full data in `cache_benchmark.txt`.
+  2,097,152 byte budget (16,384 entries), all variants completed
+  identical work (4,790 passes) and identical per-board result
+  fingerprints. The measured medians are close and noisy across
+  runs: direct-mapped 90.868 ms, set-associative-4 91.348 ms,
+  disabled 93.441 ms, with the two cached variants trading places
+  between repetitions. Direct-mapped is the production default for
+  its nominal timing lead and simpler structure; no robust speed
+  advantage is claimed. Hit rate on the direct-mapped layout was
+  44,610 of 127,663 lookups (34.9 percent), reducing evaluations
+  127,663 to 83,053. Full data in `cache_benchmark.txt`.
 
 ## Slice 6.3 scope
 
@@ -242,7 +249,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 777
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 784
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state

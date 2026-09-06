@@ -11,7 +11,8 @@
 # Warmup: 1 sweep; measured: 5 sweeps; fixed variant order per sweep (disabled, direct-mapped, set-associative-4)
 # All variants completed identical work (4,790 passes) and identical result fingerprints (f95293ada9d211fd over per-board selections)
 # Summary medians (ms): disabled 93.441, direct-mapped 90.868, set-associative-4 91.348
-# Direct-mapped selected: fastest median; hit rate 44,610 of 127,663 lookups (34.9 percent); evaluations 127,663 to 83,053
+# The cached variants are close and noisy across runs; no robust speed advantage is claimed
+# Direct-mapped selected on the nominal median lead and simpler structure; hit rate 44,610 of 127,663 lookups (34.9 percent); evaluations 127,663 to 83,053
 # Accounting identity holds per search: computed evaluations equal cache misses
 # Artifact hashes:
 # b93ceedaafcf106b592c611fc1017e668d508be5bf1e9ee655067c50c0f61199  tests/eval_cache_bench.cpp
