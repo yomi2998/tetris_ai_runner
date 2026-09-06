@@ -394,7 +394,7 @@ namespace tetris_engine
     public:
         Engine() = default;
         Engine(Engine &&other) noexcept
-            : config_(other.config_)
+            : config_(std::move(other.config_))
             , policy_(std::move(other.policy_))
             , arena_(std::move(other.arena_))
             , heap_(std::move(other.heap_), arena_)

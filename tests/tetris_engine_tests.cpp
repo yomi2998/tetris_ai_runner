@@ -8,6 +8,7 @@
 #include <limits>
 #include <print>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -1152,6 +1153,57 @@ namespace
         std::println("engine move: heap rebinds to the destination arena");
     }
 
+    void run_move_clock_tests()
+    {
+        struct ClockState
+        {
+            std::int64_t ticks = 0;
+            bool armed = false;
+        };
+        struct Guard
+        {
+            std::shared_ptr<ClockState> state;
+
+            explicit Guard(std::shared_ptr<ClockState> s)
+                : state(std::move(s))
+            {
+            }
+            Guard(Guard const &other)
+                : state(other.state)
+            {
+                if (state && state->armed)
+                {
+                    throw std::runtime_error("clock copy");
+                }
+            }
+            std::int64_t operator()() const
+            {
+                return state->ticks;
+            }
+        };
+        auto state = std::make_shared<ClockState>();
+        Fixture fixture;
+        fixture.policy_config.combo_table = combo_table;
+        fixture.policy_config.combo_table_max = 10;
+        fixture.policy_config.safe = 0;
+        fixture.policy_config.parameters = toj_policy::Parameters{};
+        fixture.engine_config.policy = &fixture.policy_config;
+        fixture.engine_config.clock_nanos = Guard{ state };
+        check(fixture.engine.init(fixture.engine_config),
+            "a throwing-clock fixture initializes while unarmed");
+        make_root(fixture, shelf_board(), "III", std::nullopt, true);
+        fixture.engine.run(3);
+        state->armed = true;
+        engine_alias::Engine moved(std::move(fixture.engine));
+        check(moved.arena_size() > 1, "a moved clock engine keeps its arena");
+        check(moved.run(engine_alias::SearchBudget::by_time(1000)),
+            "a moved clock engine completes a timed search");
+        check(moved.search_complete(), "the timed search reaches completion");
+        check(moved.select_best().has_value(),
+            "a moved clock engine projects a selection");
+        std::println("engine move: the clock callable moves without copying");
+    }
+
     void run_pending_heap_tests()
     {
         std::vector<engine_alias::Node> arena;
@@ -1591,6 +1643,7 @@ int main()
     run_search_exhaustion_tests();
     run_search_determinism_tests();
     run_move_tests();
+    run_move_clock_tests();
     run_pending_heap_tests();
     run_memory_accounting_tests();
     run_marker_boundary_tests();
