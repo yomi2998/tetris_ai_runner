@@ -73,10 +73,20 @@ against the retained nodes.
   appends fresh children and owned merges (a merge never reparents
   a node or links it under a second parent) with deduplication, so
   retained children survive the resumed search instead of being
-  overwritten by the fresh run. The rerooted root keeps the matched
-  child's move history (played piece and source) while a fresh root
-  carries defaults, so warm-versus-cold node parity excludes the
-  root's move-history fields and compares everything else exactly.
+  overwritten by the fresh run. The public range-linking entry
+  rejects before writing when the count exceeds the remaining arena
+  tail, so wrapping or oversized ranges preserve existing linkage.
+  Linking cost observation: appending walks the sibling chain, so
+  per-expansion link work grows linearly with the owning parent's
+  degree. The debug engine suite runs 16.4s at 15939 checks including
+  bidirectional membership verification over every parent of every
+  reuse tree, versus 21.0s at 879 checks before the reuse gates;
+  that suite-time comparison is an observation, not an isolated
+  measurement of linking cost. Production throughput qualification
+  remains deferred. The rerooted root keeps the matched child's
+  move history (played piece and source) while a fresh root carries
+  defaults, so warm-versus-cold node parity excludes the root's
+  move-history fields and compares everything else exactly.
 - The widening state restarts per legacy `update_version`: width
   returns to zero, both frontier heaps clear, expansion trackers
   reset, and every retained non-root node becomes unregistered so the

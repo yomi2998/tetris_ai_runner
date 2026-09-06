@@ -316,7 +316,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 10164
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 15939
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -391,7 +391,12 @@ evaluation and policy state with depth, parent, played piece,
 source, and hold wiring (excluding the rerooted root's kept move
 history), child-chain membership proven bidirectionally for every
 parent after warm, marked, hold-swap, multi-turn, exhausted, and
-cold searches, a capacity-37 exhausted-reroot-resume reproducer,
+cold searches, range-linking bounds (wrapping, oversized, and
+out-of-range inputs preserve linkage; exact end-of-arena applies),
+a shared node comparator covering candidate placement and arrival
+with the exception limited to root history, full parity for
+empty-hold, marked, consumed-marker, and locked-hold advances, a
+capacity-37 exhausted-reroot-resume reproducer,
 a mid-size partial-exhaustion promotion gate, advancement through
 hold swap,
 empty-hold consumption, exhaustion to a clean root, and marked
@@ -402,8 +407,8 @@ tree for a later reuse, reinitialization releasing idmap scratch
 with cycled-versus-fresh retained-byte equality, and separately
 counted arena and idmap capacities. Mutation probes confirm
 the repair gates: prefix queue matching, a removed marker bound,
-a missing cache reset, dropped idmap transfer or release, and
-fresh-only child linking each
+a missing cache reset, dropped idmap transfer or release,
+fresh-only child linking, and a wrapping link range each
 fail, alongside the earlier zeroed transitions, child-cursor policy
 contexts, and danger-mask shift probes.
 
