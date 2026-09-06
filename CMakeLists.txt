@@ -141,6 +141,8 @@ add_test(NAME rule_differential COMMAND rule_differential)
 
 add_executable(path_differential
     tests/path_differential.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
     src/tetris_core.cpp
     src/rule_toj.cpp
     src/search_tspin.cpp

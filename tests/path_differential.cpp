@@ -1,5 +1,7 @@
 #include "toj_pathfinder.h"
 #include "toj_rule.h"
+#include "toj_policy.h"
+#include "tetris_engine.h"
 #include "published_srs_replay.h"
 #include "reach_corpus.h"
 #include "scalar_arrival_oracle.h"
@@ -666,6 +668,99 @@ namespace
         std::println("selection shape: one finder per selection with deterministic reuse");
     }
 
+    void run_finalize_bridge_tests(Engine &legacy)
+    {
+        auto model = published_replay::measure_frames(legacy);
+        int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
+        std::array<std::uint16_t, 48> lip_rows = {};
+        for (int y = 0; y < 16; ++y)
+        {
+            lip_rows[static_cast<std::size_t>(y)] = 0x1ff;
+        }
+        lip_rows[16] = 0x1ff & ~(0x038);
+        lip_rows[17] = 0x1ff & ~(0x038);
+        lip_rows[18] = 0x1ff & ~(0x010);
+        lip_rows[19] = 0x1ff;
+        std::array<std::uint16_t, 48> shelf_rows = {};
+        for (int y = 0; y < 18; ++y)
+        {
+            shelf_rows[static_cast<std::size_t>(y)] = 0x1ff;
+        }
+        struct BridgeCase
+        {
+            Board board;
+            char const *queue_text;
+            std::optional<Piece> hold_piece;
+        };
+        std::vector<BridgeCase> cases;
+        cases.push_back({Board::from_rows(shelf_rows), "TIS", std::nullopt});
+        cases.push_back({Board::from_rows(lip_rows), "TTI", std::nullopt});
+        cases.push_back(
+            {Board::from_rows(shelf_rows), "TIS", Piece::I});
+        for (auto const &bridge : cases)
+        {
+            toj_policy::Config policy_config;
+            policy_config.combo_table = combo_table;
+            policy_config.combo_table_max = 10;
+            policy_config.safe = 5;
+            policy_config.parameters = toj_policy::Parameters::production_defaults();
+            tetris_engine::EngineConfig engine_config;
+            engine_config.policy = &policy_config;
+            tetris_engine::Engine value;
+            check(value.init(engine_config), "bridge engine initializes");
+            auto queue = tetris_engine::parse_queue(bridge.queue_text);
+            check(queue.has_value(), "bridge queue parses");
+            toj_policy::State state;
+            tetris_engine::HoldState hold;
+            hold.piece = bridge.hold_piece;
+            check(value.set_root(bridge.board, state, std::move(*queue), hold)
+                != tetris_engine::no_node,
+                "bridge root takes");
+            value.run(2000);
+            auto selection = value.select_best();
+            check(selection.has_value(), "bridge search selects");
+            if (!selection.has_value())
+            {
+                continue;
+            }
+            auto const *child = value.node(selection->root_child);
+            Placement const spawn =
+                Placement::unchecked(toj_alias::spawn_x, toj_alias::spawn_y, 0);
+            tetris_engine::FinalResult result = value.finalize(spawn);
+            check(result.has_selection && result.path_ok,
+                "bridge finalization materializes a path");
+            if (!result.path_ok)
+            {
+                continue;
+            }
+            std::array<std::uint16_t, 48> rows = {};
+            for (int y = 0; y < 48; ++y)
+            {
+                rows[static_cast<std::size_t>(y)] = bridge.board.row(y);
+            }
+            PathConfig config{};
+            auto replayed = replay_path(bridge.board, child->played, spawn,
+                result.path.view(), config, true);
+            check(replayed.valid && replayed.placement == child->incoming.placement,
+                "bridge path replays through production replay");
+            auto independent = published_replay::replay(model, rows,
+                reachability::rules::Tetromino::name_of(child->played), 3, 21, 0,
+                result.path.view(), true, true);
+            auto expected_cells = sorted_cells_of(child->played,
+                child->incoming.placement);
+            bool const independent_arrival_ok = child->played == Piece::T
+                ? independent.arrival
+                    == (child->incoming.arrival == ArrivalClass::TerminalRotation
+                        ? 1
+                        : 0)
+                : true;
+            check(independent.valid && independent.cells == expected_cells
+                && independent_arrival_ok,
+                "bridge path replays through the independent interpreter");
+        }
+        std::println("finalize bridge: value-engine paths agree on both replay layers");
+    }
+
     PathTallies run_reach_corpus_path_tests(Engine &engine, bool allow_180)
     {
         auto model = published_replay::measure_frames(engine);
@@ -707,6 +802,7 @@ int main()
     run_start_placement_tests();
     run_terminal_validity_tests();
     run_selection_integration_tests();
+    run_finalize_bridge_tests(engine);
     PathTallies on = run_corpus_path_tests(engine, true);
     check(on.candidates == 4980 && on.terminal == 721 && on.longest == 17 && on.fallbacks == 81,
         "seeded corpus candidate totals are pinned");

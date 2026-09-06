@@ -2128,6 +2128,11 @@ namespace
             tetris::toj::spawn_y, 0);
     }
 
+    tetris::Placement buried_start()
+    {
+        return tetris::Placement::unchecked(4, 10, 0);
+    }
+
     bool alphabet_clean(std::string_view commands)
     {
         for (char command : commands)
@@ -3579,8 +3584,11 @@ namespace
             auto const *child = fixture.engine.node(selection->root_child);
             check(child->source == engine_alias::BranchSource::Hold,
                 "the swap selection uses hold");
+            check(!tetris::toj::fits(child->played, buried_start(),
+                fixture.engine.node(0)->board),
+                "the buried start cannot work if misused");
             engine_alias::FinalResult result =
-                fixture.engine.finalize(canonical_spawn());
+                fixture.engine.finalize(buried_start());
             check(result.has_selection && result.path_ok && result.used_hold,
                 "the occupied-hold result keeps the hold operation");
             check(result.played == child->played,
@@ -3588,7 +3596,7 @@ namespace
             check_final_replay(fixture.engine.node(0)->board, child->board,
                 child->played, canonical_spawn(), child->incoming,
                 result.path.view(), true, child->expandable,
-                "the swap path replays exactly");
+                "the swap path replays exactly from spawn");
         }
         {
             Fixture fixture = make_fixture();
@@ -3608,8 +3616,11 @@ namespace
             check(child->hold.piece.has_value()
                 && *child->hold.piece == child->played,
                 "the hold piece equals the played piece");
+            check(!tetris::toj::fits(child->played, buried_start(),
+                fixture.engine.node(0)->board),
+                "the buried start cannot work if misused");
             engine_alias::FinalResult result =
-                fixture.engine.finalize(canonical_spawn());
+                fixture.engine.finalize(buried_start());
             check(result.has_selection && result.path_ok && result.used_hold,
                 "equal pieces keep the hold operation");
             check(result.candidate.has_value()
@@ -3619,13 +3630,48 @@ namespace
             check_final_replay(fixture.engine.node(0)->board, child->board,
                 child->played, canonical_spawn(), child->incoming,
                 result.path.view(), true, child->expandable,
-                "the equal-piece path replays exactly");
+                "the equal-piece path replays exactly from spawn");
             auto open = tetris::path::replay_path(fixture.engine.node(0)->board,
                 child->played, canonical_spawn(), result.path.view(),
                 tetris::path::PathConfig{}, false);
             check(open.valid
                 && open.arrival == tetris::ArrivalClass::TerminalRotation,
                 "the equal-piece path travels the terminal channel");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            toj_policy::State distinct_state;
+            engine_alias::HoldState empty_hold;
+            check(fixture.engine.set_root(lip_board(), distinct_state,
+                std::move(*queue), empty_hold) != engine_alias::no_node,
+                "distinct-piece root takes");
+            check(fixture.engine.run(2000), "distinct-piece search completes");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "distinct-piece search selects");
+            auto const *child = fixture.engine.node(selection->root_child);
+            check(child->source == engine_alias::BranchSource::Hold
+                && child->cursor == 2,
+                "the distinct-piece selection consumes two pieces");
+            check(child->played == fixture.engine.queue().pieces[1],
+                "the empty-hold path plays the next concrete piece");
+            check(child->hold.piece.has_value()
+                && *child->hold.piece == fixture.engine.queue().pieces[0]
+                && *child->hold.piece != child->played,
+                "the hold slot keeps the distinct current piece");
+            check(!tetris::toj::fits(child->played, buried_start(),
+                fixture.engine.node(0)->board),
+                "the buried start cannot work if misused");
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(buried_start());
+            check(result.has_selection && result.path_ok && result.used_hold,
+                "the distinct-piece result keeps the hold operation");
+            check(result.played == child->played,
+                "the distinct-piece result plays the next piece");
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                result.path.view(), true, child->expandable,
+                "the distinct-piece path replays exactly from spawn");
         }
         {
             Fixture fixture = make_fixture();
@@ -3655,6 +3701,47 @@ namespace
             check(open.valid
                 && open.arrival == tetris::ArrivalClass::TerminalRotation,
                 "the spin path travels the terminal channel");
+        }
+        {
+            for (bool allow_180 : {true, false})
+            {
+                Fixture fixture = make_fixture();
+                fixture.engine_config.movement.allow_180 = allow_180;
+                check(fixture.engine.init(fixture.engine_config),
+                    "spin-180 fixture initializes");
+                auto queue = engine_alias::parse_queue("STS");
+                check(queue.has_value(), "spin-180 queue parses");
+                check(fixture.engine.set_root(lip_board(), state,
+                    std::move(*queue), no_hold) != engine_alias::no_node,
+                    "spin-180 root takes");
+                check(fixture.engine.run(2000),
+                    "spin-180 search completes");
+                auto selection = fixture.engine.select_best();
+                check(selection.has_value(), "spin-180 search selects");
+                auto const *child = fixture.engine.node(selection->root_child);
+                check(child->incoming.placement.rotation() == 1
+                    && child->incoming.placement.x() == 9
+                    && child->incoming.placement.y() == 20,
+                    "both configurations select the same placement");
+                engine_alias::FinalResult result =
+                    fixture.engine.finalize(canonical_spawn());
+                check(result.has_selection && result.path_ok,
+                    "the spin-180 result materializes a path");
+                bool uses_spin = false;
+                for (char command : result.path.view())
+                {
+                    if (command == 'x')
+                    {
+                        uses_spin = true;
+                    }
+                }
+                check(uses_spin == allow_180,
+                    "the pathfinder follows the configured 180 rule");
+                check_final_replay(fixture.engine.node(0)->board, child->board,
+                    child->played, canonical_spawn(), child->incoming,
+                    result.path.view(), allow_180, child->expandable,
+                    "the spin-180 path replays exactly");
+            }
         }
         {
             Fixture fixture = make_fixture();
@@ -3698,25 +3785,103 @@ namespace
             check(fixture.engine.run(2000), "lifecycle search completes");
             auto selection = fixture.engine.select_best();
             check(selection.has_value(), "lifecycle search selects");
+            engine_alias::FinalResult first =
+                fixture.engine.finalize(canonical_spawn());
+            check(first.has_selection && first.path_ok,
+                "the first turn finalizes before reroot");
             auto const *child = fixture.engine.node(selection->root_child);
             engine_alias::Queue next =
                 remaining_queue(fixture.engine.queue(), child->cursor);
             check(fixture.engine.set_root(child->board, child->policy,
                 std::move(next), child->hold) != engine_alias::no_node,
                 "lifecycle second turn reroots");
-            check(fixture.engine.path_telemetry().calls == 0,
-                "reroot performs no pathfinder calls");
+            check(fixture.engine.arena_size() > 1,
+                "the lifecycle reroot retains a subtree");
+            check(fixture.engine.path_telemetry().calls == 1,
+                "reroot preserves path telemetry");
             check(fixture.engine.run(2000), "lifecycle second search completes");
             engine_alias::FinalResult warm =
                 fixture.engine.finalize(canonical_spawn());
             check(warm.has_selection && warm.path_ok,
                 "finalization follows successful reuse");
+            check(fixture.engine.path_telemetry().calls == 2,
+                "telemetry accumulates across root changes");
             auto const *warm_child = fixture.engine.node(
                 fixture.engine.select_best()->root_child);
             check_final_replay(fixture.engine.node(0)->board, warm_child->board,
                 warm_child->played, canonical_spawn(), warm_child->incoming,
                 warm.path.view(), true, warm_child->expandable,
                 "the post-reuse path replays exactly");
+            int blocked_x = -1;
+            int blocked_y = 0;
+            for (int y = 0; y < 48 && blocked_x < 0; ++y)
+            {
+                for (int x = 0; x < 10; ++x)
+                {
+                    if ((fixture.engine.node(0)->board.row(y)
+                        >> static_cast<unsigned>(x))
+                        & 1u)
+                    {
+                        blocked_x = x;
+                        blocked_y = y;
+                        break;
+                    }
+                }
+            }
+            check(blocked_x >= 0, "the searched board stays nonempty");
+            engine_alias::FinalResult failed = fixture.engine.finalize(
+                tetris::Placement::unchecked(blocked_x, blocked_y, 0));
+            check(failed.has_selection && !failed.path_ok,
+                "a bad start fails after success");
+            check(!failed.path.valid && failed.path.size == 0,
+                "the failed path carries no stale commands");
+            check(failed.candidate.has_value()
+                && failed.candidate->placement == warm_child->incoming.placement
+                && failed.candidate->arrival == warm_child->incoming.arrival
+                && failed.played == warm_child->played
+                && same_state(failed.state, warm_child->policy)
+                && failed.used_hold
+                    == (warm_child->source == engine_alias::BranchSource::Hold),
+                "the failed result preserves selected metadata");
+            check(fixture.engine.path_telemetry().calls == 3
+                && fixture.engine.path_telemetry().failures == 1,
+                "success-then-failure counts both outcomes");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "miss queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "miss root takes");
+            check(fixture.engine.run(2000), "miss search completes");
+            std::array<std::uint16_t, 48> rows = {};
+            for (int y = 0; y < 48; ++y)
+            {
+                rows[static_cast<std::size_t>(y)] =
+                    fixture.engine.node(0)->board.row(y);
+            }
+            rows[40] = rows[40] != 0
+                ? static_cast<std::uint16_t>(rows[40] & (rows[40] - 1))
+                : static_cast<std::uint16_t>(0x001);
+            auto moved_queue = engine_alias::parse_queue("TIS");
+            check(moved_queue.has_value(), "miss second queue parses");
+            check(fixture.engine.set_root(tetris::Board::from_rows(rows), state,
+                std::move(*moved_queue), no_hold) != engine_alias::no_node,
+                "the miss takes a clean root");
+            check(fixture.engine.arena_size() == 1,
+                "the miss retains nothing");
+            check(fixture.engine.run(2000), "miss second search completes");
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(canonical_spawn());
+            check(result.has_selection && result.path_ok,
+                "finalization follows a reuse miss");
+            auto selection = fixture.engine.select_best();
+            auto const *child = fixture.engine.node(selection->root_child);
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                result.path.view(), true, child->expandable,
+                "the post-miss path replays against the new root");
         }
         {
             Fixture fixture = make_fixture();
@@ -3751,24 +3916,16 @@ namespace
                 "the small arena exhausts");
             engine_alias::FinalResult result =
                 fixture.engine.finalize(canonical_spawn());
-            check(result.has_selection,
-                "finalization follows exhaustion");
+            check(result.has_selection && result.path_ok,
+                "finalization succeeds after exhaustion");
             check(fixture.engine.path_telemetry().calls == 1,
                 "the exhausted finalization searches once");
-            if (result.path_ok)
-            {
-                auto selection = fixture.engine.select_best();
-                auto const *child = fixture.engine.node(selection->root_child);
-                check_final_replay(fixture.engine.node(0)->board, child->board,
-                    child->played, canonical_spawn(), child->incoming,
-                    result.path.view(), true, child->expandable,
-                    "the exhausted path replays exactly");
-            }
-            else
-            {
-                check(!result.path.valid && result.path.size == 0,
-                    "exhausted failure carries no stale commands");
-            }
+            auto selection = fixture.engine.select_best();
+            auto const *child = fixture.engine.node(selection->root_child);
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                result.path.view(), true, child->expandable,
+                "the exhausted path replays exactly");
         }
         {
             Fixture source = make_fixture();
@@ -3843,7 +4000,7 @@ namespace
                 "finalize flows stay within the budget");
             check(3 * sizeof(tetris::path::Pathfinder) + sizeof(tetris::path::Path)
                 <= engine_alias::engine_stack_peak_allowance,
-                "the pathfinder worst-case peak fits the stack allowance");
+                "the structural pathfinder sizes fit the stack allowance");
         }
         std::println("finalize: selected result with exact replayed path");
     }

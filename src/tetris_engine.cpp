@@ -1186,13 +1186,25 @@ namespace tetris_engine
             path_config);
         result.states_expanded = finder.queue_tail;
         result.path = finder.find(child.incoming);
+        bool path_ok = result.path.valid;
+        if (path_ok)
+        {
+            tetris::path::ReplayResult replayed = tetris::path::replay_path(
+                arena_[0].board, child.played, start, result.path.view(),
+                path_config, true);
+            path_ok = replayed.valid
+                && replayed.placement == child.incoming.placement
+                && (child.played != Piece::T
+                    || replayed.arrival == child.incoming.arrival);
+        }
         result.elapsed_nanos = now_nanos() - begin;
-        result.path_ok = result.path.valid;
+        result.path_ok = path_ok;
         ++path_stats_.calls;
         path_stats_.states_expanded += result.states_expanded;
         path_stats_.elapsed_nanos += result.elapsed_nanos;
         if (!result.path_ok)
         {
+            result.path = tetris::path::Path{};
             ++path_stats_.failures;
         }
         return result;
