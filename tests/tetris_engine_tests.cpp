@@ -1123,6 +1123,32 @@ namespace
             check(moved.node(selection->root_child)->parent == 0,
                 "a moved engine attributes through its own arena");
         }
+        {
+            Fixture source = make_zero_fixture();
+            make_root(source, shelf_board(), "III", std::nullopt, true);
+            source.engine.run(3);
+            check(!source.engine.search_complete() || source.engine.arena_size() > 1,
+                "mid-search source has live state");
+            check(source.engine.arena_size() > 1, "mid-search move has live state");
+            engine_alias::Engine relocated(std::move(source.engine));
+            check(source.engine.init(source.engine_config),
+                "the source reinitializes after the move");
+            check(relocated.run(500), "the mid-search moved engine completes");
+            Fixture baseline = make_zero_fixture();
+            make_root(baseline, shelf_board(), "III", std::nullopt, true);
+            check(baseline.engine.run(500), "the unmoved baseline completes");
+            auto moved_selection = relocated.select_best();
+            auto base_selection = baseline.engine.select_best();
+            check(moved_selection.has_value() && base_selection.has_value()
+                && moved_selection->root_child == base_selection->root_child
+                && moved_selection->evidence == base_selection->evidence,
+                "a mid-search move preserves the selection");
+            check(relocated.arena_size() == baseline.engine.arena_size(),
+                "a mid-search move preserves the arena size");
+            check(relocated.search_stats().widening_passes
+                == baseline.engine.search_stats().widening_passes,
+                "a mid-search move preserves the widening pass count");
+        }
         std::println("engine move: heap rebinds to the destination arena");
     }
 
