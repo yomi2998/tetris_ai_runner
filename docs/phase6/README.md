@@ -6,6 +6,28 @@ new rule adapter, fast-reachability enumeration, and
 `toj_policy::Policy`. The legacy template engine is unchanged and
 production targets still use it.
 
+## Slice 6.3 scope
+
+Timed and iteration budgets on the shared search machinery:
+
+- `run(SearchBudget)` ports the legacy budget loop exactly: the
+  deadline is the clock reading at entry plus the millisecond budget,
+  a do-while always runs at least one pass, time is checked between
+  passes (a pass that overruns the deadline still completes), a
+  completion break stops the loop without counting further work, and
+  the iteration kind runs `max(1, n)` passes. Exhaustion and
+  invariant stops break the loop with best-so-far selection intact.
+- The clock is injectable through `EngineConfig::clock_nanos`
+  (nanoseconds on a monotonic scale), defaulting to
+  `steady_clock`, so deadline semantics are tested deterministically
+  with a controllable fake clock and saturating budgets are
+  overflow-safe. The production throughput gate for timed mode
+  remains the measured performance gate in the plan, not a unit
+  assertion.
+- The deterministic `run(max_passes)` entry keeps its exact-pass
+  semantics (zero passes allowed); the legacy-faithful budget entry
+  forces at least one pass for either kind.
+
 ## Slice 6.2 scope
 
 Deterministic frontier search over the slice 6.1 primitive:
@@ -111,9 +133,10 @@ One-parent expansion primitive with queue and hold representation:
 
 Deferred from slice 6.1, now delivered in 6.2: widening, beam
 pruning (quota-based deferral only, no permanent pruning), and
-best-root projection. Still deferred to later slices: timed budgets,
-root reuse, final-path materialization, persistent evaluation cache
-tuning, and production cutover.
+best-root projection. Deferred from 6.2, now delivered in 6.3: timed
+budgets. Still deferred to later slices: root reuse, final-path
+materialization, persistent evaluation cache tuning, and production
+cutover.
 
 ## Memory derivation
 
@@ -173,7 +196,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 621
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 671
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -208,6 +231,15 @@ non-assignable with a moved engine running a full search, adapter
 canonical keys verified strictly increasing with each occupied-cell
 set keeping exactly one rotation so the representative rule is
 deterministic, and the four remaining policy-key negative cases.
+The slice 6.3 gates add the controllable-clock budget probes: a
+hand-checked three-pass deadline stop at four milliseconds per clock
+call, the legacy single-pass behavior for an expired time budget and
+a zero iteration budget, exact iteration-budget counts, completion
+breaking the budget loop without counting further work, a frozen
+clock matching the deterministic budget bit for bit, a real-clock
+smoke run that returns with at least one pass without asserting
+completion, arena exhaustion under a large time budget with intact
+best-so-far selection, and a saturating budget without overflow.
 Mutation probes confirm
 the gates: zeroed transitions, child-cursor policy contexts, and
 danger-mask shifts all fail.
