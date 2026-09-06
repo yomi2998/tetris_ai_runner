@@ -87,6 +87,7 @@ namespace tetris_engine
             max_children_per_parent * sizeof(Child),
             max_children_per_parent * sizeof(std::pair<Board, Evaluation>),
             transposition_entries * sizeof(TranspositionEntry),
+            transposition_entries * sizeof(TranspositionEntry),
             0);
         bool const budget_ok = fixed_non_cache <= engine_memory_budget
             && cache_bytes <= engine_memory_budget - fixed_non_cache;
@@ -115,6 +116,7 @@ namespace tetris_engine
         child_buffer_.reserve(max_children_per_parent);
         eval_memo_.reserve(max_children_per_parent);
         transposition_.resize(transposition_entries);
+        transposition_rehash_.resize(transposition_entries);
         idmap_.reserve(config_.arena_capacity);
         queue_.pieces.reserve(max_queue_length);
         queue_.boundary.reserve(max_queue_length);
@@ -131,6 +133,8 @@ namespace tetris_engine
                 * sizeof(std::pair<Board, Evaluation>),
             static_cast<std::uint64_t>(transposition_.capacity())
                 * sizeof(TranspositionEntry),
+            static_cast<std::uint64_t>(transposition_rehash_.capacity())
+                * sizeof(TranspositionEntry),
             static_cast<std::uint64_t>(cache_.reserved_bytes()));
         if (used > engine_memory_budget)
         {
@@ -139,6 +143,7 @@ namespace tetris_engine
             std::vector<Child>().swap(child_buffer_);
             std::vector<std::pair<Board, Evaluation>>().swap(eval_memo_);
             std::vector<TranspositionEntry>().swap(transposition_);
+            std::vector<TranspositionEntry>().swap(transposition_rehash_);
             cache_ = EvalCache{};
             queue_ = Queue{};
             config_.arena_capacity = 0;
@@ -221,6 +226,10 @@ namespace tetris_engine
         idmap_.resize(arena_.size());
         std::uint32_t const retained_identity = arena_[target].root_child;
         std::size_t new_count = 0;
+#ifdef SLICE65_DEBUG
+        std::fprintf(stderr, "REROOT target=%u retained_identity=%u new_max=%zu played_cursor=%zu\n",
+            target, retained_identity, new_max, played_cursor);
+#endif
         for (std::size_t old = 0; old < arena_.size(); ++old)
         {
             Node &node = arena_[old];
@@ -234,24 +243,10 @@ namespace tetris_engine
                 idmap_[old] = no_node;
             }
         }
-        for (auto &entry : transposition_)
-        {
-            if (!entry.used)
-            {
-                continue;
-            }
-            std::size_t const new_depth = entry.key.depth - 1;
-            if (idmap_[entry.node] == no_node || entry.key.depth < 2
-                || new_depth > new_max + 1)
-            {
-                entry.used = false;
-                --transposition_used_;
-                continue;
-            }
-            entry.key.depth = static_cast<std::uint16_t>(new_depth);
-            entry.key.cursor = static_cast<std::uint16_t>(entry.key.cursor - played_cursor);
-            entry.node = idmap_[entry.node];
-        }
+#ifdef SLICE65_DEBUG
+        std::fprintf(stderr, "PASS_A matched=%zu arena_was=%zu new_max_plus1=%zu\n",
+            new_count, arena_.size(), new_max + 1);
+#endif
         for (std::size_t old = 0; old < arena_.size(); ++old)
         {
             if (idmap_[old] != no_node)
@@ -259,6 +254,9 @@ namespace tetris_engine
                 arena_[idmap_[old]] = std::move(arena_[old]);
             }
         }
+#ifdef SLICE65_DEBUG
+        std::fprintf(stderr, "COMPACTED arena_now=%zu\n", arena_.size());
+#endif
         for (std::size_t n = 0; n < new_count; ++n)
         {
             Node &node = arena_[n];
@@ -275,7 +273,7 @@ namespace tetris_engine
                 node.depth = node.depth - 1;
                 node.cursor = node.cursor - played_cursor;
                 node.root_child = node.depth == 1
-                    ? node.root_child
+                    ? first_move_fingerprint(node.played, node.incoming, node.source)
                     : arena_[node.parent].root_child;
             }
             node.registered = false;
@@ -284,6 +282,39 @@ namespace tetris_engine
             node.first_child = no_node;
             node.child_count = 0;
         }
+        std::size_t moved = 0;
+        for (auto &entry : transposition_)
+        {
+            if (!entry.used)
+            {
+                continue;
+            }
+            std::size_t const new_depth = entry.key.depth - 1;
+            if (idmap_[entry.node] == no_node || entry.key.depth < 2
+                || new_depth > new_max + 1)
+            {
+                continue;
+            }
+            entry.key.depth = static_cast<std::uint16_t>(new_depth);
+            entry.key.cursor = static_cast<std::uint16_t>(entry.key.cursor - played_cursor);
+            entry.key.root_child = arena_[idmap_[entry.node]].root_child;
+            entry.node = idmap_[entry.node];
+            transposition_rehash_[moved++] = entry;
+            entry = TranspositionEntry{};
+        }
+        for (auto &entry : transposition_)
+        {
+            entry = TranspositionEntry{};
+        }
+        transposition_used_ = 0;
+        for (std::size_t i = 0; i < moved; ++i)
+        {
+            TranspositionProbe probe = transposition_probe(transposition_rehash_[i].key);
+            probe.slot->key = transposition_rehash_[i].key;
+            probe.slot->node = transposition_rehash_[i].node;
+            probe.slot->used = true;
+        }
+        transposition_used_ = moved;
         arena_.resize(new_count);
         rebuild_child_links();
         queue_.pieces.clear();
@@ -689,6 +720,8 @@ namespace tetris_engine
             static_cast<std::uint64_t>(eval_memo_.capacity())
                 * sizeof(std::pair<Board, Evaluation>),
             static_cast<std::uint64_t>(transposition_.capacity())
+                * sizeof(TranspositionEntry),
+            static_cast<std::uint64_t>(transposition_rehash_.capacity())
                 * sizeof(TranspositionEntry),
             static_cast<std::uint64_t>(cache_.reserved_bytes()));
     }

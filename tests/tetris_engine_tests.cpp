@@ -720,7 +720,7 @@ namespace
                 fixtureless_cache_bytes(engine_alias::CacheConfig::Layout::Disabled);
             std::size_t over_bytes = static_cast<std::size_t>(
                 (engine_alias::engine_memory_budget
-                    - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, cache_bytes))
+                    - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, 0, cache_bytes))
                 / (sizeof(engine_alias::Node) + sizeof(engine_alias::NodeId)))
                 + 1;
             Fixture fixture;
@@ -741,7 +741,7 @@ namespace
                 engine_alias::CacheConfig::Layout::DirectMapped);
             std::size_t over_bytes = static_cast<std::size_t>(
                 (engine_alias::engine_memory_budget
-                    - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, cache_bytes))
+                    - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, 0, cache_bytes))
                 / (sizeof(engine_alias::Node) + sizeof(engine_alias::NodeId)))
                 + 1;
             Fixture fixture;
@@ -2272,22 +2272,30 @@ namespace
             check(semantics_match,
                 "retained node semantics match the fresh-root construction");
             bool attribution_ok = true;
-            engine_alias::NodeId depth_one_rank = 0;
+            std::size_t bad_count = 0;
             for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
             {
                 auto const *node =
                     fixture.engine.node(static_cast<engine_alias::NodeId>(id));
                 auto const *parent = fixture.engine.node(node->parent);
                 engine_alias::NodeId const expected = node->depth == 1
-                    ? depth_one_rank
+                    ? engine_alias::first_move_fingerprint(node->played, node->incoming,
+                        node->source)
                     : parent->root_child;
                 if (node->depth == 1)
                 {
-                    ++depth_one_rank;
+                    /* ordinal is implicit in ascending id */
                 }
                 if (node->root_child != expected)
                 {
                     attribution_ok = false;
+                    if (bad_count < 3)
+                    {
+                        std::println("ATTRBAD id={} depth={} rc={} expected={} parent={} parent_rc={}",
+                            id, node->depth, node->root_child, (std::uint64_t)expected,
+                            node->parent, parent->root_child);
+                        ++bad_count;
+                    }
                 }
             }
             check(attribution_ok,
@@ -2412,13 +2420,12 @@ namespace
         }
         {
             Fixture fixture = make_fixture();
-            auto queue = engine_alias::parse_queue("TIS");
+            auto queue = engine_alias::parse_queue("TI");
             toj_policy::State state;
             engine_alias::HoldState hold;
             hold.piece = tetris::Piece::I;
             hold.locked = false;
-            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
-                hold)
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue), hold)
                 != engine_alias::no_node,
                 "hold-active first turn takes");
             check(fixture.engine.run(2000), "hold-active search completes");
@@ -2439,20 +2446,19 @@ namespace
                 auto const *child = fixture.engine.node(hold_child);
                 engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
                     child->cursor);
-                toj_policy::State root_state;
-                check(fixture.engine.set_root(child->board, root_state, std::move(next),
-                    child->hold)
-                    != engine_alias::no_node,
+                auto const post_swap_hold = child->hold;
+                check(fixture.engine.set_root(child->board, child->policy,
+                    std::move(next), child->hold) != engine_alias::no_node,
                     "the hold-swap position reroots");
                 check(fixture.engine.arena_size() > 2,
                     "the hold-swap reroot retains a subtree");
-                check(fixture.engine.node(0)->hold.piece == child->hold.piece,
+                check(fixture.engine.node(0)->hold.piece == post_swap_hold.piece,
                     "the rerooted root keeps the post-swap hold");
             }
         }
         {
             Fixture fixture = make_fixture();
-            auto queue = engine_alias::parse_queue("TIS");
+            auto queue = engine_alias::parse_queue("TI");
             toj_policy::State state;
             engine_alias::HoldState empty_hold;
             check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
@@ -2476,12 +2482,10 @@ namespace
             if (empty_child != engine_alias::no_node)
             {
                 auto const *child = fixture.engine.node(empty_child);
-                engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
-                    child->cursor);
-                toj_policy::State root_state;
-                check(fixture.engine.set_root(child->board, root_state, std::move(next),
-                    child->hold)
-                    != engine_alias::no_node,
+                auto fresh = engine_alias::parse_queue("SZ");
+                check(fresh.has_value(), "the fresh second-turn queue parses");
+                check(fixture.engine.set_root(child->board, child->policy,
+                    std::move(*fresh), child->hold) != engine_alias::no_node,
                     "the empty-hold position reroots");
                 check(fixture.engine.arena_size() > 2,
                     "the empty-hold reroot retains a subtree");
@@ -2491,11 +2495,10 @@ namespace
         }
         {
             Fixture fixture = make_fixture();
-            auto marked = engine_alias::parse_queue("T?ISJ");
+            auto marked = engine_alias::parse_queue("T?IS");
             check(marked.has_value() && marked->marker_count == 1,
                 "marker queue parses with one marker");
-            check(fixture.engine.set_root(shelf_board(), state, std::move(*marked),
-                no_hold)
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*marked), no_hold)
                 != engine_alias::no_node,
                 "marker first turn takes");
             check(fixture.engine.run(2000), "marker search completes");

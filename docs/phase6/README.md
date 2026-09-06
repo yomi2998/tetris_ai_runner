@@ -56,6 +56,31 @@ Bounded board-evaluation cache with explicit identity and lifecycle:
   44,610 of 127,663 lookups (34.9 percent), reducing evaluations
   127,663 to 83,053. Full data in `cache_benchmark.txt`.
 
+## Slice 6.5 scope
+
+Exact root reuse across turns:
+
+- Reuse candidates are the previous root's depth-one children. The
+  incoming position matches by full occupancy, the complete policy
+  state, the active piece, hold piece and availability, the remaining
+  queue sequence, and the shifted boundary metadata; the recomputed
+  horizon is preserved through the raw-marker-count rule.
+- On a match the matched child's subtree is retained: the arena is
+  compacted in place (no additional workspace beyond the idmap
+  reservation), depths and cursors shift by the played cursor, and
+  first-move identity is recomputed from each retained depth-one
+  move's fingerprint, which the rotation preserves. Transposition
+  entries are remapped (depth, cursor, node) and rehashed into fresh
+  slots; entries outside the retained subtree or the new horizon are
+  dropped. A mismatch falls back to the clean root initialization.
+- Gates: positive reuse with measurable avoided evaluation and
+  materialization work, sixteen identity negatives (including upper
+  storage rows), queue advancement through ordinary placement,
+  occupied-hold swap, empty-hold consumption, and marker cases, the
+  attribution invariant, warm-versus-cold selection and node
+  semantics parity, lifecycle coverage (multiple turns, reuse miss,
+  movement, source reinitialization), and bounded retained bytes.
+
 ## Slice 6.3 scope
 
 Timed and iteration budgets on the shared search machinery:
@@ -249,7 +274,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 784
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 879
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state

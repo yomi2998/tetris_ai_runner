@@ -33,10 +33,13 @@ against the retained nodes.
   board, policy state, and evaluation, never a reseeding of
   caller-owned state.
 - Transposition entries are remapped, not cleared: depth shifts down
-  by one, first-move identity is remapped to the new depth-one ids,
-  cursor shifts identically, and entries outside the retained subtree
-  or the new horizon are dropped. Re-expansion of retained positions
-  therefore merges with retained nodes instead of duplicating them.
+  by one, cursor shifts identically, first-move identity is
+  recomputed from each retained depth-one move (the fingerprint of
+  the node's own incoming move, which the rotation preserves), and
+  entries outside the retained subtree or the new horizon are
+  dropped. The remapped entries are rehashed into fresh slots.
+  Re-expansion of retained positions therefore merges with retained
+  nodes instead of duplicating them.
 - The widening state restarts per legacy `update_version`: width
   returns to zero, both frontier heaps clear, expansion trackers
   reset, and every retained non-root node becomes unregistered so the

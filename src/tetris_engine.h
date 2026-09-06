@@ -33,7 +33,7 @@ namespace tetris_engine
     inline constexpr std::size_t max_candidates_per_source =
         4 * Board::width * Board::height * 2;
     inline constexpr std::size_t max_children_per_parent = 2 * max_candidates_per_source;
-    inline constexpr std::size_t transposition_entries = 16384;
+    inline constexpr std::size_t transposition_entries = 65536;
     inline constexpr std::uint8_t no_piece_code = 0xFF;
     inline constexpr std::uint64_t engine_queue_reservation =
         max_queue_length * (sizeof(Piece) + sizeof(bool));
@@ -534,10 +534,10 @@ namespace tetris_engine
     inline constexpr std::uint64_t engine_buffer_reservation(
         std::uint64_t arena_bytes, std::uint64_t candidate_bytes, std::uint64_t child_bytes,
         std::uint64_t memo_bytes, std::uint64_t transposition_bytes,
-        std::uint64_t cache_bytes)
+        std::uint64_t rehash_bytes, std::uint64_t cache_bytes)
     {
         return arena_bytes + candidate_bytes + child_bytes + memo_bytes + transposition_bytes
-            + cache_bytes
+            + rehash_bytes + cache_bytes
             + engine_queue_reservation + engine_stack_peak_allowance + engine_frontier_metadata;
     }
 
@@ -545,6 +545,7 @@ namespace tetris_engine
         max_candidates_per_source * sizeof(Candidate),
         max_children_per_parent * sizeof(Child),
         max_children_per_parent * sizeof(std::pair<Board, Evaluation>),
+        transposition_entries * sizeof(TranspositionEntry),
         transposition_entries * sizeof(TranspositionEntry),
         16384 * sizeof(EvalCacheEntry));
 
@@ -616,6 +617,7 @@ namespace tetris_engine
             , expanded_max_(other.expanded_max_)
             , width_cache_(other.width_cache_)
             , transposition_(std::move(other.transposition_))
+            , transposition_rehash_(std::move(other.transposition_rehash_))
             , cache_(std::move(other.cache_))
             , transposition_used_(other.transposition_used_)
             , max_length_(other.max_length_)
@@ -696,6 +698,7 @@ namespace tetris_engine
         std::array<NodeId, max_frontiers> expanded_max_{};
         std::array<double, max_frontiers> width_cache_{};
         std::vector<TranspositionEntry> transposition_;
+        std::vector<TranspositionEntry> transposition_rehash_;
         std::vector<NodeId> idmap_;
         EvalCache cache_;
         std::size_t transposition_used_ = 0;
