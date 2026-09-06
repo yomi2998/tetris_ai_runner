@@ -172,6 +172,15 @@ target_compile_definitions(toj_policy_tests PRIVATE
     TETRIS_POLICY_FIXTURE="${TETRIS_POLICY_FIXTURE}")
 add_test(NAME toj_policy_tests COMMAND toj_policy_tests)
 
+add_executable(tetris_engine_tests
+    tests/tetris_engine_tests.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(tetris_engine_tests PRIVATE fast_reachability)
+target_include_directories(tetris_engine_tests PRIVATE src tests src/fast-reachability)
+add_test(NAME tetris_engine_tests COMMAND tetris_engine_tests)
+
 add_executable(fast_reachability_tests
     tests/fast_reachability_tests.cpp
 )
