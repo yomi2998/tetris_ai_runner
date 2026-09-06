@@ -1,11 +1,14 @@
 #pragma once
 
 #include <algorithm>
+#include <cerrno>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <format>
+#include <limits>
 #include <optional>
 #include <print>
 #include <random>
@@ -44,9 +47,101 @@ namespace profile_value
         bool telemetry = true;
     };
 
+    inline bool parse_uint_strict(std::string const &text, std::size_t &out)
+    {
+        if (text.empty())
+        {
+            return false;
+        }
+        for (char c : text)
+        {
+            if (c < '0' || c > '9')
+            {
+                return false;
+            }
+        }
+        errno = 0;
+        unsigned long long value = std::strtoull(text.c_str(), nullptr, 10);
+        if (errno == ERANGE)
+        {
+            return false;
+        }
+        out = static_cast<std::size_t>(value);
+        return static_cast<unsigned long long>(out) == value;
+    }
+
+    inline bool parse_double_strict(std::string const &text, double &out)
+    {
+        if (text.empty())
+        {
+            return false;
+        }
+        char *end = nullptr;
+        errno = 0;
+        double value = std::strtod(text.c_str(), &end);
+        if (errno == ERANGE || end != text.c_str() + text.size())
+        {
+            return false;
+        }
+        if (!std::isfinite(value))
+        {
+            return false;
+        }
+        out = value;
+        return true;
+    }
+
+    inline bool moves_total_valid(std::size_t warmup, std::size_t moves)
+    {
+        return moves <= std::numeric_limits<std::size_t>::max() - warmup;
+    }
+
+    inline constexpr double max_budget_ms = 1e15;
+
+    inline bool resolve_budget_ms(Options const &opt, std::uint64_t &out)
+    {
+        double budget = opt.ms > 0 ? opt.ms : std::pow(100.0, opt.level / 8.0);
+        if (!std::isfinite(budget) || budget < 0 || budget > max_budget_ms)
+        {
+            return false;
+        }
+        out = static_cast<std::uint64_t>(budget);
+        return true;
+    }
+
+    inline void print_help()
+    {
+        std::println("usage: tetris_profile_value [options]");
+        std::println("  --moves N         measured moves (default 200)");
+        std::println("  --warmup-moves N  warmup moves excluded from every aggregate");
+        std::println("  --level L         time budget pow(100, L/8) ms per move");
+        std::println("  --ms T            fixed time budget per move in ms (overrides --level)");
+        std::println("  --iters N         fixed widening iterations per move (deterministic)");
+        std::println("  --seed S          scenario seed (default 1)");
+        std::println("  --maxdepth N      lookahead pieces beyond current, 0-255 (default 6)");
+        std::println("  --no-hold         no executed hold at each root; hold stays empty in");
+        std::println("                    the live trajectory while deeper hypothetical hold");
+        std::println("                    branches still participate in search valuation.");
+        std::println("                    Hold-disabled runs are excluded from legacy comparison.");
+        std::println("  --param-file F    29-double parameter file");
+        std::println("  --telemetry on|off");
+        std::println("                    off disables instrumentation counters and timers;");
+        std::println("                    boundary wall-time fields stay numeric");
+        std::println("  --quiet --quiet-version 3");
+        std::println("                    emit one PROFILE_V3 record");
+        std::println("  --help            print this help");
+    }
+
     inline Options parse_args(int argc, char **argv)
     {
         Options opt;
+        std::string telemetry_text = "on";
+        bool telemetry_seen = false;
+        auto fail = [&](std::string const &message) -> Options
+        {
+            std::println(stderr, "tetris_profile_value: invalid option: {}", message);
+            std::exit(1);
+        };
         for (int i = 1; i < argc; ++i)
         {
             std::string a = argv[i];
@@ -59,22 +154,68 @@ namespace profile_value
                 }
                 return argv[++i];
             };
-            if (a == "--moves") opt.moves = std::strtoull(next(a).c_str(), nullptr, 10);
-            else if (a == "--level") opt.level = std::strtod(next(a).c_str(), nullptr);
-            else if (a == "--ms") opt.ms = std::strtod(next(a).c_str(), nullptr);
-            else if (a == "--seed") opt.seed = static_cast<std::uint32_t>(std::strtoul(next(a).c_str(), nullptr, 10));
-            else if (a == "--maxdepth") opt.maxdepth = std::strtoull(next(a).c_str(), nullptr, 10);
+            std::size_t uint_value = 0;
+            double double_value = 0;
+            if (a == "--moves")
+            {
+                if (!parse_uint_strict(next(a), uint_value)) fail(a);
+                opt.moves = uint_value;
+            }
+            else if (a == "--level")
+            {
+                if (!parse_double_strict(next(a), double_value)) fail(a);
+                opt.level = double_value;
+            }
+            else if (a == "--ms")
+            {
+                if (!parse_double_strict(next(a), double_value) || double_value < 0
+                    || double_value > max_budget_ms)
+                {
+                    fail(a);
+                }
+                opt.ms = double_value;
+            }
+            else if (a == "--seed")
+            {
+                if (!parse_uint_strict(next(a), uint_value)
+                    || uint_value > std::numeric_limits<std::uint32_t>::max())
+                {
+                    fail(a);
+                }
+                opt.seed = static_cast<std::uint32_t>(uint_value);
+            }
+            else if (a == "--maxdepth")
+            {
+                if (!parse_uint_strict(next(a), uint_value)) fail(a);
+                opt.maxdepth = uint_value;
+            }
             else if (a == "--no-hold") opt.hold = false;
             else if (a == "--param-file") opt.param_file = next(a);
-            else if (a == "--iters") opt.iters = std::strtoull(next(a).c_str(), nullptr, 10);
-            else if (a == "--warmup-moves") opt.warmup_moves = std::strtoull(next(a).c_str(), nullptr, 10);
+            else if (a == "--iters")
+            {
+                if (!parse_uint_strict(next(a), uint_value)) fail(a);
+                opt.iters = uint_value;
+            }
+            else if (a == "--warmup-moves")
+            {
+                if (!parse_uint_strict(next(a), uint_value)) fail(a);
+                opt.warmup_moves = uint_value;
+            }
             else if (a == "--quiet-version") opt.quiet_version = std::atoi(next(a).c_str());
-            else if (a == "--telemetry") opt.telemetry = std::string(next(a)) != "off";
+            else if (a == "--telemetry")
+            {
+                telemetry_text = next(a);
+                telemetry_seen = true;
+            }
             else if (a == "--quiet") opt.quiet = true;
+            else if (a == "--help")
+            {
+                print_help();
+                std::exit(0);
+            }
             else
             {
-                std::println(stderr, "unknown option: {}", a);
-                std::exit(1);
+                fail(a);
             }
         }
         if (opt.quiet_version != 3)
@@ -85,6 +226,27 @@ namespace profile_value
         if (opt.maxdepth > max_supported_maxdepth)
         {
             std::println(stderr, "maxdepth out of supported range");
+            std::exit(1);
+        }
+        if (telemetry_seen)
+        {
+            if (telemetry_text == "on")
+            {
+                opt.telemetry = true;
+            }
+            else if (telemetry_text == "off")
+            {
+                opt.telemetry = false;
+            }
+            else
+            {
+                std::println(stderr, "telemetry must be on or off");
+                std::exit(1);
+            }
+        }
+        if (!moves_total_valid(opt.warmup_moves, opt.moves))
+        {
+            std::println(stderr, "warmup-moves plus moves overflows");
             std::exit(1);
         }
         return opt;

@@ -502,14 +502,14 @@ namespace tetris_engine
             }
             if (auto cached = cache_.find(board))
             {
+                if (eval_memo_.size() < eval_memo_.capacity())
+                {
+                    eval_memo_.push_back({ board, *cached });
+                }
                 if (on)
                 {
                     ++search_stats_.cache_hits;
                     timers_.eval_hit_ns += timer_now() - start;
-                }
-                if (eval_memo_.size() < eval_memo_.capacity())
-                {
-                    eval_memo_.push_back({ board, *cached });
                 }
                 return *cached;
             }
@@ -1037,6 +1037,20 @@ namespace tetris_engine
         }
     }
 
+    void Engine::refresh_pending_occupancy()
+    {
+        if (!telemetry_on())
+        {
+            return;
+        }
+        std::size_t total_pending = 0;
+        for (std::size_t i = 0; i <= max_length_; ++i)
+        {
+            total_pending += heap_.size(i);
+        }
+        search_stats_.pending_occupancy = total_pending;
+    }
+
     void Engine::run_pass()
     {
         bool const on = telemetry_on();
@@ -1129,6 +1143,7 @@ namespace tetris_engine
                     promote(level);
                     if (search_stopped_ || exhausted_)
                     {
+                        refresh_pending_occupancy();
                         return;
                     }
                 }
@@ -1147,6 +1162,7 @@ namespace tetris_engine
                     promote(level);
                     if (search_stopped_ || exhausted_)
                     {
+                        refresh_pending_occupancy();
                         return;
                     }
                 }
@@ -1156,15 +1172,7 @@ namespace tetris_engine
         {
             search_complete_ = true;
         }
-        std::size_t total_pending = 0;
-        for (std::size_t i = 0; i <= max_length_; ++i)
-        {
-            total_pending += heap_.size(i);
-        }
-        if (on)
-        {
-            search_stats_.pending_occupancy = total_pending;
-        }
+        refresh_pending_occupancy();
     }
 
     bool Engine::run(std::size_t max_passes)

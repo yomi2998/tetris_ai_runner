@@ -783,6 +783,8 @@ namespace tetris_engine
 
         void reset_run_state();
 
+        void refresh_pending_occupancy();
+
         bool reuse_matches(NodeId child, Board const &board, PolicyState const &policy,
             Queue const &queue, HoldState hold, std::size_t new_max) const;
 

@@ -64,3 +64,43 @@ retuning, production cutover, tuner/match/DLL changes.
   initially consumed the injected engine clock and broke the fake-clock
   budget test; budget reads stay on `clock_nanos` while timer spans read
   `timer_nanos` (same steady-clock default).
+
+## Slice 7.1B repair round (HOLD verdict)
+
+Bounded repairs only; no comparator, campaign, or cutover work.
+
+- `T_ROOTSEARCH` now starts immediately before `set_root`; refill and root
+  seeding stay in `T_SETUP` and `T_MOVE`. A scripted-clock boundary test
+  pins exact spans (setup 4, root-search 3, run/path/apply 1 tick each).
+- Runner extracted into `src/profile_value_runner.h` with an injectable
+  clock so death branches run through the actual move logic: spawn death
+  records setup only with zero search/path work and no stale snapshot;
+  lockout retains completed search/path measurements before the reset;
+  hold and queue bookkeeping sit inside the apply span; rejected roots and
+  finalization failures invalidate in any move including warmup.
+- Cache-hit evaluation timer now closes after memo population, matching
+  the miss-path scope.
+- `pending_occupancy` refreshes on early stop paths (exhaustion); an
+  exhaustion test pins heap-at-stop occupancy (capacity minus two with
+  zero merges) for two capacities.
+- Strict numeric parsing, representable-budget validation, warmup-plus-moves
+  overflow rejection, accepted telemetry values, and `--help` describing
+  root-only `--no-hold`; invalid input exits nonzero with no `PROFILE_V3`
+  row, covered by three new CTest rejection tests.
+- Test hardening: multi-move toggle trajectory identity (selections,
+  finalized paths, boards, queue, hold), root-only no-hold execution,
+  enabled-vs-disabled row builder fields, validator unit tests, and the
+  fixture factory replaced with in-place initialization.
+
+### Repair evidence
+
+- Unit tests: 151 checks, 0 failures (GCC debug, GCC self-release, Clang
+  debug, sanitizer build).
+- Full GCC debug CTest: 21 of 21 pass, including 7 profile integration
+  tests.
+- Engine regression: 16,236 checks, 0 failures (GCC debug, Clang debug,
+  sanitizer build).
+- New targets plus the unchanged legacy default build under GCC and Clang
+  self-release.
+- Release smoke runs complete with zero replay failures; natural play
+  produced no deaths, so death branches rest on the directed runner tests.

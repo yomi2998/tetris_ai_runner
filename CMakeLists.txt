@@ -104,6 +104,15 @@ add_test(NAME profile_value_no_hold
 add_test(NAME profile_value_telemetry_off
     COMMAND bash -c "$<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 3 --maxdepth 6 --telemetry off --quiet --quiet-version 3 | grep -q 'telemetry=off'"
 )
+add_test(NAME profile_value_rejects_garbage_maxdepth
+    COMMAND bash -c "out=$($<TARGET_FILE:tetris_profile_value> --moves 0 --quiet --maxdepth garbage 2>&1); code=$?; test $code -ne 0 && ! echo \"$out\" | grep -q '^PROFILE_V3'"
+)
+add_test(NAME profile_value_rejects_wrapping_totals
+    COMMAND bash -c "out=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 18446744073709551615 --moves 1 --quiet 2>&1); code=$?; test $code -ne 0 && ! echo \"$out\" | grep -q '^PROFILE_V3'"
+)
+add_test(NAME profile_value_rejects_bad_telemetry
+    COMMAND bash -c "out=$($<TARGET_FILE:tetris_profile_value> --moves 1 --quiet --telemetry sometimes 2>&1); code=$?; test $code -ne 0 && ! echo \"$out\" | grep -q '^PROFILE_V3'"
+)
 
 add_executable(tuner
     src/tuner.cpp
@@ -359,7 +368,8 @@ add_test(NAME raw_parity_frozen_180off
 
 set_tests_properties(tetris_board_tests rule_differential path_differential fast_reachability_tests
     fast_reachability_perft profile_value_tests profile_value_determinism profile_value_no_hold
-    profile_value_telemetry_off
+    profile_value_telemetry_off profile_value_rejects_garbage_maxdepth
+    profile_value_rejects_wrapping_totals profile_value_rejects_bad_telemetry
     raw_bench_warmup_smoke raw_bench_warmup_smoke_frozen raw_bench_warmup_smoke_frozen_plain
     raw_parity_frozen_180fix raw_parity_frozen_180off
     PROPERTIES FAIL_REGULAR_EXPRESSION "runtime error:"
