@@ -65,6 +65,29 @@ namespace
         return fixture.engine.set_root(board, state, std::move(*queue), hold);
     }
 
+    Fixture make_zero_fixture(std::size_t arena_capacity = engine_alias::default_arena_capacity)
+    {
+        Fixture fixture;
+        fixture.policy_config.combo_table = combo_table;
+        fixture.policy_config.combo_table_max = 10;
+        fixture.policy_config.safe = 0;
+        fixture.policy_config.parameters = toj_policy::Parameters{};
+        fixture.engine_config.policy = &fixture.policy_config;
+        fixture.engine_config.arena_capacity = arena_capacity;
+        check(fixture.engine.init(fixture.engine_config), "zeroed fixture engine initializes");
+        return fixture;
+    }
+
+    tetris::Board shelf_board()
+    {
+        std::array<std::uint16_t, 48> rows = {};
+        for (int y = 0; y < 18; ++y)
+        {
+            rows[static_cast<std::size_t>(y)] = 0x1ff;
+        }
+        return tetris::Board::from_rows(rows);
+    }
+
     void run_queue_parsing_tests()
     {
         auto parsed = engine_alias::parse_queue("T");
@@ -672,7 +695,7 @@ namespace
         {
             std::size_t over_bytes =
                 static_cast<std::size_t>((engine_alias::engine_memory_budget
-                    - engine_alias::engine_workspace_reserve)
+                    - engine_alias::engine_fixed_workspace)
                     / sizeof(engine_alias::Node))
                 + 1;
             Fixture fixture;
@@ -691,12 +714,383 @@ namespace
         std::println("init validation: limits reject before allocation");
     }
 
+    void run_marker_tests()
+    {
+        auto parsed = engine_alias::parse_queue("T??");
+        check(parsed.has_value() && parsed->marker_count == 2,
+            "repeated markers keep their raw count");
+        parsed = engine_alias::parse_queue("TI?I");
+        check(parsed.has_value() && parsed->marker_count == 1,
+            "interior marker keeps its raw count");
+        parsed = engine_alias::parse_queue("TISZ");
+        check(parsed.has_value() && parsed->marker_count == 0,
+            "marker-free queue counts zero");
+        std::println("markers: raw counts survive the boundary collapse");
+    }
+
+    void run_horizon_tests()
+    {
+        Fixture fixture = make_zero_fixture();
+        tetris::Board board = shelf_board();
+        toj_policy::State state;
+        auto make = [&](std::string_view text, std::optional<tetris::Piece> piece, bool locked) {
+            auto queue = engine_alias::parse_queue(text);
+            check(queue.has_value(), "horizon queue parses");
+            engine_alias::HoldState hold;
+            hold.piece = piece;
+            hold.locked = locked;
+            return fixture.engine.set_root(board, state, std::move(*queue), hold);
+        };
+        std::size_t const expected_capacity = fixture.engine.arena_reserved_bytes()
+            / sizeof(engine_alias::Node);
+        check(expected_capacity > 0, "horizon fixture has storage");
+        check(make("TI", tetris::Piece::I, true) != engine_alias::no_node
+            && fixture.engine.frontier_count() == 2,
+            "occupied locked hold with one raw next keeps the horizon");
+        check(make("TI?", tetris::Piece::I, true) != engine_alias::no_node
+            && fixture.engine.frontier_count() == 3,
+            "one marker extends the locked-hold horizon");
+        check(make("T?", tetris::Piece::I, true) != engine_alias::no_node
+            && fixture.engine.frontier_count() == 1,
+            "a marker on the active piece keeps the horizon");
+        check(make("T??", tetris::Piece::I, true) != engine_alias::no_node
+            && fixture.engine.frontier_count() == 2,
+            "two markers on the active piece extend the horizon");
+        check(make("TI", tetris::Piece::I, false) != engine_alias::no_node
+            && fixture.engine.frontier_count() == 3,
+            "an unlocked hold extends the horizon");
+        check(make("TI", std::nullopt, true) != engine_alias::no_node
+            && fixture.engine.frontier_count() == 2,
+            "an empty hold never extends the horizon");
+        engine_alias::Queue bare;
+        bare.pieces.push_back(tetris::Piece::T);
+        check(fixture.engine.set_root(board, state, engine_alias::Queue{}, engine_alias::HoldState{})
+            == engine_alias::no_node,
+            "a directly built empty queue is rejected");
+        engine_alias::Queue mismatched;
+        mismatched.pieces.push_back(tetris::Piece::T);
+        mismatched.marker_count = 0;
+        check(fixture.engine.set_root(board, state, std::move(mismatched), engine_alias::HoldState{})
+            == engine_alias::no_node,
+            "boundary length mismatch is rejected");
+        std::println("horizon: legacy raw-next predicate and queue validation");
+    }
+
+    void run_key_tests()
+    {
+        using engine_alias::TranspositionKey;
+        using engine_alias::transposition_hash;
+        TranspositionKey base;
+        base.depth = 2;
+        base.cursor = 1;
+        base.boundary_count = 1;
+        base.root_child = 7;
+        base.boundary_bits[0] = 1;
+        base.active_piece = 0;
+        base.hold_piece = 3;
+        base.hold_available = true;
+        base.state.value = 1.5;
+        base.state.acc_value = -2.0;
+        base.state.like = 0.5;
+        base.state.combo = 2;
+        base.state.t2_value = 3;
+        std::array<std::uint16_t, 48> rows = {};
+        rows[0] = 0x100;
+        base.occupancy = tetris::Board::from_rows(rows).occupancy();
+        auto differs = [&](TranspositionKey const &key, char const *what) {
+            check(!(key == base), what);
+            check(transposition_hash(key) != transposition_hash(base), what);
+        };
+        auto variant = base;
+        variant.depth = 3;
+        differs(variant, "depth difference splits the key");
+        variant = base;
+        variant.cursor = 2;
+        differs(variant, "cursor difference splits the key");
+        variant = base;
+        variant.boundary_count = 2;
+        differs(variant, "boundary count difference splits the key");
+        variant = base;
+        variant.root_child = 8;
+        differs(variant, "root identity difference splits the key");
+        variant = base;
+        variant.boundary_bits[0] = 0;
+        differs(variant, "remaining marker difference splits the key");
+        variant = base;
+        variant.active_piece = 1;
+        differs(variant, "active piece difference splits the key");
+        variant = base;
+        variant.hold_piece = 4;
+        differs(variant, "hold piece difference splits the key");
+        variant = base;
+        variant.hold_available = false;
+        differs(variant, "hold availability difference splits the key");
+        variant = base;
+        variant.state.value = 1.0;
+        differs(variant, "state value difference splits the key");
+        variant = base;
+        variant.state.acc_value = -2.5;
+        differs(variant, "accumulated value difference splits the key");
+        variant = base;
+        variant.state.like = 0.25;
+        differs(variant, "like difference splits the key");
+        variant = base;
+        variant.state.combo = 3;
+        differs(variant, "combo difference splits the key");
+        variant = base;
+        variant.state.t2_value = 4;
+        differs(variant, "t2 value difference splits the key");
+        variant = base;
+        variant.state.death = 1;
+        differs(variant, "death difference splits the key");
+        variant = base;
+        std::array<std::uint16_t, 48> other_rows = {};
+        other_rows[0] = 0x080;
+        variant.occupancy = tetris::Board::from_rows(other_rows).occupancy();
+        differs(variant, "occupancy difference splits the key");
+        TranspositionKey zero_positive = base;
+        TranspositionKey zero_negative = base;
+        zero_positive.state.value = 0.0;
+        zero_negative.state.value = -0.0;
+        check(zero_positive == zero_negative
+            && transposition_hash(zero_positive) == transposition_hash(zero_negative),
+            "signed zero agrees between equality and hashing");
+        std::println("transposition key: every field participates exactly");
+    }
+
+    void run_widening_tests()
+    {
+        Fixture fixture = make_zero_fixture();
+        tetris::Board board = shelf_board();
+        engine_alias::NodeId root = make_root(fixture, board, "III", std::nullopt, true);
+        check(root == 0, "widening root takes the first slot");
+        check(fixture.engine.frontier_count() == 3, "three-piece queue has three frontiers");
+        check(!fixture.engine.run(0), "zero budget performs no passes");
+        check(fixture.engine.search_stats().widening_passes == 0,
+            "zero budget counts no work");
+        check(fixture.engine.arena_size() == 1, "zero budget materializes nothing");
+        check(!fixture.engine.select_best().has_value(),
+            "zero budget has no selection");
+        check(!fixture.engine.run(1), "first pass leaves deferred work");
+        check(fixture.engine.search_stats().widening_passes == 1, "one pass counted");
+        check(fixture.engine.search_stats().expanded_parents == 1 + 4 + 4,
+            "seeding plus width-two quotas on both active frontiers");
+        check(fixture.engine.search_stats().pending_occupancy > 0,
+            "deferred work survives the first pass");
+        check(!fixture.engine.run(1), "second pass still has work");
+        check(fixture.engine.search_stats().widening_passes == 2, "second pass counted");
+        check(fixture.engine.search_stats().expanded_parents == 1 + 6 + 6,
+            "width-three quotas add two promotions per active frontier");
+        check(fixture.engine.run(500), "the search completes within the budget");
+        check(fixture.engine.search_complete(), "completion flag is set");
+        std::size_t const passes = fixture.engine.search_stats().widening_passes;
+        check(fixture.engine.run(500), "completed search reports complete");
+        check(fixture.engine.search_stats().widening_passes == passes,
+            "completed search counts no nonexistent work");
+        {
+            Fixture stalled = make_zero_fixture();
+            stalled.policy_config.parameters.ratio = -20.0;
+            engine_alias::NodeId stalled_root =
+                make_root(stalled, board, "III", std::nullopt, true);
+            check(stalled_root != engine_alias::no_node, "stalled-quota root takes");
+            check(!stalled.engine.run(20), "stalled quotas keep deferred work");
+            check(stalled.engine.search_stats().promotions_refused > 0,
+                "equal scores are refused at quota instead of promoted");
+        }
+        Fixture single = make_zero_fixture();
+        engine_alias::NodeId single_root = make_root(single, board, "T", std::nullopt, true);
+        check(single_root != engine_alias::no_node && single.engine.frontier_count() == 1,
+            "single-piece queue has one frontier");
+        check(single.engine.run(1), "one pass finishes the zero-horizon search");
+        std::println("widening: outer passes, quotas, deferral, completion");
+    }
+
+    void run_transposition_tests()
+    {
+        Fixture fixture = make_zero_fixture();
+        tetris::Board board = shelf_board();
+        engine_alias::NodeId root = make_root(fixture, board, "III", std::nullopt, true);
+        check(root != engine_alias::no_node, "transposition root takes");
+        check(fixture.engine.run(500), "transposition search completes");
+        check(fixture.engine.search_stats().transposition_merges > 0,
+            "same-root equivalents materialize once");
+        check(!fixture.engine.search_stats().transposition_exhausted,
+            "the transposition table holds the full search");
+        auto const &engine = fixture.engine;
+        bool shared_board_two_roots = false;
+        bool attribution_consistent = true;
+        std::size_t const size = engine.arena_size();
+        for (std::size_t id = 1; id < size; ++id)
+        {
+            auto const *node = engine.node(static_cast<engine_alias::NodeId>(id));
+            auto const *parent = engine.node(node->parent);
+            engine_alias::NodeId const expected =
+                node->depth == 1 ? static_cast<engine_alias::NodeId>(id) : parent->root_child;
+            if (node->root_child != expected)
+            {
+                attribution_consistent = false;
+            }
+        }
+        check(attribution_consistent,
+            "every node attributes to its depth-one ancestor");
+        for (std::size_t a = 1; a < size && !shared_board_two_roots; ++a)
+        {
+            auto const *na = engine.node(static_cast<engine_alias::NodeId>(a));
+            if (na->depth != 2)
+            {
+                continue;
+            }
+            for (std::size_t b = a + 1; b < size; ++b)
+            {
+                auto const *nb = engine.node(static_cast<engine_alias::NodeId>(b));
+                if (nb->depth == 2 && nb->board.occupancy() == na->board.occupancy()
+                    && nb->root_child != na->root_child)
+                {
+                    shared_board_two_roots = true;
+                    break;
+                }
+            }
+        }
+        check(shared_board_two_roots,
+            "cross-root equivalents deliberately stay separate");
+        std::println("transposition: same-root once, cross-root separate, attribution stable");
+    }
+
+    bool policy_equal(toj_policy::State const &a, toj_policy::State const &b)
+    {
+        return a.death == b.death && a.combo == b.combo && a.under_attack == b.under_attack
+            && a.map_rise == b.map_rise && a.b2b == b.b2b && a.t2_value == b.t2_value
+            && a.t3_value == b.t3_value && a.acc_value == b.acc_value && a.like == b.like
+            && a.value == b.value;
+    }
+
+    void run_projection_tests()
+    {
+        Fixture fixture = make_fixture();
+        tetris::Board board = shelf_board();
+        engine_alias::NodeId root = make_root(fixture, board, "III", std::nullopt, true);
+        check(root != engine_alias::no_node, "projection root takes");
+        check(fixture.engine.run(500), "projection search completes");
+        auto selection = fixture.engine.select_best();
+        check(selection.has_value(), "completed search selects a root move");
+        if (!selection.has_value())
+        {
+            return;
+        }
+        auto const *root_child = fixture.engine.node(selection->root_child);
+        auto const *evidence = fixture.engine.node(selection->evidence);
+        check(root_child->parent == 0, "selection attributes to a root child");
+        check(evidence->depth == 3, "evidence comes from the deepest frontier");
+        check(evidence->depth > root_child->depth, "evidence is deeper than the root move");
+        check(!policy_equal(evidence->policy, root_child->policy),
+            "immediate state and deeper evidence stay distinct");
+        engine_alias::NodeId expected_evidence = engine_alias::no_node;
+        double expected_value = 0;
+        bool have_expected = false;
+        for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
+        {
+            auto const *node = fixture.engine.node(static_cast<engine_alias::NodeId>(id));
+            if (node->depth != 3)
+            {
+                continue;
+            }
+            if (!have_expected || node->policy.value > expected_value
+                || (node->policy.value == expected_value
+                    && static_cast<std::size_t>(expected_evidence) > id))
+            {
+                expected_evidence = static_cast<engine_alias::NodeId>(id);
+                expected_value = node->policy.value;
+                have_expected = true;
+            }
+        }
+        check(have_expected && selection->evidence == expected_evidence,
+            "evidence matches the deepest-frontier maximum");
+        engine_alias::NodeId walked = expected_evidence;
+        while (fixture.engine.node(walked)->parent != 0)
+        {
+            walked = fixture.engine.node(walked)->parent;
+        }
+        check(selection->root_child == walked,
+            "the root move is the evidence ancestor at depth one");
+        std::println("projection: deepest evidence, immediate root state, hand-checked walk");
+    }
+
+    void run_search_exhaustion_tests()
+    {
+        {
+            Fixture fixture = make_zero_fixture(40);
+            tetris::Board board = shelf_board();
+            engine_alias::NodeId root = make_root(fixture, board, "III", std::nullopt, true);
+            check(root != engine_alias::no_node, "exhaustion root takes");
+            fixture.engine.run(500);
+            check(fixture.engine.arena_exhausted(), "a tiny arena stops the search");
+            check(!fixture.engine.search_complete(), "an exhausted run is incomplete");
+            check(fixture.engine.arena_size() <= 40, "the arena never exceeds capacity");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "best-so-far selection survives exhaustion");
+        }
+        {
+            Fixture fixture = make_fixture();
+            tetris::Board board;
+            engine_alias::NodeId root = make_root(fixture, board, "TTTTT", std::nullopt, true);
+            check(root != engine_alias::no_node, "table-exhaustion root takes");
+            fixture.engine.run(2000);
+            check(fixture.engine.search_stats().transposition_exhausted,
+                "a full transposition table stops the search");
+            check(!fixture.engine.search_complete(),
+                "table exhaustion never pretends completeness");
+            check(fixture.engine.select_best().has_value(),
+                "best-so-far selection survives table exhaustion");
+        }
+        std::println("exhaustion: arena and table limits stop safely");
+    }
+
+    void run_search_determinism_tests()
+    {
+        Fixture first = make_zero_fixture();
+        Fixture second = make_zero_fixture();
+        tetris::Board board = shelf_board();
+        make_root(first, board, "III", std::nullopt, true);
+        make_root(second, board, "III", std::nullopt, true);
+        check(first.engine.run(300), "first deterministic run completes");
+        check(second.engine.run(300), "second deterministic run completes");
+        auto const &a = first.engine;
+        auto const &b = second.engine;
+        check(a.arena_size() == b.arena_size(), "deterministic runs materialize equally");
+        check(a.search_stats().materialized_nodes == b.search_stats().materialized_nodes
+            && a.search_stats().transposition_merges
+                == b.search_stats().transposition_merges
+            && a.search_stats().widening_passes == b.search_stats().widening_passes,
+            "deterministic runs count equally");
+        auto sa = a.select_best();
+        auto sb = b.select_best();
+        check(sa.has_value() && sb.has_value() && sa->root_child == sb->root_child
+            && sa->evidence == sb->evidence,
+            "deterministic runs select identically");
+        bool identical = true;
+        for (std::size_t id = 0; id < a.arena_size(); ++id)
+        {
+            auto const *na = a.node(static_cast<engine_alias::NodeId>(id));
+            auto const *nb = b.node(static_cast<engine_alias::NodeId>(id));
+            if (na->board.occupancy() != nb->board.occupancy()
+                || na->policy.value != nb->policy.value
+                || na->cursor != nb->cursor || na->depth != nb->depth
+                || na->root_child != nb->root_child)
+            {
+                identical = false;
+            }
+        }
+        check(identical, "every materialized node matches bit for bit");
+        std::println("search determinism: repeated runs match exactly");
+    }
+
+
     void run_budget_tests()
     {
         std::size_t capacity = engine_alias::default_arena_capacity;
         std::size_t expect =
             static_cast<std::size_t>((engine_alias::engine_memory_budget
-                - engine_alias::engine_workspace_reserve)
+                - engine_alias::engine_fixed_workspace)
                 / sizeof(engine_alias::Node));
         check(capacity == expect && capacity > 1024, "arena capacity derives from the budget");
         check(capacity < engine_alias::max_nodes, "capacity stays in NodeId range");
@@ -723,6 +1117,14 @@ int main()
     run_determinism_tests();
     run_terminal_tests();
     run_budget_tests();
+    run_marker_tests();
+    run_horizon_tests();
+    run_key_tests();
+    run_widening_tests();
+    run_transposition_tests();
+    run_projection_tests();
+    run_search_exhaustion_tests();
+    run_search_determinism_tests();
     std::println("tetris_engine_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }

@@ -10,8 +10,8 @@
 
 #include <algorithm>
 #include <array>
-#include <map>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -237,38 +237,59 @@ namespace tetris::toj
         bool allow_180 = true;
     };
 
-    inline std::vector<Candidate> enumerate_candidates(Board const &board, Piece piece, MovementConfig config)
+    struct CandidateBatch
+    {
+        std::size_t count = 0;
+        std::size_t raw_landings = 0;
+    };
+
+    inline std::size_t max_candidates_per_source()
+    {
+        return 4 * Board::width * Board::height * 2;
+    }
+
+    inline std::optional<CandidateBatch> enumerate_candidates_into(
+        Board const &board, Piece piece, MovementConfig config, std::span<Candidate> out)
     {
         reachability::search::search_config cfg{};
         cfg.allow_180 = config.allow_180;
         cfg.allow_softdrop = true;
         cfg.allow_sonicdrop = true;
         cfg.allow_20g = false;
-        return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::vector<Candidate> {
-            struct Key
-            {
-                std::array<std::pair<int, int>, 4> cells;
-                int arrival;
-
-                bool operator<(Key const &other) const
-                {
-                    if (cells != other.cells)
-                    {
-                        return cells < other.cells;
-                    }
-                    return arrival < other.arrival;
-                }
-            };
+        return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::optional<CandidateBatch> {
             bool const is_t = B.piece_identity == reachability::piece_id("T");
-            std::map<Key, Candidate> found;
+            auto key_less = [piece, is_t](Candidate const &a, Candidate const &b) {
+                auto const ca = *cells(piece, a.placement);
+                auto const cb = *cells(piece, b.placement);
+                int const aa = is_t ? static_cast<int>(a.arrival) : 0;
+                int const ab = is_t ? static_cast<int>(b.arrival) : 0;
+                if (ca != cb)
+                {
+                    return ca < cb;
+                }
+                return aa < ab;
+            };
+            auto key_equal = [piece, is_t](Candidate const &a, Candidate const &b) {
+                return *cells(piece, a.placement) == *cells(piece, b.placement)
+                    && (is_t ? static_cast<int>(a.arrival) : 0)
+                        == (is_t ? static_cast<int>(b.arrival) : 0);
+            };
+            std::size_t n = 0;
+            std::size_t raw = 0;
+            bool overflow = false;
             auto add = [&](Placement placement, ArrivalClass arrival) {
+                ++raw;
                 auto maybe_cells = cells(piece, placement);
                 if (!maybe_cells)
                 {
                     return;
                 }
-                Key key{*maybe_cells, is_t ? static_cast<int>(arrival) : 0};
-                found.emplace(key, Candidate{placement, is_t ? arrival : ArrivalClass::Normal});
+                if (n >= out.size())
+                {
+                    overflow = true;
+                    return;
+                }
+                out[n++] = Candidate{placement, is_t ? arrival : ArrivalClass::Normal};
             };
             reachability::search::dispatch_with_height<B, 20>(board.occupancy(), board.roof(),
                 [&]<class Cut, bool Check>(Cut nb, std::integral_constant<bool, Check>) {
@@ -284,14 +305,33 @@ namespace tetris::toj
                         });
                     }
                 });
-            std::vector<Candidate> out;
-            out.reserve(found.size());
-            for (auto const &entry : found)
+            if (overflow)
             {
-                out.push_back(entry.second);
+                return std::nullopt;
             }
-            return out;
+            std::sort(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(n), key_less);
+            std::size_t m = 0;
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                if (m == 0 || !key_equal(out[m - 1], out[i]))
+                {
+                    out[m++] = out[i];
+                }
+            }
+            return CandidateBatch{m, raw};
         });
+    }
+
+    inline std::vector<Candidate> enumerate_candidates(Board const &board, Piece piece, MovementConfig config)
+    {
+        std::vector<Candidate> out(max_candidates_per_source());
+        auto batch = enumerate_candidates_into(board, piece, config, std::span<Candidate>(out));
+        if (!batch.has_value())
+        {
+            return {};
+        }
+        out.resize(batch->count);
+        return out;
     }
 
     inline std::optional<SpinType> classify_spin(Board const &board, Piece piece, Candidate candidate, int clear_count)
