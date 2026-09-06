@@ -73,6 +73,38 @@ add_executable(tetris_profile
 )
 target_include_directories(tetris_profile PRIVATE src)
 
+add_executable(tetris_profile_value
+    src/tetris_profile_value.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(tetris_profile_value PRIVATE fast_reachability)
+target_include_directories(tetris_profile_value PRIVATE src)
+
+add_executable(profile_value_tests
+    tests/profile_value_tests.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_link_libraries(profile_value_tests PRIVATE fast_reachability)
+target_include_directories(profile_value_tests PRIVATE src tests src/fast-reachability)
+add_test(NAME profile_value_tests COMMAND profile_value_tests)
+
+add_test(NAME profile_value_determinism
+    COMMAND bash -c "a=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 | tr ' ' '\\n' | grep -v -E '(_ms=|_ns=|total_s|_per_s=)'); b=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 | tr ' ' '\\n' | grep -v -E '(_ms=|_ns=|total_s|_per_s=)'); test \"$a\" = \"$b\" && echo \"$a\" | grep -q '^PROFILE_V3$'"
+)
+add_test(NAME profile_value_no_hold
+    COMMAND bash -c "$<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 2 --maxdepth 6 --no-hold --quiet --quiet-version 3 | grep -q '^PROFILE_V3'"
+)
+add_test(NAME profile_value_telemetry_off
+    COMMAND bash -c "$<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 3 --maxdepth 6 --telemetry off --quiet --quiet-version 3 | grep -q 'telemetry=off'"
+)
+
 add_executable(tuner
     src/tuner.cpp
     src/tetris_core.cpp
@@ -326,7 +358,8 @@ add_test(NAME raw_parity_frozen_180off
 )
 
 set_tests_properties(tetris_board_tests rule_differential path_differential fast_reachability_tests
-    fast_reachability_perft
+    fast_reachability_perft profile_value_tests profile_value_determinism profile_value_no_hold
+    profile_value_telemetry_off
     raw_bench_warmup_smoke raw_bench_warmup_smoke_frozen raw_bench_warmup_smoke_frozen_plain
     raw_parity_frozen_180fix raw_parity_frozen_180off
     PROPERTIES FAIL_REGULAR_EXPRESSION "runtime error:"

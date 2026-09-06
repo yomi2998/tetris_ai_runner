@@ -333,6 +333,19 @@ namespace tetris_engine
         bool transposition_exhausted = false;
     };
 
+    struct ComponentTimers
+    {
+        std::int64_t enum_ns = 0;
+        std::int64_t rule_ns = 0;
+        std::int64_t eval_hit_ns = 0;
+        std::int64_t eval_miss_ns = 0;
+        std::int64_t policy_ns = 0;
+        std::int64_t materialize_ns = 0;
+        std::int64_t parent_ns = 0;
+        std::int64_t path_find_ns = 0;
+        std::int64_t path_replay_ns = 0;
+    };
+
     inline std::uint32_t first_move_fingerprint(Piece played, Candidate const &candidate,
         BranchSource source)
     {
@@ -450,24 +463,38 @@ namespace tetris_engine
             replacements_ = 0;
         }
 
+        void set_telemetry_enabled(bool enabled)
+        {
+            telemetry_ = enabled;
+        }
+
         std::optional<Evaluation> find(Board const &board)
         {
             if (entries_.empty())
             {
                 return std::nullopt;
             }
-            ++requests_;
+            if (telemetry_)
+            {
+                ++requests_;
+            }
             std::size_t const set = set_of(board);
             for (std::size_t way = 0; way < ways_; ++way)
             {
                 EvalCacheEntry &entry = entries_[set * ways_ + way];
                 if (entry.used && entry.occupancy == board.occupancy())
                 {
-                    ++hits_;
+                    if (telemetry_)
+                    {
+                        ++hits_;
+                    }
                     return entry.evaluation;
                 }
             }
-            ++misses_;
+            if (telemetry_)
+            {
+                ++misses_;
+            }
             return std::nullopt;
         }
 
@@ -502,7 +529,10 @@ namespace tetris_engine
                         victim = set * ways_ + way;
                     }
                 }
-                ++replacements_;
+                if (telemetry_)
+                {
+                    ++replacements_;
+                }
             }
             EvalCacheEntry &entry = entries_[victim];
             entry.occupancy = board.occupancy();
@@ -551,6 +581,7 @@ namespace tetris_engine
         std::vector<EvalCacheEntry> entries_;
         std::size_t ways_ = 1;
         std::uint64_t stamp_ = 0;
+        bool telemetry_ = true;
         std::size_t requests_ = 0;
         std::size_t hits_ = 0;
         std::size_t misses_ = 0;
@@ -621,7 +652,9 @@ namespace tetris_engine
         tetris::toj::MovementConfig movement;
         std::size_t arena_capacity = default_arena_capacity;
         std::function<std::int64_t()> clock_nanos = steady_clock_nanos;
+        std::function<std::int64_t()> timer_nanos = steady_clock_nanos;
         CacheConfig cache;
+        bool telemetry_enabled = true;
     };
 
     class Engine
@@ -653,6 +686,7 @@ namespace tetris_engine
             , search_stopped_(other.search_stopped_)
             , transposition_exhausted_(other.transposition_exhausted_)
             , search_stats_(other.search_stats_)
+            , timers_(other.timers_)
             , path_stats_(other.path_stats_)
         {
         }
@@ -696,6 +730,8 @@ namespace tetris_engine
         std::size_t frontier_count() const;
 
         SearchStats search_stats() const;
+
+        ComponentTimers component_timers() const;
 
         std::optional<SearchSelection> select_best() const;
 
@@ -742,6 +778,7 @@ namespace tetris_engine
         bool search_stopped_ = false;
         bool transposition_exhausted_ = false;
         SearchStats search_stats_{};
+        ComponentTimers timers_{};
         PathTelemetry path_stats_{};
 
         void reset_run_state();
@@ -760,6 +797,16 @@ namespace tetris_engine
             return config_.clock_nanos ? config_.clock_nanos() : steady_clock_nanos();
         }
 
+        std::int64_t timer_now() const
+        {
+            return config_.timer_nanos ? config_.timer_nanos() : steady_clock_nanos();
+        }
+
+        bool telemetry_on() const
+        {
+            return config_.telemetry_enabled;
+        }
+
         bool expand_source(NodeId parent_id, Node const &parent, Piece played,
             BranchSource source, HoldState hold, std::size_t cursor,
             std::span<Piece const> policy_next, std::vector<Child> &out);
@@ -769,6 +816,8 @@ namespace tetris_engine
         bool expand_parent(NodeId parent_id);
 
         MaterializeOutcome search_materialize(Child const &child);
+
+        MaterializeOutcome search_materialize_inner(Child const &child);
 
         void promote(std::size_t level);
 

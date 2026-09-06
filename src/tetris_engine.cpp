@@ -127,6 +127,7 @@ namespace tetris_engine
         {
             cache_.init(config_.cache.layout, config_.cache.entries, config_.cache.ways);
         }
+        cache_.set_telemetry_enabled(config_.telemetry_enabled);
         std::uint64_t const used = engine_buffer_reservation(
             static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node)
                 + static_cast<std::uint64_t>(idmap_.capacity()) * sizeof(NodeId),
@@ -164,6 +165,7 @@ namespace tetris_engine
         search_stopped_ = false;
         transposition_exhausted_ = false;
         search_stats_ = SearchStats{};
+        timers_ = ComponentTimers{};
         stats_ = ExpansionStats{};
         exhausted_ = false;
         cache_.reset_counters();
@@ -345,6 +347,7 @@ namespace tetris_engine
         search_stopped_ = false;
         transposition_exhausted_ = false;
         search_stats_ = SearchStats{};
+        timers_ = ComponentTimers{};
         stats_ = ExpansionStats{};
         exhausted_ = false;
         cache_.reset_counters();
@@ -473,28 +476,47 @@ namespace tetris_engine
 
     Evaluation Engine::evaluate_once(Board const &board)
     {
-        ++search_stats_.eval_requests;
+        bool const on = telemetry_on();
+        std::int64_t const start = on ? timer_now() : 0;
+        if (on)
+        {
+            ++search_stats_.eval_requests;
+        }
         for (auto const &entry : eval_memo_)
         {
             if (entry.first == board)
             {
-                ++search_stats_.eval_memo_hits;
+                if (on)
+                {
+                    ++search_stats_.eval_memo_hits;
+                    timers_.eval_hit_ns += timer_now() - start;
+                }
                 return entry.second;
             }
         }
         if (config_.cache.layout != CacheConfig::Layout::Disabled)
         {
-            ++search_stats_.cache_requests;
+            if (on)
+            {
+                ++search_stats_.cache_requests;
+            }
             if (auto cached = cache_.find(board))
             {
-                ++search_stats_.cache_hits;
+                if (on)
+                {
+                    ++search_stats_.cache_hits;
+                    timers_.eval_hit_ns += timer_now() - start;
+                }
                 if (eval_memo_.size() < eval_memo_.capacity())
                 {
                     eval_memo_.push_back({ board, *cached });
                 }
                 return *cached;
             }
-            ++search_stats_.cache_misses;
+            if (on)
+            {
+                ++search_stats_.cache_misses;
+            }
         }
         Evaluation evaluation = policy_.evaluate(board);
         if (eval_memo_.size() < eval_memo_.capacity())
@@ -505,8 +527,12 @@ namespace tetris_engine
         {
             cache_.insert(board, evaluation);
         }
-        ++search_stats_.eval_computed;
-        ++stats_.evaluated;
+        if (on)
+        {
+            ++search_stats_.eval_computed;
+            ++stats_.evaluated;
+            timers_.eval_miss_ns += timer_now() - start;
+        }
         return evaluation;
     }
 
@@ -518,23 +544,40 @@ namespace tetris_engine
         {
             return true;
         }
+        bool const on = telemetry_on();
+        std::int64_t const enum_start = on ? timer_now() : 0;
         auto batch = tetris::toj::enumerate_candidates_into(parent.board, played,
             config_.movement, std::span<Candidate>(candidate_buffer_));
+        if (on)
+        {
+            timers_.enum_ns += timer_now() - enum_start;
+        }
         if (!batch.has_value())
         {
             return false;
         }
-        ++search_stats_.enumeration_calls;
-        search_stats_.raw_kernel_landings += batch->raw_landings;
-        search_stats_.unique_candidates += batch->count;
-        stats_.enumerated += batch->count;
+        if (on)
+        {
+            ++search_stats_.enumeration_calls;
+            search_stats_.raw_kernel_landings += batch->raw_landings;
+            search_stats_.unique_candidates += batch->count;
+            stats_.enumerated += batch->count;
+        }
         for (std::size_t index = 0; index < batch->count; ++index)
         {
             Candidate const &candidate = candidate_buffer_[index];
-            ++search_stats_.rule_applications;
+            std::int64_t const rule_start = on ? timer_now() : 0;
+            if (on)
+            {
+                ++search_stats_.rule_applications;
+            }
             auto applied = tetris::toj::apply(parent.board, played, candidate);
             if (!applied.has_value())
             {
+                if (on)
+                {
+                    timers_.rule_ns += timer_now() - rule_start;
+                }
                 continue;
             }
             Outcome outcome;
@@ -551,6 +594,10 @@ namespace tetris_engine
                     break;
                 }
             }
+            if (on)
+            {
+                timers_.rule_ns += timer_now() - rule_start;
+            }
             if (same_result)
             {
                 continue;
@@ -561,9 +608,14 @@ namespace tetris_engine
             context.hold = hold.piece;
             context.used_hold = source == BranchSource::Hold;
             context.depth = parent.depth;
+            std::int64_t const policy_start = on ? timer_now() : 0;
             PolicyState state =
                 policy_.transition(played, candidate, outcome, applied->board, parent.policy,
                     context, evaluation);
+            if (on)
+            {
+                timers_.policy_ns += timer_now() - policy_start;
+            }
             if (out.size() >= out.capacity())
             {
                 return false;
@@ -581,8 +633,11 @@ namespace tetris_engine
             child.cursor = cursor;
             child.expandable = !applied->lockout;
             out.push_back(child);
-            ++search_stats_.policy_transitions;
-            ++stats_.transitions;
+            if (on)
+            {
+                ++search_stats_.policy_transitions;
+                ++stats_.transitions;
+            }
         }
         return true;
     }
@@ -843,11 +898,26 @@ namespace tetris_engine
         }
         search_stopped_ = true;
         transposition_exhausted_ = true;
-        search_stats_.transposition_exhausted = true;
+        if (telemetry_on())
+        {
+            search_stats_.transposition_exhausted = true;
+        }
         return { false, no_node, nullptr };
     }
 
     Engine::MaterializeOutcome Engine::search_materialize(Child const &child)
+    {
+        bool const on = telemetry_on();
+        std::int64_t const start = on ? timer_now() : 0;
+        MaterializeOutcome outcome = search_materialize_inner(child);
+        if (on)
+        {
+            timers_.materialize_ns += timer_now() - start;
+        }
+        return outcome;
+    }
+
+    Engine::MaterializeOutcome Engine::search_materialize_inner(Child const &child)
     {
         if (child.parent >= arena_.size())
         {
@@ -864,7 +934,10 @@ namespace tetris_engine
             }
             if (probe.merged)
             {
-                ++search_stats_.transposition_merges;
+                if (telemetry_on())
+                {
+                    ++search_stats_.transposition_merges;
+                }
                 return { true, probe.node };
             }
             NodeId id = materialize(child);
@@ -877,7 +950,10 @@ namespace tetris_engine
             probe.slot->used = true;
             ++transposition_used_;
             arena_[id].registered = true;
-            ++search_stats_.materialized_nodes;
+            if (telemetry_on())
+            {
+                ++search_stats_.materialized_nodes;
+            }
             return { false, id };
         }
         NodeId id = materialize(child);
@@ -893,7 +969,10 @@ namespace tetris_engine
         }
         if (probe.merged)
         {
-            ++search_stats_.transposition_merges;
+            if (telemetry_on())
+            {
+                ++search_stats_.transposition_merges;
+            }
             arena_.pop_back();
             return { true, probe.node };
         }
@@ -901,14 +980,22 @@ namespace tetris_engine
         probe.slot->node = id;
         probe.slot->used = true;
         ++transposition_used_;
-        ++search_stats_.materialized_nodes;
+        if (telemetry_on())
+        {
+            ++search_stats_.materialized_nodes;
+        }
         return { false, id };
     }
 
     void Engine::promote(std::size_t level)
     {
+        bool const on = telemetry_on();
+        std::int64_t const start = on ? timer_now() : 0;
         NodeId id = heap_.pop_max(level);
-        ++search_stats_.expanded_parents;
+        if (on)
+        {
+            ++search_stats_.expanded_parents;
+        }
         ++expanded_count_[level];
         if (expanded_max_[level] == no_node
             || arena_[id].policy.value > arena_[expanded_max_[level]].policy.value)
@@ -944,10 +1031,15 @@ namespace tetris_engine
             append_child_link(id, outcome.id);
             heap_.push(outcome.id, child_level);
         }
+        if (on)
+        {
+            timers_.parent_ns += timer_now() - start;
+        }
     }
 
     void Engine::run_pass()
     {
+        bool const on = telemetry_on();
         if (width_ == 0)
         {
             if (arena_.empty())
@@ -955,12 +1047,16 @@ namespace tetris_engine
                 search_complete_ = true;
                 return;
             }
+            std::int64_t const start = on ? timer_now() : 0;
             if (!expand_parent(0))
             {
                 search_stopped_ = true;
                 return;
             }
-            ++search_stats_.expanded_parents;
+            if (on)
+            {
+                ++search_stats_.expanded_parents;
+            }
             for (std::size_t child_index = 0; child_index < child_buffer_.size();
                 ++child_index)
             {
@@ -986,13 +1082,20 @@ namespace tetris_engine
                 append_child_link(0, outcome.id);
                 heap_.push(outcome.id, max_length_);
             }
+            if (on)
+            {
+                timers_.parent_ns += timer_now() - start;
+            }
             width_ = 2;
         }
         else
         {
             width_ += 1;
         }
-        ++search_stats_.widening_passes;
+        if (on)
+        {
+            ++search_stats_.widening_passes;
+        }
         double div_ratio = 1.0;
         if (max_length_ > 0)
         {
@@ -1031,7 +1134,10 @@ namespace tetris_engine
                 }
                 else
                 {
-                    ++search_stats_.promotions_refused;
+                    if (on)
+                    {
+                        ++search_stats_.promotions_refused;
+                    }
                 }
             }
             else
@@ -1055,7 +1161,10 @@ namespace tetris_engine
         {
             total_pending += heap_.size(i);
         }
-        search_stats_.pending_occupancy = total_pending;
+        if (on)
+        {
+            search_stats_.pending_occupancy = total_pending;
+        }
     }
 
     bool Engine::run(std::size_t max_passes)
@@ -1173,7 +1282,10 @@ namespace tetris_engine
         result.used_hold = child.source == BranchSource::Hold;
         if (!child.has_incoming)
         {
-            ++path_stats_.failures;
+            if (telemetry_on())
+            {
+                ++path_stats_.failures;
+            }
             return result;
         }
         tetris::path::PathConfig path_config{};
@@ -1181,14 +1293,23 @@ namespace tetris_engine
         Placement start = child.source == BranchSource::Hold
             ? Placement::unchecked(tetris::toj::spawn_x, tetris::toj::spawn_y, 0)
             : active_start;
-        std::int64_t const begin = now_nanos();
+        bool const on = telemetry_on();
+        std::int64_t const find_start = on ? timer_now() : 0;
         tetris::path::Pathfinder finder(arena_[0].board, child.played, start,
             path_config);
         result.states_expanded = finder.queue_tail;
         result.path = finder.find(child.incoming);
+        std::int64_t find_ns = 0;
+        if (on)
+        {
+            find_ns = timer_now() - find_start;
+            timers_.path_find_ns += find_ns;
+        }
         bool path_ok = result.path.valid;
+        std::int64_t replay_ns = 0;
         if (path_ok)
         {
+            std::int64_t const replay_start = on ? timer_now() : 0;
             tetris::path::ReplayResult replayed = tetris::path::replay_path(
                 arena_[0].board, child.played, start, result.path.view(),
                 path_config, true);
@@ -1196,17 +1317,33 @@ namespace tetris_engine
                 && replayed.placement == child.incoming.placement
                 && (child.played != Piece::T
                     || replayed.arrival == child.incoming.arrival);
+            if (on)
+            {
+                replay_ns = timer_now() - replay_start;
+                timers_.path_replay_ns += replay_ns;
+            }
         }
-        result.elapsed_nanos = now_nanos() - begin;
+        result.elapsed_nanos = find_ns + replay_ns;
         result.path_ok = path_ok;
-        ++path_stats_.calls;
-        path_stats_.states_expanded += result.states_expanded;
-        path_stats_.elapsed_nanos += result.elapsed_nanos;
+        if (on)
+        {
+            ++path_stats_.calls;
+            path_stats_.states_expanded += result.states_expanded;
+            path_stats_.elapsed_nanos += result.elapsed_nanos;
+        }
         if (!result.path_ok)
         {
             result.path = tetris::path::Path{};
-            ++path_stats_.failures;
+            if (on)
+            {
+                ++path_stats_.failures;
+            }
         }
         return result;
+    }
+
+    ComponentTimers Engine::component_timers() const
+    {
+        return timers_;
     }
 }
