@@ -76,7 +76,12 @@ Exact root reuse across turns:
   from each retained depth-one move's fingerprint, which the rotation
   preserves. Retention is verified link by link (smaller parent id,
   consistent depth linkage, retained parent), so duplicate roots and
-  orphans are dropped rather than kept. Transposition entries are
+  orphans are dropped rather than kept. Children enumerate as
+  intrusive sibling chains (one link inside existing `Node` padding,
+  size pinned at 320 bytes): re-expansion appends fresh children and
+  owned merges with deduplication instead of overwriting the retained
+  links, and the rerooted root keeps the matched child's move history
+  while a fresh root carries defaults. Transposition entries are
   remapped (depth, cursor, node, recomputed identity) and rehashed
   into fresh slots; entries outside the retained subtree or the new
   horizon are dropped. The evaluation cache keeps its entries while
@@ -85,7 +90,7 @@ Exact root reuse across turns:
   before the warm run and avoided evaluation plus avoided
   materialization work asserted separately after it, a positive
   control plus eighteen single-component identity negatives (ten
-  policy fields, upper-storage occupancy, active piece, boundary
+  policy fields, row-40 occupancy, active piece, boundary
   bit, hold piece and availability, shorter and extended remaining
   sequences, invented marker), each on an independently populated
   tree, queue advancement through ordinary placement, occupied-hold
@@ -93,13 +98,17 @@ Exact root reuse across turns:
   exhaustion to a clean root, and marked queues in both directions,
   the attribution invariant, full warm-versus-cold node parity
   (complete evaluation and policy state plus depth, parent, played
-  piece, source, and hold wiring), lifecycle coverage (successive
-  turns with cold parity at each turn, move followed by a matching
-  reroot with scratch-transfer and no-allocation checks, rejection
-  preserving the live tree for a later reuse, shrinking
-  reinitialization releasing idmap scratch, cycled-versus-fresh
-  retained-byte equality), and bounded retained bytes under
-  separately counted arena and idmap capacities.
+  piece, source, and hold wiring, excluding the rerooted root's kept
+  move history), child-chain membership proven bidirectionally for
+  every parent after warm, marked, hold-swap, multi-turn, exhausted,
+  and cold searches, a capacity-37 exhausted-reroot-resume reproducer
+  with retained-first-child enumeration, a mid-size partial-exhaustion
+  promotion gate, lifecycle coverage (successive turns with cold parity
+  at each turn, move followed by a matching reroot with scratch-transfer
+  and no-allocation checks, rejection preserving the live tree for a
+  later reuse, shrinking reinitialization releasing idmap scratch,
+  cycled-versus-fresh retained-byte equality), and bounded retained
+  bytes under separately counted arena and idmap capacities.
 
 ## Slice 6.3 scope
 
@@ -307,7 +316,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 1022
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 10164
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -372,14 +381,19 @@ a fresh engine while warm-cache results differ; an
 upper-storage-domain identity case; and a seeded near-wrap stamp
 rollover gate. The slice 6.5 repair gates add a positive reuse
 control plus eighteen single-component identity negatives over
-independently populated trees (ten policy fields, upper-storage
+independently populated trees (ten policy fields, row-40
 occupancy, active piece, boundary bit, hold piece and availability,
 shorter and extended remaining sequences, invented marker),
 per-search telemetry reset asserted immediately after a matching
 root change, avoided materialization asserted separately from
 cache savings, full warm-versus-cold node parity over complete
 evaluation and policy state with depth, parent, played piece,
-source, and hold wiring, advancement through hold swap,
+source, and hold wiring (excluding the rerooted root's kept move
+history), child-chain membership proven bidirectionally for every
+parent after warm, marked, hold-swap, multi-turn, exhausted, and
+cold searches, a capacity-37 exhausted-reroot-resume reproducer,
+a mid-size partial-exhaustion promotion gate, advancement through
+hold swap,
 empty-hold consumption, exhaustion to a clean root, and marked
 queues in both directions, successive turns with cold parity at
 each turn, move followed by a matching reroot with scratch
@@ -388,7 +402,8 @@ tree for a later reuse, reinitialization releasing idmap scratch
 with cycled-versus-fresh retained-byte equality, and separately
 counted arena and idmap capacities. Mutation probes confirm
 the repair gates: prefix queue matching, a removed marker bound,
-a missing cache reset, and dropped idmap transfer or release each
+a missing cache reset, dropped idmap transfer or release, and
+fresh-only child linking each
 fail, alongside the earlier zeroed transitions, child-cursor policy
 contexts, and danger-mask shift probes.
 

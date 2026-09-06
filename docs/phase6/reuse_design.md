@@ -47,11 +47,12 @@ against the retained nodes.
   instead of retaining them, so the single-root assumption below
   cannot be violated by stale links. The target is the smallest
   retained old id (every retained node descends from it), so it
-  compacts to id zero. Child links are rebuilt by an ascending
-  scan; parent links, depths (shifted by one), and cursors (shifted
-  by the played cursor) are remapped; the new root keeps the matched
-  node's own board, policy state, and evaluation, never a reseeding
-  of caller-owned state. Equal cursors across a link are legitimate
+  compacts to id zero. Child links are rebuilt by an ascending scan
+  into intrusive sibling chains; parent links, depths (shifted by
+  one), and cursors (shifted by the played cursor) are remapped;
+  the new root keeps the matched node's own board, policy state,
+  and evaluation, never a reseeding of
+  caller-owned state. Equal cursors across a link are legitimate
   (the hold branch clamps the cursor at the queue end) and are kept.
 - Transposition entries are remapped, not cleared: entries with an
   out-of-range or dropped node, above the old depth-one level, with
@@ -65,6 +66,17 @@ against the retained nodes.
   queue equals the old suffix, so every retained key already
   describes the new queue. Re-expansion of retained positions
   therefore merges with retained nodes instead of duplicating them.
+- Children are enumerated as intrusive sibling chains, not as one
+  contiguous range. Each node carries a sibling link inside the
+  existing `Node` padding (`sizeof(Node)` stays 320 bytes); the
+  parent keeps the head link and the total owned count. Re-expansion
+  appends fresh children and owned merges (a merge never reparents
+  a node or links it under a second parent) with deduplication, so
+  retained children survive the resumed search instead of being
+  overwritten by the fresh run. The rerooted root keeps the matched
+  child's move history (played piece and source) while a fresh root
+  carries defaults, so warm-versus-cold node parity excludes the
+  root's move-history fields and compares everything else exactly.
 - The widening state restarts per legacy `update_version`: width
   returns to zero, both frontier heaps clear, expansion trackers
   reset, and every retained non-root node becomes unregistered so the
