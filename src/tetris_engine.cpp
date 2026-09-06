@@ -37,7 +37,8 @@ namespace tetris_engine
     {
         config_ = config;
         policy_.init(config_.policy);
-        arena_.clear();
+        std::vector<Node>().swap(arena_);
+        arena_.reserve(config_.arena_capacity);
         queue_ = Queue{};
         stats_ = ExpansionStats{};
         exhausted_ = false;
@@ -269,6 +270,11 @@ namespace tetris_engine
     std::size_t Engine::arena_size() const
     {
         return arena_.size();
+    }
+
+    std::size_t Engine::arena_reserved_bytes() const
+    {
+        return arena_.capacity() * sizeof(Node);
     }
 
     bool Engine::arena_exhausted() const

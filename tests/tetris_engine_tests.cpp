@@ -393,6 +393,7 @@ namespace
         }
         check(held != engine_alias::no_node, "hold child materializes");
         auto second = fixture.engine.expand(held);
+        check(!second.empty(), "final held piece still expands");
         bool terminal = true;
         for (auto const &child : second)
         {
@@ -531,7 +532,11 @@ namespace
         check(root == 0 && fixture.engine.arena_size() == 1, "tiny arena still takes the root");
         auto children = fixture.engine.expand(root);
         check(!children.empty(), "expansion needs no arena space");
+        check(fixture.engine.arena_reserved_bytes() == 2 * sizeof(engine_alias::Node),
+            "reservation matches the configured capacity exactly");
+        auto const *first_node = fixture.engine.node(0);
         check(fixture.engine.materialize(children[0]) == 1, "second slot materializes");
+        check(fixture.engine.node(0) == first_node, "no relocation during fill");
         check(fixture.engine.materialize(children[0]) == engine_alias::no_node,
             "full arena fails closed");
         check(fixture.engine.arena_exhausted(), "exhaustion is reported");
@@ -622,6 +627,32 @@ namespace
         std::println("terminal: lockout dead results and spawn death");
     }
 
+    void run_reservation_tests()
+    {
+        Fixture fixture = make_fixture(1000);
+        check(fixture.engine.arena_reserved_bytes() == 1000 * sizeof(engine_alias::Node),
+            "non-power-of-two capacity reserves exactly");
+        tetris::Board empty;
+        engine_alias::NodeId root = make_root(fixture, empty, "T", std::nullopt, false);
+        check(root == 0, "reserved arena takes the root");
+        auto children = fixture.engine.expand(root);
+        auto const *stable = fixture.engine.node(root);
+        std::size_t placed = 0;
+        for (auto const &child : children)
+        {
+            if (fixture.engine.materialize(child) == engine_alias::no_node)
+            {
+                break;
+            }
+            ++placed;
+        }
+        check(placed > 0, "reservation fills with live nodes");
+        check(fixture.engine.node(root) == stable, "addresses stay stable while filling");
+        check(fixture.engine.arena_reserved_bytes() == 1000 * sizeof(engine_alias::Node),
+            "no growth beyond the reservation");
+        std::println("reservation: exact bytes, stable addresses, no growth peaks");
+    }
+
     void run_budget_tests()
     {
         std::size_t capacity = engine_alias::default_arena_capacity;
@@ -649,6 +680,7 @@ int main()
     run_stats_reset_tests();
     run_dedup_tests();
     run_arena_tests();
+    run_reservation_tests();
     run_determinism_tests();
     run_terminal_tests();
     run_budget_tests();

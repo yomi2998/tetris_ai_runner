@@ -120,6 +120,8 @@ namespace tetris_engine
 
         std::size_t arena_size() const;
 
+        std::size_t arena_reserved_bytes() const;
+
         bool arena_exhausted() const;
 
     private:
