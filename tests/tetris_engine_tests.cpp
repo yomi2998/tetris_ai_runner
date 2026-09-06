@@ -721,7 +721,7 @@ namespace
             std::size_t over_bytes = static_cast<std::size_t>(
                 (engine_alias::engine_memory_budget
                     - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, cache_bytes))
-                / sizeof(engine_alias::Node))
+                / (sizeof(engine_alias::Node) + sizeof(engine_alias::NodeId)))
                 + 1;
             Fixture fixture;
             fixture.policy_config.combo_table = combo_table;
@@ -742,7 +742,7 @@ namespace
             std::size_t over_bytes = static_cast<std::size_t>(
                 (engine_alias::engine_memory_budget
                     - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, cache_bytes))
-                / sizeof(engine_alias::Node))
+                / (sizeof(engine_alias::Node) + sizeof(engine_alias::NodeId)))
                 + 1;
             Fixture fixture;
             fixture.policy_config.combo_table = combo_table;
@@ -1044,8 +1044,10 @@ namespace
         {
             auto const *node = engine.node(static_cast<engine_alias::NodeId>(id));
             auto const *parent = engine.node(node->parent);
-            engine_alias::NodeId const expected =
-                node->depth == 1 ? static_cast<engine_alias::NodeId>(id) : parent->root_child;
+            engine_alias::NodeId const expected = node->depth == 1
+                ? engine_alias::first_move_fingerprint(node->played, node->incoming,
+                    node->source)
+                : parent->root_child;
             if (node->root_child != expected)
             {
                 attribution_consistent = false;
@@ -2158,13 +2160,367 @@ namespace
         std::println("cache counters: requests, hits, misses, replacements, memo");
     }
 
+    engine_alias::Queue remaining_queue(engine_alias::Queue const &full,
+        std::size_t from)
+    {
+        engine_alias::Queue out;
+        for (std::size_t i = from; i < full.pieces.size(); ++i)
+        {
+            out.pieces.push_back(full.pieces[i]);
+            out.boundary.push_back(full.boundary[i]);
+        }
+        out.marker_count = full.marker_count;
+        return out;
+    }
+
+    std::string queue_text(engine_alias::Queue const &queue)
+    {
+        std::string text;
+        for (auto piece : queue.pieces)
+        {
+            text += reachability::rules::Tetromino::name_of(piece);
+        }
+        return text;
+    }
+
+    void run_reuse_tests()
+    {
+        toj_policy::State state;
+        engine_alias::HoldState no_hold;
+        no_hold.locked = true;
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "reuse first-turn queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold)
+                != engine_alias::no_node,
+                "reuse first turn takes");
+            check(fixture.engine.run(2000), "reuse first search completes");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "first search selects");
+            std::size_t const first_arena = fixture.engine.arena_size();
+            check(first_arena > 8, "the first search materializes a nontrivial tree");
+            auto const *child = fixture.engine.node(selection->root_child);
+            engine_alias::Queue next = remaining_queue(fixture.engine.queue(), 1);
+            toj_policy::State const next_policy = child->policy;
+            engine_alias::Board const next_board = child->board;
+            engine_alias::HoldState const next_hold = child->hold;
+            std::string const next_text = queue_text(next);
+
+            check(fixture.engine.set_root(next_board, next_policy, std::move(next),
+                next_hold)
+                != engine_alias::no_node,
+                "the matched position reroots");
+            check(fixture.engine.arena_size() > 2,
+                "rerooting retains a nontrivial subtree");
+            check(fixture.engine.arena_size() <= first_arena,
+                "rerooting does not grow the arena");
+            check(fixture.engine.node(0)->first_child != engine_alias::no_node,
+                "the new root retains children");
+
+            check(fixture.engine.run(2000), "the warm second search completes");
+            auto warm_stats = fixture.engine.search_stats();
+            check(warm_stats.cache_hits > 0,
+                "the warm search reuses cached evaluations");
+            check(warm_stats.eval_computed < warm_stats.eval_requests,
+                "the warm search avoids evaluation work");
+
+            Fixture cold = make_fixture();
+            auto cold_queue = engine_alias::parse_queue(next_text);
+            check(cold_queue.has_value(), "cold queue parses");
+            check(cold.engine.set_root(next_board, next_policy, std::move(*cold_queue),
+                next_hold)
+                != engine_alias::no_node,
+                "cold second turn takes");
+            check(cold.engine.run(2000), "the cold second search completes");
+            auto cold_stats = cold.engine.search_stats();
+            check(cold_stats.eval_computed > warm_stats.eval_computed,
+                "the warm search avoids evaluation work against a cold search");
+            auto warm_selection = fixture.engine.select_best();
+            auto cold_selection = cold.engine.select_best();
+            check(warm_selection.has_value() && cold_selection.has_value()
+                && warm_selection->root_child == cold_selection->root_child
+                && warm_selection->evidence == cold_selection->evidence,
+                "warm and cold searches select the same move");
+            std::vector<NodeFingerprint> warm_prints;
+            std::vector<NodeFingerprint> cold_prints;
+            for (std::size_t id = 0; id < fixture.engine.arena_size(); ++id)
+            {
+                warm_prints.push_back(fingerprint(
+                    fixture.engine.node(static_cast<engine_alias::NodeId>(id))));
+            }
+            for (std::size_t id = 0; id < cold.engine.arena_size(); ++id)
+            {
+                cold_prints.push_back(fingerprint(
+                    cold.engine.node(static_cast<engine_alias::NodeId>(id))));
+            }
+            check(warm_prints.size() == cold_prints.size(),
+                "warm and cold materialize the same node count");
+            bool semantics_match = warm_prints.size() == cold_prints.size();
+            for (std::size_t i = 0; i < warm_prints.size() && semantics_match; ++i)
+            {
+                if (!(warm_prints[i].occupancy == cold_prints[i].occupancy)
+                    || warm_prints[i].eval_value != cold_prints[i].eval_value
+                    || warm_prints[i].state_value != cold_prints[i].state_value
+                    || warm_prints[i].state_acc != cold_prints[i].state_acc
+                    || warm_prints[i].cursor != cold_prints[i].cursor)
+                {
+                    semantics_match = false;
+                }
+            }
+            check(semantics_match,
+                "retained node semantics match the fresh-root construction");
+            bool attribution_ok = true;
+            engine_alias::NodeId depth_one_rank = 0;
+            for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
+            {
+                auto const *node =
+                    fixture.engine.node(static_cast<engine_alias::NodeId>(id));
+                auto const *parent = fixture.engine.node(node->parent);
+                engine_alias::NodeId const expected = node->depth == 1
+                    ? depth_one_rank
+                    : parent->root_child;
+                if (node->depth == 1)
+                {
+                    ++depth_one_rank;
+                }
+                if (node->root_child != expected)
+                {
+                    attribution_ok = false;
+                }
+            }
+            check(attribution_ok,
+                "attribution is rooted in the new root after reuse");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold)
+                != engine_alias::no_node,
+                "identity-negative first turn takes");
+            check(fixture.engine.run(2000), "identity-negative search completes");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "identity-negative selection exists");
+            auto const *child = fixture.engine.node(selection->root_child);
+            engine_alias::Queue next = remaining_queue(fixture.engine.queue(), 1);
+            engine_alias::Board board = child->board;
+            toj_policy::State policy = child->policy;
+            engine_alias::HoldState hold = child->hold;
+            auto attempt = [&](auto vary, char const *what) {
+                Fixture f = make_fixture();
+                auto [v_board, v_policy, v_queue, v_hold] = vary(child, board, policy,
+                    next, hold);
+                check(f.engine.set_root(v_board, v_policy, std::move(v_queue), v_hold)
+                    != engine_alias::no_node,
+                    what);
+                check(f.engine.arena_size() == 1, what);
+            };
+            auto occupancy_vary = [&](auto, auto, auto, auto queue, auto hold) {
+                std::array<std::uint16_t, 48> rows = {};
+                rows[0] = 0x001;
+                rows[40] = 0x400;
+                return std::tuple(tetris::Board::from_rows(rows), policy, queue, hold);
+            };
+            auto death_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.death = 1;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto combo_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.combo = 1;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto under_attack_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.under_attack = 1;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto map_rise_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.map_rise = 1;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto b2b_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.b2b = 1;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto t2_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.t2_value = 7;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto t3_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.t3_value = 7;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto acc_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.acc_value = policy.acc_value + 1.0;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto like_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.like = policy.like + 1.0;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto value_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+                policy.value = policy.value + 1.0;
+                return std::tuple(board, policy, queue, hold);
+            };
+            auto active_vary = [&](auto, auto, auto, auto queue, auto hold) {
+                auto q = queue;
+                q.pieces[0] = q.pieces[0] == tetris::Piece::T
+                    ? tetris::Piece::I
+                    : tetris::Piece::T;
+                return std::tuple(board, policy, q, hold);
+            };
+            auto boundary_vary = [&](auto, auto, auto, auto queue, auto hold) {
+                auto q = queue;
+                q.boundary[0] = !q.boundary[0];
+                return std::tuple(board, policy, q, hold);
+            };
+            auto hold_piece_vary = [&](auto, auto, auto, auto queue, auto hold) {
+                auto h = hold;
+                h.piece = h.piece == tetris::Piece::T
+                    ? tetris::Piece::I
+                    : tetris::Piece::T;
+                return std::tuple(board, policy, queue, h);
+            };
+            auto hold_lock_vary = [&](auto, auto, auto, auto queue, auto hold) {
+                auto h = hold;
+                h.locked = !h.locked;
+                return std::tuple(board, policy, queue, h);
+            };
+            auto shorter_vary = [&](auto, auto, auto, auto queue, auto hold) {
+                auto q = queue;
+                q.pieces.pop_back();
+                q.boundary.pop_back();
+                return std::tuple(board, policy, q, hold);
+            };
+            attempt(occupancy_vary, "an upper-row occupancy change misses reuse");
+            attempt(death_vary, "a death difference misses reuse");
+            attempt(combo_vary, "a combo difference misses reuse");
+            attempt(under_attack_vary, "an under-attack difference misses reuse");
+            attempt(map_rise_vary, "a map-rise difference misses reuse");
+            attempt(b2b_vary, "a b2b difference misses reuse");
+            attempt(t2_vary, "a t2 difference misses reuse");
+            attempt(t3_vary, "a t3 difference misses reuse");
+            attempt(acc_vary, "an accumulated value difference misses reuse");
+            attempt(like_vary, "a like difference misses reuse");
+            attempt(value_vary, "a value difference misses reuse");
+            attempt(active_vary, "an active-piece difference misses reuse");
+            attempt(boundary_vary, "a boundary-bit change misses reuse");
+            attempt(hold_piece_vary, "a hold-piece difference misses reuse");
+            attempt(hold_lock_vary, "a hold-availability change misses reuse");
+            attempt(shorter_vary, "a shorter remaining sequence misses reuse");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            toj_policy::State state;
+            engine_alias::HoldState hold;
+            hold.piece = tetris::Piece::I;
+            hold.locked = false;
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                hold)
+                != engine_alias::no_node,
+                "hold-active first turn takes");
+            check(fixture.engine.run(2000), "hold-active search completes");
+            engine_alias::NodeId hold_child = engine_alias::no_node;
+            for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
+            {
+                auto const *node =
+                    fixture.engine.node(static_cast<engine_alias::NodeId>(id));
+                if (node->depth == 1 && node->source == engine_alias::BranchSource::Hold)
+                {
+                    hold_child = static_cast<engine_alias::NodeId>(id);
+                    break;
+                }
+            }
+            check(hold_child != engine_alias::no_node, "the hold-swap child exists");
+            if (hold_child != engine_alias::no_node)
+            {
+                auto const *child = fixture.engine.node(hold_child);
+                engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
+                    child->cursor);
+                toj_policy::State root_state;
+                check(fixture.engine.set_root(child->board, root_state, std::move(next),
+                    child->hold)
+                    != engine_alias::no_node,
+                    "the hold-swap position reroots");
+                check(fixture.engine.arena_size() > 2,
+                    "the hold-swap reroot retains a subtree");
+                check(fixture.engine.node(0)->hold.piece == child->hold.piece,
+                    "the rerooted root keeps the post-swap hold");
+            }
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            toj_policy::State state;
+            engine_alias::HoldState empty_hold;
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                empty_hold)
+                != engine_alias::no_node,
+                "empty-hold first turn takes");
+            check(fixture.engine.run(2000), "empty-hold search completes");
+            engine_alias::NodeId empty_child = engine_alias::no_node;
+            for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
+            {
+                auto const *node = fixture.engine.node(static_cast<engine_alias::NodeId>(id));
+                if (node->depth == 1 && node->cursor == 2
+                    && node->source == engine_alias::BranchSource::Hold)
+                {
+                    empty_child = static_cast<engine_alias::NodeId>(id);
+                    break;
+                }
+            }
+            check(empty_child != engine_alias::no_node,
+                "an empty-hold consumption child exists");
+            if (empty_child != engine_alias::no_node)
+            {
+                auto const *child = fixture.engine.node(empty_child);
+                engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
+                    child->cursor);
+                toj_policy::State root_state;
+                check(fixture.engine.set_root(child->board, root_state, std::move(next),
+                    child->hold)
+                    != engine_alias::no_node,
+                    "the empty-hold position reroots");
+                check(fixture.engine.arena_size() > 2,
+                    "the empty-hold reroot retains a subtree");
+                check(fixture.engine.node(0)->cursor == 0,
+                    "the rerooted root cursor is zero");
+            }
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto marked = engine_alias::parse_queue("T?ISJ");
+            check(marked.has_value() && marked->marker_count == 1,
+                "marker queue parses with one marker");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*marked),
+                no_hold)
+                != engine_alias::no_node,
+                "marker first turn takes");
+            check(fixture.engine.run(2000), "marker search completes");
+            auto const *first_child = fixture.engine.node(1);
+            engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
+                first_child->cursor);
+            next.boundary[0] = !next.boundary[0];
+            toj_policy::State state_four;
+            check(fixture.engine.set_root(first_child->board, state_four,
+                std::move(next), no_hold)
+                != engine_alias::no_node,
+                "the marker-shifted position takes a clean root");
+            check(fixture.engine.arena_size() == 1,
+                "a marker-shifted boundary misses reuse");
+        }
+        std::println("root reuse: retained subtrees, identity negatives, advancement");
+    }
+
     void run_budget_tests()
     {
         std::size_t capacity = engine_alias::default_arena_capacity;
         std::size_t expect =
             static_cast<std::size_t>((engine_alias::engine_memory_budget
                 - engine_alias::engine_fixed_workspace)
-                / sizeof(engine_alias::Node));
+                / (sizeof(engine_alias::Node) + sizeof(engine_alias::NodeId)));
         check(capacity == expect && capacity > 1024, "arena capacity derives from the budget");
         check(capacity < engine_alias::max_nodes, "capacity stays in NodeId range");
         check(engine_alias::max_queue_length == 256, "queue bound is declared");
@@ -2211,6 +2567,7 @@ int main()
     run_cache_unit_tests();
     run_cache_parity_tests();
     run_cache_counter_tests();
+    run_reuse_tests();
     std::println("tetris_engine_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }

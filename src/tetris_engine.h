@@ -33,7 +33,7 @@ namespace tetris_engine
     inline constexpr std::size_t max_candidates_per_source =
         4 * Board::width * Board::height * 2;
     inline constexpr std::size_t max_children_per_parent = 2 * max_candidates_per_source;
-    inline constexpr std::size_t transposition_entries = 8192;
+    inline constexpr std::size_t transposition_entries = 16384;
     inline constexpr std::uint8_t no_piece_code = 0xFF;
     inline constexpr std::uint64_t engine_queue_reservation =
         max_queue_length * (sizeof(Piece) + sizeof(bool));
@@ -171,6 +171,7 @@ namespace tetris_engine
         std::size_t cursor = 0;
         std::size_t depth = 0;
         bool expandable = true;
+        bool registered = false;
     };
 
     class PendingHeap
@@ -326,6 +327,18 @@ namespace tetris_engine
         std::size_t pending_occupancy = 0;
         bool transposition_exhausted = false;
     };
+
+    inline std::uint32_t first_move_fingerprint(Piece played, Candidate const &candidate,
+        BranchSource source)
+    {
+        auto const &placement = candidate.placement;
+        return static_cast<std::uint32_t>((static_cast<std::uint32_t>(placement.x()) << 24)
+            | (static_cast<std::uint32_t>(placement.y()) << 16)
+            | (static_cast<std::uint32_t>(placement.rotation()) << 12)
+            | (static_cast<std::uint32_t>(source) << 8)
+            | (static_cast<std::uint32_t>(played) << 4)
+            | (static_cast<std::uint32_t>(candidate.arrival) & 0xFu));
+    }
 
     struct SearchSelection
     {
@@ -536,7 +549,8 @@ namespace tetris_engine
         16384 * sizeof(EvalCacheEntry));
 
     inline constexpr std::size_t default_arena_capacity =
-        static_cast<std::size_t>((engine_memory_budget - engine_fixed_workspace) / sizeof(Node));
+        static_cast<std::size_t>((engine_memory_budget - engine_fixed_workspace)
+            / (sizeof(Node) + sizeof(NodeId)));
 
     inline std::int64_t steady_clock_nanos()
     {
@@ -682,6 +696,7 @@ namespace tetris_engine
         std::array<NodeId, max_frontiers> expanded_max_{};
         std::array<double, max_frontiers> width_cache_{};
         std::vector<TranspositionEntry> transposition_;
+        std::vector<NodeId> idmap_;
         EvalCache cache_;
         std::size_t transposition_used_ = 0;
         std::size_t max_length_ = 0;
@@ -692,6 +707,13 @@ namespace tetris_engine
         SearchStats search_stats_{};
 
         void reset_run_state();
+
+        bool reuse_matches(NodeId child, Board const &board, PolicyState const &policy,
+            Queue const &queue, HoldState hold) const;
+
+        NodeId reroot(NodeId target, Queue const &queue, HoldState hold, std::size_t new_max);
+
+        void rebuild_child_links();
 
         std::int64_t now_nanos() const
         {
