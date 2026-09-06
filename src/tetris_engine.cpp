@@ -698,7 +698,7 @@ namespace tetris_engine
     void Engine::link_children(NodeId parent, NodeId first, std::size_t count)
     {
         if (parent >= arena_.size() || count == 0 || first >= arena_.size()
-            || static_cast<std::uint64_t>(first) + count > arena_.size())
+            || count > arena_.size() - first)
         {
             return;
         }
