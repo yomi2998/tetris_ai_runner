@@ -43,10 +43,16 @@ persistent evaluation cache tuning, and production cutover.
 
 `default_arena_capacity` equals the 256 MiB production budget minus
 a 1 MiB workspace reserve, divided by measured `sizeof(Node)` (256
-bytes, about one million nodes). The arena is a single exact
-reservation of that capacity: allocation peaks equal the allowance
-because storage never grows or relocates, and node addresses stay
-stable from materialization onward. Queue input is capped at 256
+bytes, about one million nodes). The arena is a single reservation
+for that capacity, requested before any storage is committed: `init`
+rejects capacities beyond the `NodeId` range or the arena byte
+allowance without allocating, and rejects an over-wide reservation
+after the fact, so the allowance holds on any standard library
+(reserve guarantees at least the request; the tested libraries
+reserve exactly it, asserted per configuration). Allocation peaks
+therefore equal the allowance because storage never grows or
+relocates, and node addresses stay stable from materialization
+onward. Rejected configurations behave as zero-capacity engines. Queue input is capped at 256
 pieces, per-expansion scratch is bounded by the enumerated candidate
 count, and materialization additionally refuses to exceed the
 `NodeId` range. Tests assert reserved bytes equal capacity times
@@ -61,7 +67,7 @@ arena allocation bound from the deferred total-engine accounting.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 393
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 414
 checks, 0 failures in all five builds) covers queue parsing against
 the legacy `queue.csv` shapes, cursor and hold-swap arithmetic,
 lock and exhaustion edges, per-child state wiring against direct
