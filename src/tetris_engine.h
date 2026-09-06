@@ -5,8 +5,11 @@
 #include "toj_policy.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -342,11 +345,48 @@ namespace tetris_engine
     inline constexpr std::size_t default_arena_capacity =
         static_cast<std::size_t>((engine_memory_budget - engine_fixed_workspace) / sizeof(Node));
 
+    inline std::int64_t steady_clock_nanos()
+    {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
+    struct SearchBudget
+    {
+        enum class Kind : std::uint8_t
+        {
+            Time,
+            Iterations,
+        };
+
+        Kind kind = Kind::Time;
+        std::uint64_t milliseconds = 0;
+        std::uint64_t iterations = 0;
+
+        static SearchBudget by_time(std::uint64_t ms)
+        {
+            SearchBudget budget;
+            budget.kind = Kind::Time;
+            budget.milliseconds = ms;
+            return budget;
+        }
+
+        static SearchBudget by_iterations(std::uint64_t n)
+        {
+            SearchBudget budget;
+            budget.kind = Kind::Iterations;
+            budget.iterations = n;
+            return budget;
+        }
+    };
+
     struct EngineConfig
     {
         toj_policy::Config const *policy = nullptr;
         tetris::toj::MovementConfig movement;
         std::size_t arena_capacity = default_arena_capacity;
+        std::function<std::int64_t()> clock_nanos = steady_clock_nanos;
     };
 
     class Engine
@@ -408,6 +448,8 @@ namespace tetris_engine
 
         bool run(std::size_t max_passes);
 
+        bool run(SearchBudget budget);
+
         bool search_complete() const;
 
         std::size_t frontier_count() const;
@@ -454,6 +496,11 @@ namespace tetris_engine
         SearchStats search_stats_{};
 
         void reset_run_state();
+
+        std::int64_t now_nanos() const
+        {
+            return config_.clock_nanos ? config_.clock_nanos() : steady_clock_nanos();
+        }
 
         bool expand_source(NodeId parent_id, Node const &parent, Piece played,
             BranchSource source, HoldState hold, std::size_t cursor,

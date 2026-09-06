@@ -756,6 +756,44 @@ namespace tetris_engine
         return search_complete_;
     }
 
+    bool Engine::run(SearchBudget budget)
+    {
+        if (search_complete_ || arena_.empty())
+        {
+            return search_complete_;
+        }
+        std::int64_t const deadline = [this, budget]() {
+            if (budget.kind != SearchBudget::Kind::Time)
+            {
+                return std::numeric_limits<std::int64_t>::max();
+            }
+            std::int64_t const budget_nanos =
+                budget.milliseconds
+                    > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max() / 1'000'000)
+                ? std::numeric_limits<std::int64_t>::max()
+                : static_cast<std::int64_t>(budget.milliseconds) * 1'000'000;
+            std::int64_t const start = now_nanos();
+            return start > std::numeric_limits<std::int64_t>::max() - budget_nanos
+                ? std::numeric_limits<std::int64_t>::max()
+                : start + budget_nanos;
+        }();
+        std::uint64_t passes = 0;
+        do
+        {
+            if (search_complete_ || search_stopped_ || exhausted_)
+            {
+                break;
+            }
+            run_pass();
+            ++passes;
+        } while (!search_complete_ && !search_stopped_ && !exhausted_
+            && (budget.kind == SearchBudget::Kind::Time
+                    ? now_nanos() < deadline
+                    : passes < budget.iterations));
+        return search_complete_;
+    }
+
     std::optional<SearchSelection> Engine::select_best() const
     {
         NodeId best = no_node;

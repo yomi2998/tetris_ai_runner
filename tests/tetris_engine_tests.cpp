@@ -1447,6 +1447,108 @@ namespace
         std::println("adapter order: canonical keys strictly increasing, {} candidates", total);
     }
 
+    void run_time_budget_tests()
+    {
+        std::int64_t calls = 0;
+        Fixture fixture;
+        fixture.policy_config.combo_table = combo_table;
+        fixture.policy_config.combo_table_max = 10;
+        fixture.policy_config.safe = 0;
+        fixture.policy_config.parameters = toj_policy::Parameters{};
+        fixture.engine_config.policy = &fixture.policy_config;
+        fixture.engine_config.clock_nanos = [&calls]() {
+            return calls++ * 4'000'000;
+        };
+        check(fixture.engine.init(fixture.engine_config), "timed fixture initializes");
+        make_root(fixture, shelf_board(), "III", std::nullopt, true);
+        check(!fixture.engine.run(engine_alias::SearchBudget::by_time(10)),
+            "a ten millisecond budget leaves deferred work");
+        check(fixture.engine.search_stats().widening_passes == 3,
+            "the fake clock yields exactly three passes at four milliseconds each");
+        check(fixture.engine.search_stats().pending_occupancy > 0,
+            "deferred work survives the timed stop");
+        auto timed_selection = fixture.engine.select_best();
+        check(timed_selection.has_value(), "a timed stop still projects");
+        make_root(fixture, shelf_board(), "III", std::nullopt, true);
+        check(!fixture.engine.run(engine_alias::SearchBudget::by_time(0)),
+            "an expired budget still runs the legacy single pass");
+        check(fixture.engine.search_stats().widening_passes == 1,
+            "an expired budget counts exactly one pass");
+        make_root(fixture, shelf_board(), "III", std::nullopt, true);
+        check(!fixture.engine.run(engine_alias::SearchBudget::by_iterations(3)),
+            "three iterations leave deferred work");
+        check(fixture.engine.search_stats().widening_passes == 3,
+            "the iteration budget runs exactly three passes");
+        make_root(fixture, shelf_board(), "III", std::nullopt, true);
+        check(!fixture.engine.run(engine_alias::SearchBudget::by_iterations(0)),
+            "a zero iteration budget still runs the legacy single pass");
+        check(fixture.engine.search_stats().widening_passes == 1,
+            "a zero iteration budget counts exactly one pass");
+        make_root(fixture, shelf_board(), "III", std::nullopt, true);
+        check(fixture.engine.run(engine_alias::SearchBudget::by_iterations(500)),
+            "an ample iteration budget completes the search");
+        std::size_t const complete_passes = fixture.engine.search_stats().widening_passes;
+        check(fixture.engine.run(engine_alias::SearchBudget::by_iterations(500)),
+            "a completed search reports complete under a budget");
+        check(fixture.engine.search_stats().widening_passes == complete_passes,
+            "a budget counts no work after completion");
+        {
+            Fixture frozen = make_zero_fixture();
+            frozen.engine_config.clock_nanos = []() { return 0; };
+            check(frozen.engine.init(frozen.engine_config),
+                "frozen-clock fixture initializes");
+            make_root(frozen, shelf_board(), "III", std::nullopt, true);
+            check(frozen.engine.run(engine_alias::SearchBudget::by_time(1000)),
+                "a frozen clock behaves as an unbounded budget");
+            check(frozen.engine.search_complete(), "the frozen-clock search completes");
+            Fixture baseline = make_zero_fixture();
+            make_root(baseline, shelf_board(), "III", std::nullopt, true);
+            check(baseline.engine.run(500), "the deterministic baseline completes");
+            auto frozen_selection = frozen.engine.select_best();
+            auto base_selection = baseline.engine.select_best();
+            check(frozen_selection.has_value() && base_selection.has_value()
+                && frozen_selection->root_child == base_selection->root_child
+                && frozen_selection->evidence == base_selection->evidence
+                && frozen.engine.arena_size() == baseline.engine.arena_size()
+                && frozen.engine.search_stats().widening_passes
+                    == baseline.engine.search_stats().widening_passes,
+                "a frozen clock matches the deterministic budget exactly");
+        }
+        {
+            Fixture fixture_two;
+            fixture_two.policy_config.combo_table = combo_table;
+            fixture_two.policy_config.combo_table_max = 10;
+            fixture_two.policy_config.safe = 0;
+            fixture_two.policy_config.parameters = toj_policy::Parameters{};
+            fixture_two.engine_config.policy = &fixture_two.policy_config;
+            check(fixture_two.engine.init(fixture_two.engine_config),
+                "real-clock fixture initializes");
+            make_root(fixture_two, shelf_board(), "III", std::nullopt, true);
+            bool const returned = fixture_two.engine.run(
+                engine_alias::SearchBudget::by_time(50));
+            check(fixture_two.engine.search_stats().widening_passes >= 1,
+                "a real-clock budget runs at least one pass and returns");
+            (void)returned;
+        }
+        {
+            Fixture tiny = make_zero_fixture(25);
+            make_root(tiny, tetris::Board{}, "III", std::nullopt, true);
+            tiny.engine.run(engine_alias::SearchBudget::by_time(60000));
+            check(tiny.engine.arena_exhausted(),
+                "a large time budget still respects arena exhaustion");
+            check(tiny.engine.select_best().has_value(),
+                "a timed exhaustion keeps best-so-far selection");
+        }
+        {
+            Fixture fixture_three = make_zero_fixture();
+            make_root(fixture_three, shelf_board(), "III", std::nullopt, true);
+            check(fixture_three.engine.run(engine_alias::SearchBudget::by_time(
+                      std::numeric_limits<std::uint64_t>::max())),
+                "a saturating time budget completes without overflow");
+        }
+        std::println("time budget: controllable clock, legacy do-while semantics");
+    }
+
     void run_budget_tests()
     {
         std::size_t capacity = engine_alias::default_arena_capacity;
@@ -1478,6 +1580,7 @@ int main()
     run_init_validation_tests();
     run_determinism_tests();
     run_terminal_tests();
+    run_time_budget_tests();
     run_budget_tests();
     run_marker_tests();
     run_horizon_tests();
