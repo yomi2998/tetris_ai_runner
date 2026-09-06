@@ -62,11 +62,7 @@ namespace tetris_engine
         std::vector<std::pair<Board, Evaluation>>().swap(eval_memo_);
         std::vector<TranspositionEntry>().swap(transposition_);
         queue_ = Queue{};
-        stats_ = ExpansionStats{};
-        search_stats_ = SearchStats{};
-        exhausted_ = false;
-        search_stopped_ = false;
-        transposition_exhausted_ = false;
+        reset_run_state();
         std::uint64_t const allowance = engine_memory_budget - engine_fixed_workspace;
         if (config_.arena_capacity > max_nodes
             || config_.arena_capacity > allowance / sizeof(Node))
@@ -85,14 +81,16 @@ namespace tetris_engine
         child_buffer_.reserve(max_children_per_parent);
         eval_memo_.reserve(max_children_per_parent);
         transposition_.resize(transposition_entries);
-        std::uint64_t const used =
-            static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node)
-            + static_cast<std::uint64_t>(candidate_buffer_.capacity()) * sizeof(Candidate)
-            + static_cast<std::uint64_t>(child_buffer_.capacity()) * sizeof(Child)
-            + static_cast<std::uint64_t>(eval_memo_.capacity())
-                * sizeof(std::pair<Board, Evaluation>)
-            + static_cast<std::uint64_t>(transposition_.capacity())
-                * sizeof(TranspositionEntry);
+        queue_.pieces.reserve(max_queue_length);
+        queue_.boundary.reserve(max_queue_length);
+        std::uint64_t const used = engine_buffer_reservation(
+            static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node),
+            static_cast<std::uint64_t>(candidate_buffer_.capacity()) * sizeof(Candidate),
+            static_cast<std::uint64_t>(child_buffer_.capacity()) * sizeof(Child),
+            static_cast<std::uint64_t>(eval_memo_.capacity())
+                * sizeof(std::pair<Board, Evaluation>),
+            static_cast<std::uint64_t>(transposition_.capacity())
+                * sizeof(TranspositionEntry));
         if (used > engine_memory_budget)
         {
             std::vector<Node>().swap(arena_);
@@ -100,10 +98,32 @@ namespace tetris_engine
             std::vector<Child>().swap(child_buffer_);
             std::vector<std::pair<Board, Evaluation>>().swap(eval_memo_);
             std::vector<TranspositionEntry>().swap(transposition_);
+            queue_ = Queue{};
             config_.arena_capacity = 0;
             return false;
         }
         return true;
+    }
+
+    void Engine::reset_run_state()
+    {
+        max_length_ = 0;
+        width_ = 0;
+        search_complete_ = false;
+        search_stopped_ = false;
+        transposition_exhausted_ = false;
+        search_stats_ = SearchStats{};
+        heap_.reset(max_frontiers);
+        for (std::size_t i = 0; i < max_frontiers; ++i)
+        {
+            expanded_count_[i] = 0;
+            expanded_max_[i] = no_node;
+        }
+        for (auto &entry : transposition_)
+        {
+            entry = TranspositionEntry{};
+        }
+        transposition_used_ = 0;
     }
 
     NodeId Engine::set_root(Board board, PolicyState policy, Queue queue, HoldState hold)
@@ -113,31 +133,30 @@ namespace tetris_engine
         {
             return no_node;
         }
-        queue_ = std::move(queue);
+        reset_run_state();
+        queue_.pieces.clear();
+        queue_.boundary.clear();
+        for (Piece piece : queue.pieces)
+        {
+            queue_.pieces.push_back(piece);
+        }
+        for (bool bit : queue.boundary)
+        {
+            queue_.boundary.push_back(bit);
+        }
+        queue_.marker_count = queue.marker_count;
         arena_.clear();
         exhausted_ = false;
-        search_stopped_ = false;
-        transposition_exhausted_ = false;
-        search_complete_ = false;
-        search_stats_ = SearchStats{};
         eval_memo_.clear();
         child_buffer_.clear();
-        for (auto &entry : transposition_)
-        {
-            entry = TranspositionEntry{};
-        }        transposition_used_ = 0;
-        for (std::size_t i = 0; i < max_frontiers; ++i)
-        {
-            pending_root_[i] = no_node;
-            pending_count_[i] = 0;
-            expanded_count_[i] = 0;
-            expanded_max_[i] = no_node;
-        }
-        width_ = 0;
         std::size_t const pieces = queue_.pieces.size();
-        std::size_t const raw_next_length = (pieces - 1) + queue_.marker_count;
-        max_length_ = pieces - 1;
-        if (hold.piece.has_value() && (raw_next_length > 1 || !hold.locked))
+        std::size_t const next_pieces = pieces - 1;
+        std::size_t const marker_count = queue_.marker_count;
+        bool const raw_next_beyond_one = next_pieces > 1
+            || (next_pieces == 1 && marker_count >= 1)
+            || (next_pieces == 0 && marker_count >= 2);
+        max_length_ = next_pieces;
+        if (hold.piece.has_value() && (raw_next_beyond_one || !hold.locked))
         {
             ++max_length_;
         }
@@ -405,6 +424,18 @@ namespace tetris_engine
         return arena_.capacity() * sizeof(Node);
     }
 
+    std::uint64_t Engine::retained_bytes() const
+    {
+        return engine_buffer_reservation(
+            static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node),
+            static_cast<std::uint64_t>(candidate_buffer_.capacity()) * sizeof(Candidate),
+            static_cast<std::uint64_t>(child_buffer_.capacity()) * sizeof(Child),
+            static_cast<std::uint64_t>(eval_memo_.capacity())
+                * sizeof(std::pair<Board, Evaluation>),
+            static_cast<std::uint64_t>(transposition_.capacity())
+                * sizeof(TranspositionEntry));
+    }
+
     bool Engine::arena_exhausted() const
     {
         return exhausted_;
@@ -423,75 +454,6 @@ namespace tetris_engine
     SearchStats const &Engine::search_stats() const
     {
         return search_stats_;
-    }
-
-    bool Engine::value_better(NodeId a, NodeId b) const
-    {
-        double const va = arena_[a].policy.value;
-        double const vb = arena_[b].policy.value;
-        if (va != vb)
-        {
-            return va > vb;
-        }
-        return a < b;
-    }
-
-    NodeId Engine::meld(NodeId a, NodeId b)
-    {
-        if (value_better(b, a))
-        {
-            NodeId tmp = a;
-            a = b;
-            b = tmp;
-        }
-        arena_[b].pending_sibling = arena_[a].pending_child;
-        arena_[a].pending_child = b;
-        return a;
-    }
-
-    void Engine::pending_push(NodeId id, std::size_t level)
-    {
-        Node &n = arena_[id];
-        n.pending_child = no_node;
-        n.pending_sibling = no_node;
-        if (pending_root_[level] == no_node)
-        {
-            pending_root_[level] = id;
-        }
-        else
-        {
-            pending_root_[level] = meld(pending_root_[level], id);
-        }
-        ++pending_count_[level];
-    }
-
-    NodeId Engine::pending_pop_max(std::size_t level)
-    {
-        NodeId root = pending_root_[level];
-        NodeId chain = arena_[root].pending_child;
-        arena_[root].pending_child = no_node;
-        arena_[root].pending_sibling = no_node;
-        NodeId pairs = no_node;
-        while (chain != no_node)
-        {
-            NodeId c1 = chain;
-            NodeId c2 = arena_[c1].pending_sibling;
-            NodeId rest = c2 != no_node ? arena_[c2].pending_sibling : no_node;
-            NodeId pair = c2 != no_node ? meld(c1, c2) : c1;
-            arena_[pair].pending_sibling = pairs;
-            pairs = pair;
-            chain = rest;
-        }
-        NodeId acc = no_node;
-        while (pairs != no_node)
-        {
-            NodeId next = arena_[pairs].pending_sibling;
-            acc = acc == no_node ? pairs : meld(acc, pairs);
-            pairs = next;
-        }
-        pending_root_[level] = acc;
-        --pending_count_[level];
-        return root;
     }
 
     TranspositionKey Engine::build_key(Child const &child, NodeId id) const
@@ -557,6 +519,32 @@ namespace tetris_engine
         {
             return {};
         }
+        Node const &parent_node = arena_[child.parent];
+        if (parent_node.depth != 0)
+        {
+            TranspositionKey key = build_key(child, no_node);
+            TranspositionProbe probe = transposition_probe(key);
+            if (search_stopped_)
+            {
+                return {};
+            }
+            if (probe.merged)
+            {
+                ++search_stats_.transposition_merges;
+                return { true, probe.node };
+            }
+            NodeId id = materialize(child);
+            if (id == no_node)
+            {
+                return {};
+            }
+            probe.slot->key = key;
+            probe.slot->node = id;
+            probe.slot->used = true;
+            ++transposition_used_;
+            ++search_stats_.materialized_nodes;
+            return { false, id };
+        }
         NodeId id = materialize(child);
         if (id == no_node)
         {
@@ -584,8 +572,14 @@ namespace tetris_engine
 
     void Engine::promote(std::size_t level)
     {
-        NodeId id = pending_pop_max(level);
+        NodeId id = heap_.pop_max(level);
         ++search_stats_.expanded_parents;
+        ++expanded_count_[level];
+        if (expanded_max_[level] == no_node
+            || arena_[id].policy.value > arena_[expanded_max_[level]].policy.value)
+        {
+            expanded_max_[level] = id;
+        }
         if (!expand_parent(id))
         {
             search_stopped_ = true;
@@ -600,7 +594,7 @@ namespace tetris_engine
             MaterializeOutcome outcome = search_materialize(child);
             if (search_stopped_ || exhausted_)
             {
-                return;
+                break;
             }
             if (outcome.merged)
             {
@@ -617,17 +611,11 @@ namespace tetris_engine
                 ++count;
                 ++expected;
             }
-            pending_push(outcome.id, child_level);
+            heap_.push(outcome.id, child_level);
         }
         if (first != no_node)
         {
             link_children(id, first, count);
-        }
-        ++expanded_count_[level];
-        if (expanded_max_[level] == no_node
-            || arena_[id].policy.value > arena_[expanded_max_[level]].policy.value)
-        {
-            expanded_max_[level] = id;
         }
     }
 
@@ -654,7 +642,7 @@ namespace tetris_engine
                 MaterializeOutcome outcome = search_materialize(child);
                 if (search_stopped_ || exhausted_)
                 {
-                    return;
+                    break;
                 }
                 if (outcome.merged)
                 {
@@ -671,7 +659,7 @@ namespace tetris_engine
                     ++count;
                     ++expected;
                 }
-                pending_push(outcome.id, max_length_);
+                heap_.push(outcome.id, max_length_);
             }
             if (first != no_node)
             {
@@ -700,7 +688,7 @@ namespace tetris_engine
         bool complete = true;
         for (std::size_t level = max_length_; level >= 1; --level)
         {
-            if (pending_count_[level] == 0)
+            if (heap_.size(level) == 0)
             {
                 continue;
             }
@@ -710,11 +698,15 @@ namespace tetris_engine
             std::size_t const hold = std::max<std::size_t>(1, static_cast<std::size_t>(quota));
             if (expanded_count_[level] >= hold)
             {
-                NodeId const top = pending_root_[level];
+                NodeId const top = heap_.best(level);
                 if (expanded_max_[level] != no_node
                     && arena_[expanded_max_[level]].policy.value < arena_[top].policy.value)
                 {
                     promote(level);
+                    if (search_stopped_ || exhausted_)
+                    {
+                        return;
+                    }
                 }
                 else
                 {
@@ -723,7 +715,7 @@ namespace tetris_engine
             }
             else
             {
-                while (expanded_count_[level] < hold && pending_count_[level] > 0)
+                while (expanded_count_[level] < hold && heap_.size(level) > 0)
                 {
                     promote(level);
                     if (search_stopped_ || exhausted_)
@@ -740,7 +732,7 @@ namespace tetris_engine
         std::size_t total_pending = 0;
         for (std::size_t i = 0; i <= max_length_; ++i)
         {
-            total_pending += pending_count_[i];
+            total_pending += heap_.size(i);
         }
         search_stats_.pending_occupancy = total_pending;
     }
@@ -767,7 +759,7 @@ namespace tetris_engine
         NodeId best = no_node;
         for (std::size_t i = 0; i <= max_length_; ++i)
         {
-            NodeId wait_best = pending_count_[i] > 0 ? pending_root_[i] : no_node;
+            NodeId wait_best = heap_.size(i) > 0 ? heap_.best(i) : no_node;
             NodeId sort_best = expanded_max_[i];
             if (wait_best == no_node)
             {

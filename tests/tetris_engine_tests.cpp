@@ -5,7 +5,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <print>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -841,8 +843,20 @@ namespace
         variant.state.t2_value = 4;
         differs(variant, "t2 value difference splits the key");
         variant = base;
+        variant.state.t3_value = 4;
+        differs(variant, "t3 value difference splits the key");
+        variant = base;
         variant.state.death = 1;
         differs(variant, "death difference splits the key");
+        variant = base;
+        variant.state.under_attack = 1;
+        differs(variant, "under-attack difference splits the key");
+        variant = base;
+        variant.state.map_rise = 1;
+        differs(variant, "map-rise difference splits the key");
+        variant = base;
+        variant.state.b2b = 1;
+        differs(variant, "b2b difference splits the key");
         variant = base;
         std::array<std::uint16_t, 48> other_rows = {};
         other_rows[0] = 0x080;
@@ -1085,6 +1099,234 @@ namespace
     }
 
 
+    void run_pending_heap_tests()
+    {
+        std::vector<engine_alias::Node> arena;
+        engine_alias::PendingHeap heap(arena);
+        arena.resize(600);
+        for (std::size_t i = 0; i < arena.size(); ++i)
+        {
+            arena[i].policy.value = static_cast<double>(i % 7);
+        }
+        heap.reset(3);
+        for (std::size_t i = 0; i < 500; ++i)
+        {
+            heap.push(static_cast<engine_alias::NodeId>(i), 1);
+        }
+        check(heap.size(1) == 500, "long sibling chain tracks its size");
+        bool ordered = true;
+        double last_value = 0;
+        engine_alias::NodeId last_id = 0;
+        bool first = true;
+        for (std::size_t n = 500; n > 0; --n)
+        {
+            engine_alias::NodeId id = heap.pop_max(1);
+            double const value = arena[id].policy.value;
+            if (first)
+            {
+                first = false;
+            }
+            else if (value > last_value
+                || (value == last_value && id < last_id))
+            {
+                ordered = false;
+            }
+            last_value = value;
+            last_id = id;
+        }
+        check(ordered, "repeated extract-max orders value then node id");
+        check(heap.size(1) == 0, "drained heap reports zero");
+        for (auto &node : arena)
+        {
+            node.policy.value = 0.0;
+        }
+        heap.reset(2);
+        for (std::size_t i = 0; i < 300; ++i)
+        {
+            heap.push(static_cast<engine_alias::NodeId>(i), 0);
+        }
+        bool id_order = true;
+        for (engine_alias::NodeId expected = 0; expected < 300; ++expected)
+        {
+            if (heap.pop_max(0) != expected)
+            {
+                id_order = false;
+            }
+        }
+        check(id_order, "equal scores extract in ascending node id order");
+        heap.push(5, 0);
+        heap.push(9, 1);
+        check(heap.size(0) == 1 && heap.size(1) == 1,
+            "frontier heaps stay independent");
+        std::println("pending heap: equal scores, long chains, repeated extraction");
+    }
+
+    void run_memory_accounting_tests()
+    {
+        Fixture fixture = make_fixture();
+        check(fixture.engine.retained_bytes() <= engine_alias::engine_memory_budget,
+            "retained bytes stay within the budget");
+        engine_alias::Queue fat;
+        fat.pieces.reserve(1u << 20);
+        fat.boundary.reserve(1u << 20);
+        fat.pieces.push_back(tetris::Piece::T);
+        fat.boundary.push_back(false);
+        toj_policy::State state;
+        engine_alias::HoldState hold;
+        check(fixture.engine.set_root(tetris::Board{}, state, std::move(fat), hold)
+            != engine_alias::no_node,
+            "an oversized-reservation queue is accepted");
+        check(fixture.engine.queue().pieces.capacity() <= engine_alias::max_queue_length,
+            "adopted piece storage is bounded");
+        check(fixture.engine.queue().boundary.capacity() <= engine_alias::max_queue_length,
+            "adopted boundary storage is bounded");
+        check(fixture.engine.retained_bytes() <= engine_alias::engine_memory_budget,
+            "retained bytes stay bounded after adoption");
+        std::println("memory accounting: complete inventory, bounded adoption");
+    }
+
+    void run_marker_boundary_tests()
+    {
+        Fixture fixture = make_zero_fixture();
+        auto direct = [&](std::size_t markers) {
+            engine_alias::Queue queue;
+            queue.pieces = { tetris::Piece::T, tetris::Piece::I };
+            queue.boundary = { false, false };
+            queue.marker_count = markers;
+            toj_policy::State state;
+            engine_alias::HoldState hold;
+            hold.piece = tetris::Piece::I;
+            hold.locked = true;
+            return fixture.engine.set_root(tetris::Board{}, state, std::move(queue), hold);
+        };
+        std::size_t const huge = std::numeric_limits<std::size_t>::max();
+        check(direct(0) != engine_alias::no_node && fixture.engine.frontier_count() == 2,
+            "zero markers keep the locked-hold horizon");
+        check(direct(1) != engine_alias::no_node && fixture.engine.frontier_count() == 3,
+            "one marker extends the horizon");
+        check(direct(2) != engine_alias::no_node && fixture.engine.frontier_count() == 3,
+            "two markers extend the horizon");
+        check(direct(huge) != engine_alias::no_node
+            && fixture.engine.frontier_count() == 3,
+            "saturating marker count extends without overflow");
+        check(direct(huge - 1) != engine_alias::no_node
+            && fixture.engine.frontier_count() == 3,
+            "near-saturating marker count extends without overflow");
+        std::println("marker boundary: overflow-free raw-next predicate");
+    }
+
+    void run_reinit_tests()
+    {
+        Fixture fixture = make_zero_fixture();
+        make_root(fixture, shelf_board(), "III", std::nullopt, true);
+        check(fixture.engine.run(500), "search completes before reinitialization");
+        check(fixture.engine.init(fixture.engine_config), "successful reinitialization");
+        check(!fixture.engine.search_complete(), "reinitialization clears completion");
+        check(!fixture.engine.select_best().has_value(),
+            "reinitialization clears stale selection");
+        check(fixture.engine.arena_size() == 0, "reinitialization clears the arena");
+        std::size_t const good_capacity = fixture.engine_config.arena_capacity;
+        fixture.engine_config.arena_capacity = engine_alias::max_nodes + 1;
+        check(!fixture.engine.init(fixture.engine_config), "rejected reinitialization");
+        check(!fixture.engine.search_complete(), "rejected reinit clears completion");
+        check(!fixture.engine.select_best().has_value(),
+            "rejected reinit clears stale selection");
+        fixture.engine_config.arena_capacity = good_capacity;
+        check(fixture.engine.init(fixture.engine_config), "restored reinitialization");
+        make_root(fixture, shelf_board(), "III", std::nullopt, true);
+        check(fixture.engine.run(500), "search runs after reinitialization");
+        std::println("reinitialization: run state resets on success and rejection");
+    }
+
+    void run_exhaustion_projection_tests()
+    {
+        Fixture fixture = make_zero_fixture(25);
+        engine_alias::NodeId root = make_root(fixture, tetris::Board{}, "III",
+            std::nullopt, true);
+        check(root != engine_alias::no_node, "exhaustion projection root takes");
+        fixture.engine.run(500);
+        check(fixture.engine.arena_exhausted(), "the small arena exhausts");
+        auto selection = fixture.engine.select_best();
+        check(selection.has_value(), "the promoted parent stays selectable");
+        if (!selection.has_value())
+        {
+            return;
+        }
+        auto const *evidence = fixture.engine.node(selection->evidence);
+        bool dominated = false;
+        for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
+        {
+            auto const *node = fixture.engine.node(static_cast<engine_alias::NodeId>(id));
+            if (node->depth != evidence->depth)
+            {
+                continue;
+            }
+            if (node->policy.value > evidence->policy.value
+                || (node->policy.value == evidence->policy.value
+                    && id < static_cast<std::size_t>(selection->evidence)))
+            {
+                dominated = true;
+            }
+        }
+        check(!dominated,
+            "no same-depth node beats the selected evidence under the tie-break");
+        check(fixture.engine.node(selection->root_child)->parent == 0,
+            "exhausted selection attributes to a root child");
+        std::println("exhaustion projection: best evidence and attribution preserved");
+    }
+
+    void run_adapter_order_tests()
+    {
+        std::vector<tetris::Board> boards;
+        boards.push_back(tetris::Board{});
+        boards.push_back(shelf_board());
+        std::array<std::uint16_t, 48> rows = {};
+        rows[0] = 0x0ff;
+        rows[1] = 0x1ff;
+        rows[2] = 0x0f8;
+        rows[3] = 0x3c0;
+        boards.push_back(tetris::Board::from_rows(rows));
+        toj_alias::MovementConfig config;
+        bool keys_strict = true;
+        std::size_t total = 0;
+        for (auto const &board : boards)
+        {
+            for (tetris::Piece piece : { tetris::Piece::T, tetris::Piece::Z, tetris::Piece::S,
+                     tetris::Piece::J, tetris::Piece::L, tetris::Piece::O, tetris::Piece::I })
+            {
+                std::vector<tetris::Candidate> buffer(toj_alias::max_candidates_per_source());
+                auto batch = toj_alias::enumerate_candidates_into(board, piece, config,
+                    std::span<tetris::Candidate>(buffer));
+                check(batch.has_value(), "candidate batch stays within the domain bound");
+                if (!batch.has_value())
+                {
+                    continue;
+                }
+                total += batch->count;
+                for (std::size_t i = 1; i < batch->count; ++i)
+                {
+                    auto const &prev = buffer[i - 1];
+                    auto const &cur = buffer[i];
+                    auto const prev_cells = *toj_alias::cells(piece, prev.placement);
+                    auto const cur_cells = *toj_alias::cells(piece, cur.placement);
+                    int const prev_arrival =
+                        piece == tetris::Piece::T ? static_cast<int>(prev.arrival) : 0;
+                    int const cur_arrival =
+                        piece == tetris::Piece::T ? static_cast<int>(cur.arrival) : 0;
+                    bool const increasing = prev_cells < cur_cells
+                        || (prev_cells == cur_cells && prev_arrival < cur_arrival);
+                    if (!increasing)
+                    {
+                        keys_strict = false;
+                    }
+                }
+            }
+        }
+        check(keys_strict, "distinct candidates never share a canonical key");
+        check(total > 0, "adapter order probe enumerates candidates");
+        std::println("adapter order: canonical keys strictly increasing, {} candidates", total);
+    }
+
     void run_budget_tests()
     {
         std::size_t capacity = engine_alias::default_arena_capacity;
@@ -1125,6 +1367,12 @@ int main()
     run_projection_tests();
     run_search_exhaustion_tests();
     run_search_determinism_tests();
+    run_pending_heap_tests();
+    run_memory_accounting_tests();
+    run_marker_boundary_tests();
+    run_reinit_tests();
+    run_exhaustion_projection_tests();
+    run_adapter_order_tests();
     std::println("tetris_engine_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }
