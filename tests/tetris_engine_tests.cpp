@@ -760,6 +760,68 @@ namespace
         std::println("init validation: limits reject before allocation");
     }
 
+    void run_cache_budget_rejection_tests()
+    {
+        auto base_config = [](Fixture &fixture) {
+            fixture.policy_config.combo_table = combo_table;
+            fixture.policy_config.combo_table_max = 10;
+            fixture.policy_config.safe = 5;
+            fixture.policy_config.parameters = toj_policy::Parameters::production_defaults();
+            fixture.engine_config.policy = &fixture.policy_config;
+            fixture.engine_config.cache.layout = engine_alias::CacheConfig::Layout::SetAssociative;
+            fixture.engine_config.cache.ways = 4;
+        };
+        {
+            Fixture fixture;
+            base_config(fixture);
+            fixture.engine_config.cache.entries = 1ull << 22;
+            fixture.engine_config.arena_capacity = 0;
+            check(!fixture.engine.init(fixture.engine_config),
+                "an oversized cache is rejected even with zero arena capacity");
+            check(fixture.engine.arena_reserved_bytes() == 0,
+                "the oversized cache allocates no arena");
+        }
+        {
+            Fixture fixture;
+            base_config(fixture);
+            fixture.engine_config.cache.entries =
+                std::numeric_limits<std::uint64_t>::max()
+                / sizeof(engine_alias::EvalCacheEntry);
+            fixture.engine_config.cache.ways =
+                fixture.engine_config.cache.entries;
+            fixture.engine_config.arena_capacity = 1;
+            check(!fixture.engine.init(fixture.engine_config),
+                "a reservation sum that would wrap is rejected before allocation");
+            check(fixture.engine.arena_reserved_bytes() == 0,
+                "the wrapping reservation allocates no arena");
+        }
+        {
+            Fixture fixture;
+            base_config(fixture);
+            fixture.engine_config.cache.entries = std::numeric_limits<std::uint64_t>::max();
+            fixture.engine_config.arena_capacity = 0;
+            check(!fixture.engine.init(fixture.engine_config),
+                "an entry count whose byte product overflows is rejected");
+        }
+        {
+            Fixture fixture;
+            base_config(fixture);
+            fixture.engine_config.cache.entries = 0;
+            fixture.engine_config.arena_capacity = 0;
+            check(!fixture.engine.init(fixture.engine_config),
+                "zero cache entries are rejected for an enabled cache");
+        }
+        {
+            Fixture fixture;
+            base_config(fixture);
+            fixture.engine_config.cache.ways = 0;
+            fixture.engine_config.arena_capacity = 0;
+            check(!fixture.engine.init(fixture.engine_config),
+                "zero ways are rejected for an enabled cache");
+        }
+        std::println("cache budget rejection: boundary configurations fail closed");
+    }
+
     void run_marker_tests()
     {
         auto parsed = engine_alias::parse_queue("T??");
@@ -2125,6 +2187,7 @@ int main()
     run_arena_tests();
     run_reservation_tests();
     run_init_validation_tests();
+    run_cache_budget_rejection_tests();
     run_determinism_tests();
     run_terminal_tests();
     run_time_budget_tests();

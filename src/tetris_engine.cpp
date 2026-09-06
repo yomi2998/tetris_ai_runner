@@ -81,15 +81,21 @@ namespace tetris_engine
             cache_bytes = static_cast<std::uint64_t>(config_.cache.entries)
                 * sizeof(EvalCacheEntry);
         }
-        std::uint64_t const planned = engine_buffer_reservation(0,
+        std::uint64_t const fixed_non_cache = engine_buffer_reservation(0,
             max_candidates_per_source * sizeof(Candidate),
             max_children_per_parent * sizeof(Child),
             max_children_per_parent * sizeof(std::pair<Board, Evaluation>),
             transposition_entries * sizeof(TranspositionEntry),
-            cache_bytes);
-        std::uint64_t const allowance =
-            planned <= engine_memory_budget ? engine_memory_budget - planned : 0;
-        if (!cache_geometry_ok || config_.arena_capacity > max_nodes
+            0);
+        bool const budget_ok = fixed_non_cache <= engine_memory_budget
+            && cache_bytes <= engine_memory_budget - fixed_non_cache;
+        if (!cache_geometry_ok || !budget_ok)
+        {
+            config_.arena_capacity = 0;
+            return false;
+        }
+        std::uint64_t const allowance = engine_memory_budget - fixed_non_cache - cache_bytes;
+        if (config_.arena_capacity > max_nodes
             || config_.arena_capacity > allowance / sizeof(Node))
         {
             config_.arena_capacity = 0;
