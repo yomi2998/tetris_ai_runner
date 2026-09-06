@@ -16,30 +16,55 @@ against the retained nodes.
 - Reuse candidates are the previous root's depth-one children only
   (the legacy rotation scope). The incoming turn matches at most one.
 - A match requires exact agreement on full board occupancy, all
-  policy-state fields (approved field-wise semantics), the active
-  piece, hold piece and availability, the complete remaining concrete
-  queue sequence, the remaining virtual-boundary metadata shifted
-  with the queue, and the effective horizon: the recomputed
-  `max_length` for the incoming queue, hold, and marker count must
-  equal the retained one. Boundary-bit equality alone is insufficient.
+  policy-state fields (approved field-wise semantics), hold piece
+  and availability, and the complete remaining queue: the incoming
+  piece count must equal the old count minus the played cursor
+  (queue extension takes the clean-root path in this slice), every
+  remaining piece and virtual-boundary bit must match the shifted
+  old suffix (which fixes the active piece), and the incoming raw
+  marker count must not exceed the old count (markers are consumed
+  by advancing, never created).
+- The effective horizon is checked as a consistency bound rather
+  than a strict equality. The recomputed incoming horizon must not
+  exceed the retained horizon, and it must cover the retained
+  horizon minus the played cursor. Strict equality would wrongly
+  reject the empty-hold advance: consuming two pieces shrinks the
+  base horizon by two while the newly occupied hold legitimately
+  adds one back. Both bounds hold for every legitimate turn
+  (ordinary placement, hold swap, empty-hold consumption, marked
+  queues) and reject extension, truncation, and horizon lies toward
+  the safe clean-root path.
 - On a match the matched child becomes the new root. The arena is
-  compacted in place to the retained subtree (the child and every
-  node whose first-move identity was that child), dropping nodes
-  whose new depth exceeds the new horizon. Compaction assigns new
-  ids through a scratch field inside `Node`; no additional workspace
-  is allocated. Child links are rebuilt by an ascending scan; parent
-  links, depths (shifted by one), and cursors (shifted by the played
-  cursor) are remapped; the new root keeps the matched node's own
-  board, policy state, and evaluation, never a reseeding of
-  caller-owned state.
-- Transposition entries are remapped, not cleared: depth shifts down
-  by one, cursor shifts identically, first-move identity is
-  recomputed from each retained depth-one move (the fingerprint of
-  the node's own incoming move, which the rotation preserves), and
-  entries outside the retained subtree or the new horizon are
-  dropped. The remapped entries are rehashed into fresh slots.
-  Re-expansion of retained positions therefore merges with retained
-  nodes instead of duplicating them.
+  compacted in place to the retained subtree: the child and every
+  node reachable from it through retained parent links, dropping
+  nodes whose new depth exceeds the new horizon. Compaction assigns
+  new ids through the engine-owned idmap reservation; no additional
+  workspace is allocated and the scratch capacity is unchanged by
+  the rotation. Retention is verified, not assumed: beyond the
+  identity, bound, and horizon filters, a kept node must have a
+  smaller parent id with consistent depth linkage whose parent is
+  itself retained. This drops duplicate second roots and orphans
+  instead of retaining them, so the single-root assumption below
+  cannot be violated by stale links. The target is the smallest
+  retained old id (every retained node descends from it), so it
+  compacts to id zero. Child links are rebuilt by an ascending
+  scan; parent links, depths (shifted by one), and cursors (shifted
+  by the played cursor) are remapped; the new root keeps the matched
+  node's own board, policy state, and evaluation, never a reseeding
+  of caller-owned state. Equal cursors across a link are legitimate
+  (the hold branch clamps the cursor at the queue end) and are kept.
+- Transposition entries are remapped, not cleared: entries with an
+  out-of-range or dropped node, above the old depth-one level, with
+  a cursor below the played cursor, or beyond the new horizon are
+  dropped; the rest shift depth down by one, shift cursor
+  identically, take the recomputed first-move identity of their
+  remapped node, and are rehashed into fresh slots. Fresh slots are
+  required because shifted keys probe different chains than the
+  stale ones. Boundary count, boundary bits, active piece, and hold
+  metadata need no rewrite: under the exact-queue contract the new
+  queue equals the old suffix, so every retained key already
+  describes the new queue. Re-expansion of retained positions
+  therefore merges with retained nodes instead of duplicating them.
 - The widening state restarts per legacy `update_version`: width
   returns to zero, both frontier heaps clear, expansion trackers
   reset, and every retained non-root node becomes unregistered so the
@@ -47,9 +72,21 @@ against the retained nodes.
   Retained evaluations avoid recomputation through the persistent
   cache and merged materialization; enumeration for re-expanded
   levels is redone, matching legacy.
-- The evaluation cache survives root changes; its telemetry keeps the
-  documented per-search scope. Policy or configuration
-  reinitialization clears reusable tree state through the existing
-  `init` reset path.
+- The evaluation cache keeps its entries across root changes while
+  its counters reset, preserving the documented per-search telemetry
+  scope. Policy or configuration reinitialization clears reusable
+  tree state through the existing `init` reset path, which releases
+  every buffer reservation including the idmap scratch.
 - Rejected `set_root` inputs leave the previous tree untouched so a
   later valid call can still reuse it.
+
+## Table size
+
+The transposition table holds 32,768 entries with an equal rehash
+scratch, measured as follows on the slice gate matrix in the debug
+configuration: 8,192 entries exhaust on the first three-piece
+production-policy search; 16,384 entries exhaust on the unlocked
+empty-hold variant; 32,768 entries complete every gate including
+warm-versus-cold parity and successive turns. The size stays a
+power of two for the direct-mapped probe mask and remains covered
+by the fixed workspace budget.

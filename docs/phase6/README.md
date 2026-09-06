@@ -62,24 +62,44 @@ Exact root reuse across turns:
 
 - Reuse candidates are the previous root's depth-one children. The
   incoming position matches by full occupancy, the complete policy
-  state, the active piece, hold piece and availability, the remaining
-  queue sequence, and the shifted boundary metadata; the recomputed
-  horizon is preserved through the raw-marker-count rule.
+  state, hold piece and availability, and the complete remaining
+  queue: exact remaining length (extension takes the clean-root
+  path), shifted piece and boundary metadata (fixing the active
+  piece), a raw marker count that never grows across the turn, and
+  a recomputed horizon inside the consistency bound documented in
+  `reuse_design.md`. A mismatch falls back to the clean root
+  initialization, and rejected inputs leave the live tree untouched.
 - On a match the matched child's subtree is retained: the arena is
-  compacted in place (no additional workspace beyond the idmap
-  reservation), depths and cursors shift by the played cursor, and
-  first-move identity is recomputed from each retained depth-one
-  move's fingerprint, which the rotation preserves. Transposition
-  entries are remapped (depth, cursor, node) and rehashed into fresh
-  slots; entries outside the retained subtree or the new horizon are
-  dropped. A mismatch falls back to the clean root initialization.
-- Gates: positive reuse with measurable avoided evaluation and
-  materialization work, sixteen identity negatives (including upper
-  storage rows), queue advancement through ordinary placement,
-  occupied-hold swap, empty-hold consumption, and marker cases, the
-  attribution invariant, warm-versus-cold selection and node
-  semantics parity, lifecycle coverage (multiple turns, reuse miss,
-  movement, source reinitialization), and bounded retained bytes.
+  compacted in place through the engine-owned idmap reservation
+  (no new scratch is allocated by the rotation), depths and cursors
+  shift by the played cursor, and first-move identity is recomputed
+  from each retained depth-one move's fingerprint, which the rotation
+  preserves. Retention is verified link by link (smaller parent id,
+  consistent depth linkage, retained parent), so duplicate roots and
+  orphans are dropped rather than kept. Transposition entries are
+  remapped (depth, cursor, node, recomputed identity) and rehashed
+  into fresh slots; entries outside the retained subtree or the new
+  horizon are dropped. The evaluation cache keeps its entries while
+  its counters reset to the per-search scope.
+- Gates: positive reuse with per-search telemetry reset asserted
+  before the warm run and avoided evaluation plus avoided
+  materialization work asserted separately after it, a positive
+  control plus eighteen single-component identity negatives (ten
+  policy fields, upper-storage occupancy, active piece, boundary
+  bit, hold piece and availability, shorter and extended remaining
+  sequences, invented marker), each on an independently populated
+  tree, queue advancement through ordinary placement, occupied-hold
+  swap, empty-hold consumption with a nonempty remainder, queue
+  exhaustion to a clean root, and marked queues in both directions,
+  the attribution invariant, full warm-versus-cold node parity
+  (complete evaluation and policy state plus depth, parent, played
+  piece, source, and hold wiring), lifecycle coverage (successive
+  turns with cold parity at each turn, move followed by a matching
+  reroot with scratch-transfer and no-allocation checks, rejection
+  preserving the live tree for a later reuse, shrinking
+  reinitialization releasing idmap scratch, cycled-versus-fresh
+  retained-byte equality), and bounded retained bytes under
+  separately counted arena and idmap capacities.
 
 ## Slice 6.3 scope
 
@@ -139,13 +159,16 @@ Deterministic frontier search over the slice 6.1 primitive:
   heaps (links inside `Node`); expanded sets are insert-only trackers
   (count plus best node), which covers every legacy use.
 - Same-depth transposition with exact bounded deduplication: a
-  direct-mapped linear-probe table (8,192 entries) with full-key
-  verification and no overwrite of distinct states. The key is depth,
+  direct-mapped linear-probe table (8,192 entries, resized to 32,768
+  in slice 6.5 per the measurement in `reuse_design.md`) with
+  full-key verification and
+  no overwrite of distinct states. The key is depth,
   occupancy, field-wise policy state (doubles bit-exact with `-0.0`
   normalized to `+0.0` in both equality and hashing), active piece,
   resulting hold and availability, queue cursor, remaining
-  virtual-boundary bits, and the root-child `NodeId` as first-move
-  identity. Same-depth, same-root-identity equivalents materialize
+  virtual-boundary bits, and the root-child identity as first-move
+  identity (a `NodeId` rank in slice 6.2, the rotation-stable move
+  fingerprint since slice 6.5). Same-depth, same-root-identity equivalents materialize
   once; cross-root equivalents deliberately stay separate, so no
   attribution indirection exists and projection walks the parent
   chain. Table exhaustion stops the run incomplete with best-so-far
@@ -223,7 +246,8 @@ measured structure sizes. The full 256 MiB budget is split once in
 `init` between the node arena and the fixed search workspace: the
 candidate buffer (full search-domain bound per source), the child
 buffer and evaluation memo (the same bound for both sources), the
-8,192-entry transposition table, the 257-frontier metadata arrays
+32,768-entry transposition table plus the equal rehash scratch, the
+257-frontier metadata arrays
 (pending-heap roots and counts plus the expanded trackers and width
 cache), the queue reservation, and a conservative stack peak
 allowance covering the measured kernel and expansion frames (the
@@ -235,20 +259,29 @@ the buffer reservations are conservative documented bounds (the
 queue at the 256-piece cap, the stack at a fixed peak allowance)
 rather than runtime inspection of every control allocation.
 `default_arena_capacity` is the remainder divided by measured
-`sizeof(Node)` (320 bytes; the pinned values are an 8,741,152-byte
+`sizeof(Node)` plus `sizeof(NodeId)` (320 and 4 bytes; the pinned
+values are a 27,091,232-byte
 fixed workspace including the 2,097,152-byte direct-mapped
-evaluation cache and an 811,544-node arena with the heap links, root
-identity, and played-piece fields added in slice 6.2). Every buffer is a single reservation requested before any
-storage is committed: `init` rejects capacities beyond the `NodeId`
+evaluation cache and a 744,889-node arena with the heap links, root
+identity, and played-piece fields added in slice 6.2). The arena
+and the rotation idmap are counted separately by actual capacity,
+never by substituting one capacity for the other. Every buffer is a single reservation requested before any
+storage is committed: `init` releases every previous reservation
+first (including idmap scratch and rehash storage), rejects
+capacities beyond the `NodeId`
 range or the byte allowance without allocating, re-checks the actual
-arena reservation, and rejects the whole configuration if the
+arena and idmap reservations, and rejects the whole configuration
+if the
 post-reservation total across all buffers exceeds the budget.
+Rejected configurations release scratch so they behave as
+zero-capacity engines.
 `retained_bytes()` reports the same inventory after the fact. Adopted
 queue storage is normalized: `set_root` copies at most
 `max_queue_length` pieces and boundary bits into the engine-owned
 reservations, so a caller's oversized vector capacity is never
 retained. The engine is move-constructible and non-copyable; a moved
-engine's pending heap rebinds to the destination arena, and copy and
+engine's pending heap rebinds to the destination arena and the idmap
+scratch transfers with it, and copy and
 move assignment are deleted. On the
 tested implementations the retained allocation peak equals the
 allowance because storage never grows or relocates; a standard
@@ -274,7 +307,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 879
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 1022
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -337,9 +370,27 @@ behavior with equal lookup streams; full materialized-tree parity
 layouts; reinitialization with changed evaluation parameters matching
 a fresh engine while warm-cache results differ; an
 upper-storage-domain identity case; and a seeded near-wrap stamp
-rollover gate. Mutation probes confirm
-the gates: zeroed transitions, child-cursor policy contexts, and
-danger-mask shifts all fail.
+rollover gate. The slice 6.5 repair gates add a positive reuse
+control plus eighteen single-component identity negatives over
+independently populated trees (ten policy fields, upper-storage
+occupancy, active piece, boundary bit, hold piece and availability,
+shorter and extended remaining sequences, invented marker),
+per-search telemetry reset asserted immediately after a matching
+root change, avoided materialization asserted separately from
+cache savings, full warm-versus-cold node parity over complete
+evaluation and policy state with depth, parent, played piece,
+source, and hold wiring, advancement through hold swap,
+empty-hold consumption, exhaustion to a clean root, and marked
+queues in both directions, successive turns with cold parity at
+each turn, move followed by a matching reroot with scratch
+transfer and no-allocation checks, rejection preserving the live
+tree for a later reuse, reinitialization releasing idmap scratch
+with cycled-versus-fresh retained-byte equality, and separately
+counted arena and idmap capacities. Mutation probes confirm
+the repair gates: prefix queue matching, a removed marker bound,
+a missing cache reset, and dropped idmap transfer or release each
+fail, alongside the earlier zeroed transitions, child-cursor policy
+contexts, and danger-mask shift probes.
 
 ## Kernel corner note
 
