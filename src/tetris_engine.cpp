@@ -65,6 +65,7 @@ namespace tetris_engine
         std::vector<NodeId>().swap(idmap_);
         cache_ = EvalCache{};
         queue_ = Queue{};
+        path_stats_ = PathTelemetry{};
         reset_run_state();
         bool const cache_enabled = config_.cache.layout != CacheConfig::Layout::Disabled;
         std::size_t const effective_ways =
@@ -1149,5 +1150,51 @@ namespace tetris_engine
             best = arena_[best].parent;
         }
         return SearchSelection{ best, evidence };
+    }
+
+    PathTelemetry Engine::path_telemetry() const
+    {
+        return path_stats_;
+    }
+
+    FinalResult Engine::finalize(Placement active_start)
+    {
+        FinalResult result;
+        std::optional<SearchSelection> selection = select_best();
+        if (!selection.has_value())
+        {
+            return result;
+        }
+        Node const &child = arena_[selection->root_child];
+        result.has_selection = true;
+        result.candidate = child.incoming;
+        result.played = child.played;
+        result.state = child.policy;
+        result.used_hold = child.source == BranchSource::Hold;
+        if (!child.has_incoming)
+        {
+            ++path_stats_.failures;
+            return result;
+        }
+        tetris::path::PathConfig path_config{};
+        path_config.allow_180 = config_.movement.allow_180;
+        Placement start = child.source == BranchSource::Hold
+            ? Placement::unchecked(tetris::toj::spawn_x, tetris::toj::spawn_y, 0)
+            : active_start;
+        std::int64_t const begin = now_nanos();
+        tetris::path::Pathfinder finder(arena_[0].board, child.played, start,
+            path_config);
+        result.states_expanded = finder.queue_tail;
+        result.path = finder.find(child.incoming);
+        result.elapsed_nanos = now_nanos() - begin;
+        result.path_ok = result.path.valid;
+        ++path_stats_.calls;
+        path_stats_.states_expanded += result.states_expanded;
+        path_stats_.elapsed_nanos += result.elapsed_nanos;
+        if (!result.path_ok)
+        {
+            ++path_stats_.failures;
+        }
+        return result;
     }
 }

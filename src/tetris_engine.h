@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tetris_types.h"
+#include "toj_pathfinder.h"
 #include "toj_rule.h"
 #include "toj_policy.h"
 
@@ -37,7 +38,7 @@ namespace tetris_engine
     inline constexpr std::uint8_t no_piece_code = 0xFF;
     inline constexpr std::uint64_t engine_queue_reservation =
         max_queue_length * (sizeof(Piece) + sizeof(bool));
-    inline constexpr std::uint64_t engine_stack_peak_allowance = 64ull << 10;
+    inline constexpr std::uint64_t engine_stack_peak_allowance = 128ull << 10;
 
     enum class BranchSource : std::uint8_t
     {
@@ -352,6 +353,27 @@ namespace tetris_engine
         bool operator==(SearchSelection const &) const = default;
     };
 
+    struct PathTelemetry
+    {
+        std::size_t calls = 0;
+        std::size_t states_expanded = 0;
+        std::int64_t elapsed_nanos = 0;
+        std::size_t failures = 0;
+    };
+
+    struct FinalResult
+    {
+        bool has_selection = false;
+        bool path_ok = false;
+        std::optional<Candidate> candidate;
+        Piece played = Piece::T;
+        PolicyState state;
+        bool used_hold = false;
+        tetris::path::Path path;
+        std::size_t states_expanded = 0;
+        std::int64_t elapsed_nanos = 0;
+    };
+
     inline std::uint64_t occupancy_hash(Board::occupancy_t const &occupancy)
     {
         std::uint64_t h = 1469598103934665603ull;
@@ -631,6 +653,7 @@ namespace tetris_engine
             , search_stopped_(other.search_stopped_)
             , transposition_exhausted_(other.transposition_exhausted_)
             , search_stats_(other.search_stats_)
+            , path_stats_(other.path_stats_)
         {
         }
 
@@ -676,6 +699,10 @@ namespace tetris_engine
 
         std::optional<SearchSelection> select_best() const;
 
+        FinalResult finalize(Placement active_start);
+
+        PathTelemetry path_telemetry() const;
+
     private:
         struct TranspositionProbe
         {
@@ -715,6 +742,7 @@ namespace tetris_engine
         bool search_stopped_ = false;
         bool transposition_exhausted_ = false;
         SearchStats search_stats_{};
+        PathTelemetry path_stats_{};
 
         void reset_run_state();
 

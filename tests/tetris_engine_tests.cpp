@@ -1,6 +1,7 @@
 #include "tetris_engine.h"
 #include "toj_rule.h"
 #include "toj_policy.h"
+#include "scalar_arrival_oracle.h"
 
 #include <array>
 #include <cstddef>
@@ -11,6 +12,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -99,6 +101,36 @@ namespace
         {
             rows[static_cast<std::size_t>(y)] = 0x1ff;
         }
+        return tetris::Board::from_rows(rows);
+    }
+
+    tetris::Board pocket_board()
+    {
+        std::array<std::uint16_t, 48> rows = {};
+        for (int y = 0; y < 18; ++y)
+        {
+            rows[static_cast<std::size_t>(y)] = 0x1ff;
+        }
+        rows[27] = 0x1f8;
+        for (int y = 28; y <= 31; ++y)
+        {
+            rows[static_cast<std::size_t>(y)] = 0x108;
+        }
+        rows[32] = 0x1f8;
+        return tetris::Board::from_rows(rows);
+    }
+
+    tetris::Board lip_board()
+    {
+        std::array<std::uint16_t, 48> rows = {};
+        for (int y = 0; y < 16; ++y)
+        {
+            rows[static_cast<std::size_t>(y)] = 0x1ff;
+        }
+        rows[16] = 0x1ff & ~(0x038);
+        rows[17] = 0x1ff & ~(0x038);
+        rows[18] = 0x1ff & ~(0x010);
+        rows[19] = 0x1ff;
         return tetris::Board::from_rows(rows);
     }
 
@@ -2090,6 +2122,97 @@ namespace
             && warm_node->incoming.arrival == cold_node->incoming.arrival;
     }
 
+    tetris::Placement canonical_spawn()
+    {
+        return tetris::Placement::unchecked(tetris::toj::spawn_x,
+            tetris::toj::spawn_y, 0);
+    }
+
+    bool alphabet_clean(std::string_view commands)
+    {
+        for (char command : commands)
+        {
+            if (command != 'l' && command != 'r' && command != 'd'
+                && command != 'z' && command != 'c' && command != 'x'
+                && command != 'D')
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void check_oracle_landable(tetris::Board const &board, tetris::Piece piece,
+        engine_alias::Candidate const &candidate, bool allow_180, char const *what)
+    {
+        std::array<std::uint16_t, 48> rows = {};
+        for (int y = 0; y < 48; ++y)
+        {
+            rows[static_cast<std::size_t>(y)] = board.row(y);
+        }
+        reachability::call_with_block<tetris::toj::SRS>(piece,
+            [&]<reachability::block B>() {
+                scalar_arrival::ScalarConfig oracle_config{};
+                oracle_config.allow_180 = allow_180;
+                oracle_config.allow_softdrop = true;
+                oracle_config.allow_sonicdrop = true;
+                oracle_config.allow_20g = false;
+                auto geometry = scalar_arrival::make_geometry<B>();
+                scalar_arrival::ScalarOracle<B> oracle{geometry, oracle_config, rows};
+                oracle.run(
+                    reachability::coord{tetris::toj::spawn_x, tetris::toj::spawn_y}, 0);
+                int channel = candidate.arrival
+                        == tetris::ArrivalClass::TerminalRotation
+                    ? 1
+                    : 0;
+                auto words = oracle.landable_words(channel, true);
+                int const o = candidate.placement.rotation();
+                int const x = candidate.placement.x();
+                int const y = candidate.placement.y();
+                check(o >= 0 && o < B.orientations && x >= 0
+                    && x < tetris::Board::width && y >= 0 && y < 48
+                    && (words[static_cast<std::size_t>(o)][static_cast<std::size_t>(y / 6)]
+                        & (std::uint64_t(1)
+                            << ((y % 6) * tetris::Board::width + x)))
+                        != 0,
+                    what);
+                return 0;
+            });
+    }
+
+    void check_final_replay(tetris::Board const &board, tetris::Board const &expected,
+        tetris::Piece piece, tetris::Placement start,
+        engine_alias::Candidate const &candidate, std::string_view commands,
+        bool allow_180, bool expandable, char const *what)
+    {
+        tetris::path::PathConfig path_config{};
+        path_config.allow_180 = allow_180;
+        check(alphabet_clean(commands), what);
+        check(commands.size() <= tetris::path::Path::max_payload, what);
+        auto locked = tetris::path::replay_path(board, piece, start, commands,
+            path_config, true);
+        check(locked.valid && locked.placement == candidate.placement, what);
+        if (piece == tetris::Piece::T)
+        {
+            check(locked.arrival == candidate.arrival, what);
+        }
+        auto open = tetris::path::replay_path(board, piece, start, commands,
+            path_config, false);
+        check(open.valid, what);
+        if (piece == tetris::Piece::T)
+        {
+            check(open.arrival == candidate.arrival, what);
+        }
+        auto applied = tetris::toj::apply(board, piece, candidate);
+        check(applied.has_value(), what);
+        if (applied.has_value())
+        {
+            check(applied->board.occupancy() == expected.occupancy(), what);
+            check(expandable == !applied->lockout, what);
+        }
+        check_oracle_landable(board, piece, candidate, allow_180, what);
+    }
+
     void run_cache_parity_tests()
     {
         std::vector<tetris::Board> boards;
@@ -3318,6 +3441,413 @@ namespace
         std::println("root reuse: retained subtrees, identity negatives, advancement");
     }
 
+    void run_finalize_tests()
+    {
+        toj_policy::State state;
+        engine_alias::HoldState no_hold;
+        no_hold.locked = true;
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "finalize queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "finalize root takes");
+            check(fixture.engine.path_telemetry().calls == 0,
+                "search performs no pathfinder calls");
+            check(fixture.engine.run(2000), "finalize search completes");
+            check(fixture.engine.path_telemetry().calls == 0,
+                "search and stats leave path telemetry alone");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "finalize search selects");
+            auto const *child = fixture.engine.node(selection->root_child);
+            auto const *evidence = fixture.engine.node(selection->evidence);
+            check(evidence->depth > 1,
+                "the finalized selection carries deeper evidence");
+            auto before_stats = fixture.engine.search_stats();
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(canonical_spawn());
+            auto after_stats = fixture.engine.search_stats();
+            check(after_stats.widening_passes == before_stats.widening_passes
+                && after_stats.expanded_parents == before_stats.expanded_parents
+                && after_stats.materialized_nodes == before_stats.materialized_nodes
+                && after_stats.eval_computed == before_stats.eval_computed,
+                "finalization leaves search counters alone");
+            check(result.has_selection && result.path_ok,
+                "the immediate result materializes a path");
+            check(result.candidate.has_value()
+                && result.candidate->placement == child->incoming.placement
+                && result.candidate->arrival == child->incoming.arrival,
+                "the result candidate matches the root child");
+            check(result.played == child->played,
+                "the result piece matches the root child");
+            check(same_state(result.state, child->policy),
+                "the result state matches the root child");
+            check(!result.used_hold,
+                "the current-piece result uses no hold");
+            check(result.states_expanded > 0 && result.elapsed_nanos >= 0,
+                "the result carries path telemetry");
+            check(fixture.engine.path_telemetry().calls == 1,
+                "one finalization performs one path search");
+            check(fixture.engine.path_telemetry().failures == 0,
+                "the searching finalization records no failure");
+            check(fixture.engine.path_telemetry().states_expanded
+                == result.states_expanded,
+                "engine telemetry accumulates the path search");
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                result.path.view(), true, child->expandable,
+                "the immediate path replays exactly");
+            engine_alias::FinalResult again =
+                fixture.engine.finalize(canonical_spawn());
+            check(again.path_ok
+                && again.path.view() == result.path.view(),
+                "finalization output is deterministic");
+            check(fixture.engine.path_telemetry().calls == 2,
+                "each finalization request searches once");
+            tetris::Placement shifted =
+                tetris::Placement::unchecked(2, 20, 0);
+            check(tetris::toj::fits(child->played, shifted,
+                fixture.engine.node(0)->board),
+                "the shifted start fits the root board");
+            engine_alias::FinalResult moved_start =
+                fixture.engine.finalize(shifted);
+            check(moved_start.path_ok,
+                "a non-spawn start materializes a path");
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, shifted, child->incoming,
+                moved_start.path.view(), true, child->expandable,
+                "the shifted path replays exactly");
+            check(child->incoming.arrival == tetris::ArrivalClass::Normal,
+                "the shelf selection arrives normally");
+            engine_alias::FinalResult zero_move =
+                fixture.engine.finalize(child->incoming.placement);
+            check(zero_move.path_ok && zero_move.path.size == 0,
+                "a settled start yields a valid zero-movement path");
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, child->incoming.placement, child->incoming,
+                zero_move.path.view(), true, child->expandable,
+                "the zero-movement path replays exactly");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "pocket queue parses");
+            check(fixture.engine.set_root(pocket_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "pocket root takes");
+            check(fixture.engine.run(2000), "pocket search completes");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "pocket search selects");
+            auto const *child = fixture.engine.node(selection->root_child);
+            tetris::Placement pocket_start =
+                tetris::Placement::unchecked(5, 29, 0);
+            check(tetris::toj::fits(child->played, pocket_start,
+                fixture.engine.node(0)->board),
+                "the pocket start fits the root board");
+            engine_alias::FinalResult trapped =
+                fixture.engine.finalize(pocket_start);
+            check(trapped.has_selection && !trapped.path_ok,
+                "an unreachable target fails explicitly");
+            check(!trapped.path.valid && trapped.path.size == 0,
+                "failure carries no stale commands");
+            check(fixture.engine.path_telemetry().calls == 1
+                && fixture.engine.path_telemetry().failures == 1,
+                "the failed search counts once with one failure");
+            engine_alias::FinalResult from_spawn =
+                fixture.engine.finalize(canonical_spawn());
+            check(from_spawn.path_ok,
+                "the same selection paths from spawn");
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                from_spawn.path.view(), true, child->expandable,
+                "the spawn path replays exactly");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            toj_policy::State swap_state;
+            engine_alias::HoldState hold;
+            hold.piece = tetris::Piece::I;
+            hold.locked = false;
+            check(fixture.engine.set_root(shelf_board(), swap_state,
+                std::move(*queue), hold) != engine_alias::no_node,
+                "swap root takes");
+            fixture.engine.run(2000);
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "swap search selects");
+            auto const *child = fixture.engine.node(selection->root_child);
+            check(child->source == engine_alias::BranchSource::Hold,
+                "the swap selection uses hold");
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(canonical_spawn());
+            check(result.has_selection && result.path_ok && result.used_hold,
+                "the occupied-hold result keeps the hold operation");
+            check(result.played == child->played,
+                "the swap result plays the held piece");
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                result.path.view(), true, child->expandable,
+                "the swap path replays exactly");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TTI");
+            toj_policy::State empty_state;
+            engine_alias::HoldState empty_hold;
+            check(fixture.engine.set_root(lip_board(), empty_state,
+                std::move(*queue), empty_hold) != engine_alias::no_node,
+                "equal-piece root takes");
+            check(fixture.engine.run(2000), "equal-piece search completes");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "equal-piece search selects");
+            auto const *child = fixture.engine.node(selection->root_child);
+            check(child->source == engine_alias::BranchSource::Hold
+                && child->cursor == 2,
+                "the equal-piece selection consumes two pieces");
+            check(child->hold.piece.has_value()
+                && *child->hold.piece == child->played,
+                "the hold piece equals the played piece");
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(canonical_spawn());
+            check(result.has_selection && result.path_ok && result.used_hold,
+                "equal pieces keep the hold operation");
+            check(result.candidate.has_value()
+                && result.candidate->arrival
+                    == tetris::ArrivalClass::TerminalRotation,
+                "the equal-piece selection arrives terminally");
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                result.path.view(), true, child->expandable,
+                "the equal-piece path replays exactly");
+            auto open = tetris::path::replay_path(fixture.engine.node(0)->board,
+                child->played, canonical_spawn(), result.path.view(),
+                tetris::path::PathConfig{}, false);
+            check(open.valid
+                && open.arrival == tetris::ArrivalClass::TerminalRotation,
+                "the equal-piece path travels the terminal channel");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TST");
+            check(queue.has_value(), "spin queue parses");
+            check(fixture.engine.set_root(lip_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "spin root takes");
+            check(fixture.engine.run(2000), "spin search completes");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "spin search selects");
+            auto const *child = fixture.engine.node(selection->root_child);
+            check(child->incoming.arrival
+                == tetris::ArrivalClass::TerminalRotation,
+                "the spin selection arrives terminally");
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(canonical_spawn());
+            check(result.has_selection && result.path_ok,
+                "the spin result materializes a path");
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                result.path.view(), true, child->expandable,
+                "the spin path replays exactly");
+            auto open = tetris::path::replay_path(fixture.engine.node(0)->board,
+                child->played, canonical_spawn(), result.path.view(),
+                tetris::path::PathConfig{}, false);
+            check(open.valid
+                && open.arrival == tetris::ArrivalClass::TerminalRotation,
+                "the spin path travels the terminal channel");
+        }
+        {
+            Fixture fixture = make_fixture();
+            fixture.engine_config.movement.allow_180 = false;
+            check(fixture.engine.init(fixture.engine_config),
+                "180-off fixture initializes");
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "180-off queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "180-off root takes");
+            check(fixture.engine.run(2000), "180-off search completes");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "180-off search selects");
+            auto const *child = fixture.engine.node(selection->root_child);
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(canonical_spawn());
+            check(result.has_selection && result.path_ok,
+                "the 180-off result materializes a path");
+            bool spin_free = true;
+            for (char command : result.path.view())
+            {
+                if (command == 'x')
+                {
+                    spin_free = false;
+                }
+            }
+            check(spin_free, "the 180-off path uses no 180 rotation");
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                result.path.view(), false, child->expandable,
+                "the 180-off path replays exactly");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "lifecycle queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "lifecycle root takes");
+            check(fixture.engine.run(2000), "lifecycle search completes");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "lifecycle search selects");
+            auto const *child = fixture.engine.node(selection->root_child);
+            engine_alias::Queue next =
+                remaining_queue(fixture.engine.queue(), child->cursor);
+            check(fixture.engine.set_root(child->board, child->policy,
+                std::move(next), child->hold) != engine_alias::no_node,
+                "lifecycle second turn reroots");
+            check(fixture.engine.path_telemetry().calls == 0,
+                "reroot performs no pathfinder calls");
+            check(fixture.engine.run(2000), "lifecycle second search completes");
+            engine_alias::FinalResult warm =
+                fixture.engine.finalize(canonical_spawn());
+            check(warm.has_selection && warm.path_ok,
+                "finalization follows successful reuse");
+            auto const *warm_child = fixture.engine.node(
+                fixture.engine.select_best()->root_child);
+            check_final_replay(fixture.engine.node(0)->board, warm_child->board,
+                warm_child->played, canonical_spawn(), warm_child->incoming,
+                warm.path.view(), true, warm_child->expandable,
+                "the post-reuse path replays exactly");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "partial queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "partial root takes");
+            fixture.engine.run(2);
+            check(!fixture.engine.search_complete(),
+                "the partial search stays incomplete");
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(canonical_spawn());
+            check(result.has_selection && result.path_ok,
+                "finalization follows a partial search");
+            auto selection = fixture.engine.select_best();
+            auto const *child = fixture.engine.node(selection->root_child);
+            check_final_replay(fixture.engine.node(0)->board, child->board,
+                child->played, canonical_spawn(), child->incoming,
+                result.path.view(), true, child->expandable,
+                "the partial path replays exactly");
+        }
+        {
+            Fixture fixture = make_fixture(37);
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "exhausted queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "exhausted root takes");
+            fixture.engine.run(2);
+            check(fixture.engine.arena_exhausted(),
+                "the small arena exhausts");
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(canonical_spawn());
+            check(result.has_selection,
+                "finalization follows exhaustion");
+            check(fixture.engine.path_telemetry().calls == 1,
+                "the exhausted finalization searches once");
+            if (result.path_ok)
+            {
+                auto selection = fixture.engine.select_best();
+                auto const *child = fixture.engine.node(selection->root_child);
+                check_final_replay(fixture.engine.node(0)->board, child->board,
+                    child->played, canonical_spawn(), child->incoming,
+                    result.path.view(), true, child->expandable,
+                    "the exhausted path replays exactly");
+            }
+            else
+            {
+                check(!result.path.valid && result.path.size == 0,
+                    "exhausted failure carries no stale commands");
+            }
+        }
+        {
+            Fixture source = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "move queue parses");
+            check(source.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "move root takes");
+            check(source.engine.run(2000), "move search completes");
+            engine_alias::FinalResult before =
+                source.engine.finalize(canonical_spawn());
+            check(before.path_ok, "the source finalizes before moving");
+            engine_alias::Engine moved(std::move(source.engine));
+            check(moved.path_telemetry().calls == 1,
+                "the move transfers path telemetry");
+            engine_alias::FinalResult after =
+                moved.finalize(canonical_spawn());
+            check(after.path_ok
+                && after.path.view() == before.path.view(),
+                "the moved engine finalizes identically");
+            check(source.engine.init(source.engine_config),
+                "the source reinitializes after the move");
+            engine_alias::FinalResult cleared =
+                source.engine.finalize(canonical_spawn());
+            check(!cleared.has_selection
+                && source.engine.path_telemetry().calls == 0,
+                "reinitialization clears selection and telemetry");
+        }
+        {
+            Fixture fixture = make_fixture(0);
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "zero-capacity queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) == engine_alias::no_node,
+                "zero capacity takes no root");
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(canonical_spawn());
+            check(!result.has_selection && !result.path_ok,
+                "an empty engine finalizes without selection");
+            check(fixture.engine.path_telemetry().calls == 0,
+                "an empty finalization performs no path search");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "invalid-start queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "invalid-start root takes");
+            check(fixture.engine.run(2000), "invalid-start search completes");
+            tetris::Placement buried =
+                tetris::Placement::unchecked(4, 10, 0);
+            engine_alias::FinalResult result =
+                fixture.engine.finalize(buried);
+            check(result.has_selection && !result.path_ok,
+                "an unfitting start fails explicitly");
+            check(!result.path.valid && result.path.size == 0,
+                "an unfitting failure carries no stale commands");
+            check(!tetris::Placement::try_make(10, 47, 0).has_value()
+                && !tetris::Placement::try_make(4, 48, 0).has_value()
+                && !tetris::Placement::try_make(4, 20, 4).has_value(),
+                "out-of-range starts are unrepresentable");
+            engine_alias::FinalResult ranged =
+                fixture.engine.finalize(tetris::Placement::unchecked(9, 47, 3));
+            check(ranged.has_selection,
+                "the sky-corner start finalizes a searched selection");
+            check(fixture.engine.path_telemetry().calls == 2
+                && fixture.engine.path_telemetry().failures == 1,
+                "searches count once with only real failures");
+            check(fixture.engine.retained_bytes()
+                <= engine_alias::engine_memory_budget,
+                "finalize flows stay within the budget");
+            check(3 * sizeof(tetris::path::Pathfinder) + sizeof(tetris::path::Path)
+                <= engine_alias::engine_stack_peak_allowance,
+                "the pathfinder worst-case peak fits the stack allowance");
+        }
+        std::println("finalize: selected result with exact replayed path");
+    }
+
     void run_budget_tests()
     {
         std::size_t capacity = engine_alias::default_arena_capacity;
@@ -3372,6 +3902,7 @@ int main()
     run_cache_parity_tests();
     run_cache_counter_tests();
     run_reuse_tests();
+    run_finalize_tests();
     std::println("tetris_engine_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }
