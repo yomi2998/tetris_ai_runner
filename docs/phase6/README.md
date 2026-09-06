@@ -6,6 +6,41 @@ new rule adapter, fast-reachability enumeration, and
 `toj_policy::Policy`. The legacy template engine is unchanged and
 production targets still use it.
 
+## Slice 6.4 scope
+
+Bounded board-evaluation cache with explicit identity and lifecycle:
+
+- The cache stores `Evaluation` by value keyed on logical occupancy;
+  policy transitions stay per surviving branch and policy state is
+  not part of the key. The parent-local per-expansion memo stays in
+  front of the cache in every configuration, including disabled.
+- `EvalCache` hashes the eight logical occupancy words with the same
+  FNV primitive family as the transposition key (no raw bytes, no
+  padding), and every hit verifies the full packed occupancy before
+  returning; a hash match alone never returns an evaluation. Entries
+  are value-only: no pointers into replaceable slots are exposed or
+  stored.
+- Storage is a fixed vector reserved during `init` and covered by
+  the memory budget; nothing allocates or grows in the search loop.
+  Replacement fills empty ways first, then replaces the lowest stamp
+  (ties to the lowest index), which is deterministic under the
+  deterministic access order; the 64-bit stamp does not roll over.
+  Cache clearing rides on `init`/policy reinitialization, and cache
+  contents intentionally survive `set_root` as groundwork for root
+  reuse without implementing it.
+- Telemetry distinguishes board-evaluation requests, local memo
+  hits, cache requests, hits, misses, replacements, and actual
+  evaluations; with the cache enabled every miss computes exactly
+  one evaluation and requests split into memo hits and cache
+  lookups.
+- Layout selection is measured, not assumed: at an equal 2,097,152
+  byte budget (16,384 entries), direct-mapped beat set-associative-4
+  by median wall time (78.29 versus 78.47 ms per 16-board workload)
+  and both beat disabled (80.07 ms) with a 52 percent cache hit rate
+  reducing evaluations 122,232 to 73,980 at identical completed work
+  (4,412 passes, arena 8,193). Direct-mapped is the production
+  default. Full data in `cache_benchmark.txt`.
+
 ## Slice 6.3 scope
 
 Timed and iteration budgets on the shared search machinery:
@@ -137,9 +172,9 @@ One-parent expansion primitive with queue and hold representation:
 Deferred from slice 6.1, now delivered in 6.2: widening, beam
 pruning (quota-based deferral only, no permanent pruning), and
 best-root projection. Deferred from 6.2, now delivered in 6.3: timed
-budgets. Still deferred to later slices: root reuse, final-path
-materialization, persistent evaluation cache tuning, and production
-cutover.
+budgets. Deferred from 6.3, now delivered in 6.4: the bounded
+board-evaluation cache. Still deferred to later slices: root reuse,
+final-path materialization, and production cutover.
 
 ## Memory derivation
 
@@ -160,8 +195,9 @@ the buffer reservations are conservative documented bounds (the
 queue at the 256-piece cap, the stack at a fixed peak allowance)
 rather than runtime inspection of every control allocation.
 `default_arena_capacity` is the remainder divided by measured
-`sizeof(Node)` (320 bytes; the pinned values are a 6,644,000-byte
-fixed workspace and an 818,098-node arena with the heap links, root
+`sizeof(Node)` (320 bytes; the pinned values are an 8,741,152-byte
+fixed workspace including the 2,097,152-byte direct-mapped
+evaluation cache and an 811,544-node arena with the heap links, root
 identity, and played-piece fields added in slice 6.2). Every buffer is a single reservation requested before any
 storage is committed: `init` rejects capacities beyond the `NodeId`
 range or the byte allowance without allocating, re-checks the actual
@@ -193,13 +229,12 @@ invalidated only by root replacement; callers still re-fetch by
 id after any mutation. Small capacities prove fail-closed
 materialization with exhaustion reporting and correct best-so-far
 attribution. The
-persistent cache share of the total budget arrives with the cache
-slice; the frontier, transposition, and scratch shares are part of
+persistent evaluation cache share of the total budget is part of
 the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 677
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 741
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -246,6 +281,17 @@ best-so-far selection, and a saturating budget without overflow.
 A clock-move gate arms a callable whose copy throws after
 initialization and proves the engine move transfers it without
 copying, with the destination completing a timed search.
+The slice 6.4 gates add direct EvalCache probes: a forced same-set
+collision between distinct boards never returning a false hit,
+exact verification, lowest-stamp replacement in a four-way set,
+repeated hits, clear invalidating entries and counters; cache
+parity gates proving disabled, direct-mapped, and set-associative
+runs produce identical selections and arena sizes on the same
+workload; counter accounting (requests split into memo hits and
+cache lookups, misses equal to computed evaluations, disabled runs
+reporting zero cache counters); byte-allowance rejection
+participating the cache reservation; and cache correctness across
+engine movement and reinitialization.
 Mutation probes confirm
 the gates: zeroed transitions, child-cursor policy contexts, and
 danger-mask shifts all fail.

@@ -1,0 +1,37 @@
+# Slice 6.4 board-evaluation cache benchmark
+# Recorded: 2026-09-06T15:09:48+08:00
+# Machine: AMD Ryzen 7 7700, pinned core: taskset -c 6, governor: powersave
+# Compiler: g++ (GCC) 16.2.1 20260810
+# Build: linux-gcc-self-release preset (-O3 -march=native -flto -DNDEBUG), binary: eval_cache_bench
+# Workload: 16 deterministic seeded boards, queue III, hold empty+locked, 300 iterations per search, per-search steady_clock timing
+# Byte budgets: 2,097,152 bytes for BOTH cached variants (16384 entries x 128-byte entry); disabled variant has no cache storage
+# Arena capacity and search workload identical across variants; parent-local per-expansion memo kept in front of the cache in all variants
+# Warmup: 1 sweep; measured: 5 sweeps; fixed variant order per sweep (disabled, direct-mapped, set-associative-4)
+# Artifact hashes:
+# c42b0c7bcb660e5ead0c26cba222a5cb0f30e70a6fd694e6d9661d36859aabe7  tests/eval_cache_bench.cpp
+# f01ce4e155e74fe473e2f7f3fe192072ff68735e4b4089733cc17269934b0962  src/tetris_engine.h
+# 9091bd2aa716b89fc44dfe9bd77e443dcf11ca927628ac254544bf3267702338  src/tetris_engine.cpp
+# af39a3b79aaac6cf3ae8c0573eb2851ebda700d46d60395d679ba3915042e6da  src/toj_policy.h
+# abde8cab35d2e5b43888acf11c7d65c247274e398721b40295e0e5e04c0d9423  src/toj_policy.cpp
+# Full output:
+workload: 16 seeded boards, queue III, hold empty locked, 300 iterations per search
+variant byte budget: 2097152 bytes per cached variant (16384 entries x 128 byte entry)
+warmup: 1 sweep, measured: 5 sweeps, fixed variant order per sweep
+rep=0 variant=disabled nanos=81580955 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
+rep=0 variant=direct-mapped nanos=79482765 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+rep=0 variant=set-associative-4 nanos=79409796 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+rep=1 variant=disabled nanos=81463055 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
+rep=1 variant=direct-mapped nanos=79635197 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+rep=1 variant=set-associative-4 nanos=79870450 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+rep=2 variant=disabled nanos=81000831 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
+rep=2 variant=direct-mapped nanos=79235193 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+rep=2 variant=set-associative-4 nanos=78848199 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+rep=3 variant=disabled nanos=80869578 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
+rep=3 variant=direct-mapped nanos=79653537 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+rep=3 variant=set-associative-4 nanos=82481044 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+rep=4 variant=disabled nanos=83898506 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
+rep=4 variant=direct-mapped nanos=80063222 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+rep=4 variant=set-associative-4 nanos=79576727 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
+total variant=disabled nanos=408812925
+total variant=direct-mapped nanos=398069914
+total variant=set-associative-4 nanos=400186216
