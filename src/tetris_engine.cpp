@@ -4,7 +4,6 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
-#include <cstdio>
 
 namespace tetris_engine
 {
@@ -62,6 +61,8 @@ namespace tetris_engine
         std::vector<Child>().swap(child_buffer_);
         std::vector<std::pair<Board, Evaluation>>().swap(eval_memo_);
         std::vector<TranspositionEntry>().swap(transposition_);
+        std::vector<TranspositionEntry>().swap(transposition_rehash_);
+        std::vector<NodeId>().swap(idmap_);
         cache_ = EvalCache{};
         queue_ = Queue{};
         reset_run_state();
@@ -104,11 +105,13 @@ namespace tetris_engine
             return false;
         }
         arena_.reserve(config_.arena_capacity);
-        if (static_cast<std::uint64_t>(arena_.capacity())
-                * (sizeof(Node) + sizeof(NodeId))
+        idmap_.reserve(config_.arena_capacity);
+        if (static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node)
+                + static_cast<std::uint64_t>(idmap_.capacity()) * sizeof(NodeId)
             > allowance)
         {
             std::vector<Node>().swap(arena_);
+            std::vector<NodeId>().swap(idmap_);
             config_.arena_capacity = 0;
             return false;
         }
@@ -117,7 +120,6 @@ namespace tetris_engine
         eval_memo_.reserve(max_children_per_parent);
         transposition_.resize(transposition_entries);
         transposition_rehash_.resize(transposition_entries);
-        idmap_.reserve(config_.arena_capacity);
         queue_.pieces.reserve(max_queue_length);
         queue_.boundary.reserve(max_queue_length);
         if (config_.cache.layout != CacheConfig::Layout::Disabled)
@@ -125,8 +127,8 @@ namespace tetris_engine
             cache_.init(config_.cache.layout, config_.cache.entries, config_.cache.ways);
         }
         std::uint64_t const used = engine_buffer_reservation(
-            static_cast<std::uint64_t>(arena_.capacity())
-                * (sizeof(Node) + sizeof(NodeId)),
+            static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node)
+                + static_cast<std::uint64_t>(idmap_.capacity()) * sizeof(NodeId),
             static_cast<std::uint64_t>(candidate_buffer_.capacity()) * sizeof(Candidate),
             static_cast<std::uint64_t>(child_buffer_.capacity()) * sizeof(Child),
             static_cast<std::uint64_t>(eval_memo_.capacity())
@@ -144,6 +146,7 @@ namespace tetris_engine
             std::vector<std::pair<Board, Evaluation>>().swap(eval_memo_);
             std::vector<TranspositionEntry>().swap(transposition_);
             std::vector<TranspositionEntry>().swap(transposition_rehash_);
+            std::vector<NodeId>().swap(idmap_);
             cache_ = EvalCache{};
             queue_ = Queue{};
             config_.arena_capacity = 0;
@@ -177,7 +180,7 @@ namespace tetris_engine
     }
 
     bool Engine::reuse_matches(NodeId child, Board const &board, PolicyState const &policy,
-        Queue const &queue, HoldState hold) const
+        Queue const &queue, HoldState hold, std::size_t new_max) const
     {
         Node const &node = arena_[child];
         if (!(node.board.occupancy() == board.occupancy()))
@@ -200,7 +203,12 @@ namespace tetris_engine
         }
         std::size_t const old_size = queue_.pieces.size();
         std::size_t const played_cursor = node.cursor;
-        if (queue.pieces.size() < old_size - played_cursor
+        if (played_cursor == 0 || played_cursor > old_size
+            || played_cursor > max_length_)
+        {
+            return false;
+        }
+        if (queue.pieces.size() != old_size - played_cursor
             || queue.boundary.size() != queue.pieces.size())
         {
             return false;
@@ -216,6 +224,14 @@ namespace tetris_engine
                 return false;
             }
         }
+        if (queue.marker_count > queue_.marker_count)
+        {
+            return false;
+        }
+        if (new_max > max_length_ || new_max + played_cursor < max_length_)
+        {
+            return false;
+        }
         return true;
     }
 
@@ -226,27 +242,20 @@ namespace tetris_engine
         idmap_.resize(arena_.size());
         std::uint32_t const retained_identity = arena_[target].root_child;
         std::size_t new_count = 0;
-#ifdef SLICE65_DEBUG
-        std::fprintf(stderr, "REROOT target=%u retained_identity=%u new_max=%zu played_cursor=%zu\n",
-            target, retained_identity, new_max, played_cursor);
-#endif
         for (std::size_t old = 0; old < arena_.size(); ++old)
         {
-            Node &node = arena_[old];
-            if (node.root_child == retained_identity && node.depth >= 1
-                && node.cursor >= played_cursor && node.depth - 1 <= new_max + 1)
+            Node const &node = arena_[old];
+            bool keep = old == static_cast<std::size_t>(target);
+            if (!keep && node.root_child == retained_identity && node.depth >= 1
+                && node.cursor >= played_cursor && node.depth - 1 <= new_max + 1
+                && node.parent < old
+                && node.depth == arena_[node.parent].depth + 1
+                && idmap_[node.parent] != no_node)
             {
-                idmap_[old] = static_cast<NodeId>(new_count++);
+                keep = true;
             }
-            else
-            {
-                idmap_[old] = no_node;
-            }
+            idmap_[old] = keep ? static_cast<NodeId>(new_count++) : no_node;
         }
-#ifdef SLICE65_DEBUG
-        std::fprintf(stderr, "PASS_A matched=%zu arena_was=%zu new_max_plus1=%zu\n",
-            new_count, arena_.size(), new_max + 1);
-#endif
         for (std::size_t old = 0; old < arena_.size(); ++old)
         {
             if (idmap_[old] != no_node)
@@ -254,9 +263,6 @@ namespace tetris_engine
                 arena_[idmap_[old]] = std::move(arena_[old]);
             }
         }
-#ifdef SLICE65_DEBUG
-        std::fprintf(stderr, "COMPACTED arena_now=%zu\n", arena_.size());
-#endif
         for (std::size_t n = 0; n < new_count; ++n)
         {
             Node &node = arena_[n];
@@ -289,9 +295,13 @@ namespace tetris_engine
             {
                 continue;
             }
+            if (entry.node >= idmap_.size() || idmap_[entry.node] == no_node
+                || entry.key.depth < 2 || entry.key.cursor < played_cursor)
+            {
+                continue;
+            }
             std::size_t const new_depth = entry.key.depth - 1;
-            if (idmap_[entry.node] == no_node || entry.key.depth < 2
-                || new_depth > new_max + 1)
+            if (new_depth > new_max + 1)
             {
                 continue;
             }
@@ -336,6 +346,7 @@ namespace tetris_engine
         search_stats_ = SearchStats{};
         stats_ = ExpansionStats{};
         exhausted_ = false;
+        cache_.reset_counters();
         eval_memo_.clear();
         child_buffer_.clear();
         heap_.reset(max_frontiers);
@@ -398,7 +409,8 @@ namespace tetris_engine
             for (std::size_t id = 1; id < arena_.size(); ++id)
             {
                 if (arena_[id].depth == 1
-                    && reuse_matches(static_cast<NodeId>(id), board, policy, queue, hold))
+                    && reuse_matches(static_cast<NodeId>(id), board, policy, queue, hold,
+                        new_max))
                 {
                     return reroot(static_cast<NodeId>(id), queue, hold, new_max);
                 }
@@ -656,17 +668,6 @@ namespace tetris_engine
         node.root_child = parent_is_root
             ? first_move_fingerprint(child.played, child.candidate, child.source)
             : (parent < arena_.size() ? arena_[parent].root_child : no_node);
-#ifdef SLICE65_DEBUG
-        {
-            static std::size_t dbg = 0;
-            if (parent_is_root && dbg < 5)
-            {
-                std::fprintf(stderr, "MAT parent=%d p_ir=%d rc=%u\n",
-                    (int)parent, (int)parent_is_root, node.root_child);
-                ++dbg;
-            }
-        }
-#endif
         arena_.push_back(node);
         return static_cast<NodeId>(arena_.size() - 1);
     }
@@ -713,8 +714,8 @@ namespace tetris_engine
     std::uint64_t Engine::retained_bytes() const
     {
         return engine_buffer_reservation(
-            static_cast<std::uint64_t>(arena_.capacity())
-                * (sizeof(Node) + sizeof(NodeId)),
+            static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node)
+                + static_cast<std::uint64_t>(idmap_.capacity()) * sizeof(NodeId),
             static_cast<std::uint64_t>(candidate_buffer_.capacity()) * sizeof(Candidate),
             static_cast<std::uint64_t>(child_buffer_.capacity()) * sizeof(Child),
             static_cast<std::uint64_t>(eval_memo_.capacity())
@@ -724,6 +725,11 @@ namespace tetris_engine
             static_cast<std::uint64_t>(transposition_rehash_.capacity())
                 * sizeof(TranspositionEntry),
             static_cast<std::uint64_t>(cache_.reserved_bytes()));
+    }
+
+    std::size_t Engine::idmap_reserved_bytes() const
+    {
+        return idmap_.capacity() * sizeof(NodeId);
     }
 
     bool Engine::arena_exhausted() const
@@ -830,17 +836,6 @@ namespace tetris_engine
                 ++search_stats_.transposition_merges;
                 return { true, probe.node };
             }
-#ifdef SLICE65_DEBUG
-            if (parent_node.depth == 0)
-            {
-                std::fprintf(stderr,
-                    "LOOKUP occ0=%llu d=%d cur=%d rc=%u ap=%d hp=%d ha=%d bc=%d st=%d\n",
-                    (unsigned long long)key.occupancy.logical_word(0), (int)key.depth,
-                    (int)key.cursor, key.root_child, (int)key.active_piece,
-                    (int)key.hold_piece, (int)key.hold_available,
-                    (int)key.boundary_count, (int)(key.state.value * 1000));
-            }
-#endif
             NodeId id = materialize(child);
             if (id == no_node)
             {
@@ -860,59 +855,7 @@ namespace tetris_engine
             return {};
         }
         TranspositionKey key = build_key(child, id);
-#ifdef SLICE65_DEBUG
-        {
-            static std::size_t dbg = 0;
-            if (dbg < 6)
-            {
-                std::size_t used = 0;
-                bool found = false;
-                for (auto const &e : transposition_)
-                {
-                    if (!e.used)
-                    {
-                        continue;
-                    }
-                    ++used;
-                    if (e.key.occupancy == key.occupancy && !found)
-                    {
-                        found = true;
-                        std::fprintf(stderr,
-                            "D1SAME occ0=%llu entry(d=%d cur=%d rc=%u st=%d) key(d=%d cur=%d rc=%u st=%d)\n",
-                            (unsigned long long)key.occupancy.logical_word(0),
-                            (int)e.key.depth, (int)e.key.cursor, e.key.root_child,
-                            (int)(e.key.state.value * 100), (int)key.depth,
-                            (int)key.cursor, key.root_child,
-                            (int)(key.state.value * 100));
-                    }
-                }
-                std::fprintf(stderr, "D1LOOKUP occ0=%llu used=%zu found=%d\n",
-                    (unsigned long long)key.occupancy.logical_word(0), used, (int)found);
-                ++dbg;
-            }
-        }
-#endif
         TranspositionProbe probe = transposition_probe(key);
-#ifdef SLICE65_DEBUG
-        {
-            static std::size_t near_dbg = 0;
-            for (auto const &e : transposition_)
-            {
-                if (!e.used || !(e.key.occupancy == key.occupancy))
-                {
-                    continue;
-                }
-                if (near_dbg < 40)
-                {
-                    std::fprintf(stderr,
-                        "D1NEAR new_rc=%u entry_rc=%u new_cur=%d entry_cur=%d new_d=%d entry_d=%d\n",
-                        key.root_child, e.key.root_child, (int)key.cursor,
-                        (int)e.key.cursor, (int)key.depth, (int)e.key.depth);
-                    ++near_dbg;
-                }
-            }
-        }
-#endif
         if (search_stopped_)
         {
             return { false, id };

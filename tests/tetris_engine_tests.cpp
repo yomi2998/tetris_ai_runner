@@ -735,6 +735,8 @@ namespace
                 "capacity beyond the byte allowance is rejected");
             check(fixture.engine.arena_reserved_bytes() == 0,
                 "rejected byte allowance allocates nothing");
+            check(fixture.engine.idmap_reserved_bytes() == 0,
+                "rejected byte allowance keeps no idmap scratch");
         }
         {
             std::size_t const cache_bytes = fixtureless_cache_bytes(
@@ -1233,6 +1235,7 @@ namespace
             check(pre_move_stats.cache_requests > 0,
                 "the mid-search source has cache activity");
             std::uint64_t const pre_move_retained = source.engine.retained_bytes();
+            std::size_t const pre_move_idmap = source.engine.idmap_reserved_bytes();
             engine_alias::Engine relocated(std::move(source.engine));
             auto const post_move_stats = relocated.search_stats();
             check(post_move_stats.cache_requests == pre_move_stats.cache_requests
@@ -1241,6 +1244,8 @@ namespace
                 "a mid-search move transfers cache counters");
             check(relocated.retained_bytes() == pre_move_retained,
                 "a mid-search move preserves retained storage");
+            check(relocated.idmap_reserved_bytes() == pre_move_idmap,
+                "a mid-search move transfers idmap scratch");
             check(source.engine.init(source.engine_config),
                 "the source reinitializes after the move");
             check(relocated.run(500), "the mid-search moved engine completes");
@@ -1402,6 +1407,20 @@ namespace
             "adopted boundary storage is bounded");
         check(fixture.engine.retained_bytes() <= engine_alias::engine_memory_budget,
             "retained bytes stay bounded after adoption");
+        {
+            Fixture fresh = make_fixture(1000);
+            Fixture cycled = make_fixture();
+            check(cycled.engine.init(cycled.engine_config),
+                "default engine initializes before cycling");
+            cycled.engine_config.arena_capacity = 1000;
+            check(cycled.engine.init(cycled.engine_config),
+                "cycling to a smaller arena succeeds");
+            check(cycled.engine.idmap_reserved_bytes()
+                == fresh.engine.idmap_reserved_bytes(),
+                "cycled scratch matches a fresh engine at the same capacity");
+            check(cycled.engine.retained_bytes() == fresh.engine.retained_bytes(),
+                "cycled retained bytes match a fresh engine at the same capacity");
+        }
         std::println("memory accounting: complete inventory, bounded adoption");
     }
 
@@ -1464,6 +1483,19 @@ namespace
         check(fixture.engine.init(fixture.engine_config), "restored reinitialization");
         make_root(fixture, shelf_board(), "III", std::nullopt, true);
         check(fixture.engine.run(500), "search runs after reinitialization");
+        {
+            Fixture big = make_zero_fixture();
+            std::size_t const before_idmap = big.engine.idmap_reserved_bytes();
+            check(before_idmap > 0, "a fresh engine reserves idmap scratch");
+            big.engine_config.arena_capacity = 1000;
+            check(big.engine.init(big.engine_config), "shrinking reinit succeeds");
+            check(big.engine.idmap_reserved_bytes() < before_idmap,
+                "reinitialization releases oversized idmap scratch");
+            check(big.engine.arena_size() == 0,
+                "shrinking reinit clears the arena");
+            check(big.engine.retained_bytes() <= engine_alias::engine_memory_budget,
+                "shrunk retained bytes stay within the budget");
+        }
         std::println("reinitialization: run state resets on success and rejection");
     }
 
@@ -2218,13 +2250,29 @@ namespace
                 "rerooting does not grow the arena");
             check(fixture.engine.node(0)->first_child != engine_alias::no_node,
                 "the new root retains children");
+            {
+                auto fresh_stats = fixture.engine.search_stats();
+                check(fresh_stats.eval_requests == 0 && fresh_stats.eval_computed == 0
+                    && fresh_stats.cache_requests == 0 && fresh_stats.cache_hits == 0
+                    && fresh_stats.cache_misses == 0
+                    && fresh_stats.materialized_nodes == 0
+                    && fresh_stats.transposition_merges == 0
+                    && fresh_stats.expanded_parents == 0
+                    && fresh_stats.widening_passes == 0,
+                    "a matching root change resets per-search telemetry");
+            }
 
             check(fixture.engine.run(2000), "the warm second search completes");
             auto warm_stats = fixture.engine.search_stats();
+            check(warm_stats.cache_requests
+                == warm_stats.cache_hits + warm_stats.cache_misses,
+                "warm cache lookups split into hits and misses");
             check(warm_stats.cache_hits > 0,
                 "the warm search reuses cached evaluations");
             check(warm_stats.eval_computed < warm_stats.eval_requests,
                 "the warm search avoids evaluation work");
+            check(warm_stats.transposition_merges > 0,
+                "the warm search merges retained nodes instead of rematerializing");
 
             Fixture cold = make_fixture();
             auto cold_queue = engine_alias::parse_queue(next_text);
@@ -2237,6 +2285,8 @@ namespace
             auto cold_stats = cold.engine.search_stats();
             check(cold_stats.eval_computed > warm_stats.eval_computed,
                 "the warm search avoids evaluation work against a cold search");
+            check(cold_stats.materialized_nodes > warm_stats.materialized_nodes,
+                "the warm search materializes fewer nodes than a cold search");
             auto warm_selection = fixture.engine.select_best();
             auto cold_selection = cold.engine.select_best();
             check(warm_selection.has_value() && cold_selection.has_value()
@@ -2260,11 +2310,17 @@ namespace
             bool semantics_match = warm_prints.size() == cold_prints.size();
             for (std::size_t i = 0; i < warm_prints.size() && semantics_match; ++i)
             {
-                if (!(warm_prints[i].occupancy == cold_prints[i].occupancy)
-                    || warm_prints[i].eval_value != cold_prints[i].eval_value
-                    || warm_prints[i].state_value != cold_prints[i].state_value
-                    || warm_prints[i].state_acc != cold_prints[i].state_acc
-                    || warm_prints[i].cursor != cold_prints[i].cursor)
+                auto const *warm_node = fixture.engine.node(
+                    static_cast<engine_alias::NodeId>(i));
+                auto const *cold_node = cold.engine.node(
+                    static_cast<engine_alias::NodeId>(i));
+                if (!(warm_prints[i] == cold_prints[i])
+                    || warm_node->depth != cold_node->depth
+                    || warm_node->parent != cold_node->parent
+                    || warm_node->played != cold_node->played
+                    || warm_node->source != cold_node->source
+                    || warm_node->hold.piece != cold_node->hold.piece
+                    || warm_node->hold.locked != cold_node->hold.locked)
                 {
                     semantics_match = false;
                 }
@@ -2282,18 +2338,11 @@ namespace
                     ? engine_alias::first_move_fingerprint(node->played, node->incoming,
                         node->source)
                     : parent->root_child;
-                if (node->depth == 1)
-                {
-                    /* ordinal is implicit in ascending id */
-                }
                 if (node->root_child != expected)
                 {
                     attribution_ok = false;
                     if (bad_count < 3)
                     {
-                        std::println("ATTRBAD id={} depth={} rc={} expected={} parent={} parent_rc={}",
-                            id, node->depth, node->root_child, (std::uint64_t)expected,
-                            node->parent, parent->root_child);
                         ++bad_count;
                     }
                 }
@@ -2302,104 +2351,171 @@ namespace
                 "attribution is rooted in the new root after reuse");
         }
         {
-            Fixture fixture = make_fixture();
-            auto queue = engine_alias::parse_queue("TIS");
-            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
-                no_hold)
-                != engine_alias::no_node,
-                "identity-negative first turn takes");
-            check(fixture.engine.run(2000), "identity-negative search completes");
-            auto selection = fixture.engine.select_best();
-            check(selection.has_value(), "identity-negative selection exists");
-            auto const *child = fixture.engine.node(selection->root_child);
-            engine_alias::Queue next = remaining_queue(fixture.engine.queue(), 1);
-            engine_alias::Board board = child->board;
-            toj_policy::State policy = child->policy;
-            engine_alias::HoldState hold = child->hold;
-            auto attempt = [&](auto vary, char const *what) {
+            auto populate_shallow = [&]() {
                 Fixture f = make_fixture();
-                auto [v_board, v_policy, v_queue, v_hold] = vary(child, board, policy,
-                    next, hold);
+                auto queue = engine_alias::parse_queue("TIS");
+                check(queue.has_value(), "negative-population queue parses");
+                check(f.engine.set_root(shelf_board(), state, std::move(*queue),
+                    no_hold) != engine_alias::no_node,
+                    "negative-population root takes");
+                f.engine.run(2);
+                return f;
+            };
+            auto reuse_target = [&](Fixture &f) {
+                for (std::size_t id = 1; id < f.engine.arena_size(); ++id)
+                {
+                    auto const *node = f.engine.node(
+                        static_cast<engine_alias::NodeId>(id));
+                    if (node->depth == 1 && node->child_count > 0)
+                    {
+                        return static_cast<engine_alias::NodeId>(id);
+                    }
+                }
+                return engine_alias::no_node;
+            };
+            {
+                Fixture control = populate_shallow();
+                engine_alias::NodeId target = reuse_target(control);
+                check(target != engine_alias::no_node,
+                    "the control population expands a root child");
+                if (target != engine_alias::no_node)
+                {
+                    auto const *child = control.engine.node(target);
+                    engine_alias::Queue next = remaining_queue(control.engine.queue(),
+                        child->cursor);
+                    check(control.engine.set_root(child->board, child->policy,
+                        std::move(next), child->hold) != engine_alias::no_node,
+                        "the control position reroots");
+                    check(control.engine.arena_size() > 1,
+                        "the control reroot retains the subtree");
+                }
+            }
+            auto attempt = [&](auto vary, char const *what) {
+                Fixture f = populate_shallow();
+                engine_alias::NodeId target = reuse_target(f);
+                check(target != engine_alias::no_node, what);
+                if (target == engine_alias::no_node)
+                {
+                    return;
+                }
+                auto const *child = f.engine.node(target);
+                engine_alias::Queue next = remaining_queue(f.engine.queue(),
+                    child->cursor);
+                auto [v_board, v_policy, v_queue, v_hold] =
+                    vary(child, std::move(next));
                 check(f.engine.set_root(v_board, v_policy, std::move(v_queue), v_hold)
                     != engine_alias::no_node,
                     what);
                 check(f.engine.arena_size() == 1, what);
             };
-            auto occupancy_vary = [&](auto, auto, auto, auto queue, auto hold) {
+            auto occupancy_vary = [&](auto const *child, auto queue) {
                 std::array<std::uint16_t, 48> rows = {};
-                rows[0] = 0x001;
-                rows[40] = 0x400;
-                return std::tuple(tetris::Board::from_rows(rows), policy, queue, hold);
+                for (int y = 0; y < 48; ++y)
+                {
+                    rows[static_cast<std::size_t>(y)] = child->board.row(y);
+                }
+                for (int y = 47; y >= 0; --y)
+                {
+                    std::uint16_t &row = rows[static_cast<std::size_t>(y)];
+                    if (row != 0)
+                    {
+                        row = static_cast<std::uint16_t>(row & (row - 1));
+                        break;
+                    }
+                }
+                return std::tuple(tetris::Board::from_rows(rows), child->policy,
+                    std::move(queue), child->hold);
             };
-            auto death_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto death_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.death = 1;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto combo_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto combo_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.combo = 1;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto under_attack_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto under_attack_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.under_attack = 1;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto map_rise_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto map_rise_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.map_rise = 1;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto b2b_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto b2b_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.b2b = 1;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto t2_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto t2_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.t2_value = 7;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto t3_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto t3_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.t3_value = 7;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto acc_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto acc_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.acc_value = policy.acc_value + 1.0;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto like_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto like_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.like = policy.like + 1.0;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto value_vary = [&](auto, auto, toj_policy::State policy, auto queue, auto hold) {
+            auto value_vary = [&](auto const *child, auto queue) {
+                toj_policy::State policy = child->policy;
                 policy.value = policy.value + 1.0;
-                return std::tuple(board, policy, queue, hold);
+                return std::tuple(child->board, policy, std::move(queue), child->hold);
             };
-            auto active_vary = [&](auto, auto, auto, auto queue, auto hold) {
-                auto q = queue;
-                q.pieces[0] = q.pieces[0] == tetris::Piece::T
+            auto active_vary = [&](auto const *child, auto queue) {
+                queue.pieces[0] = queue.pieces[0] == tetris::Piece::T
                     ? tetris::Piece::I
                     : tetris::Piece::T;
-                return std::tuple(board, policy, q, hold);
+                return std::tuple(child->board, child->policy, std::move(queue),
+                    child->hold);
             };
-            auto boundary_vary = [&](auto, auto, auto, auto queue, auto hold) {
-                auto q = queue;
-                q.boundary[0] = !q.boundary[0];
-                return std::tuple(board, policy, q, hold);
+            auto boundary_vary = [&](auto const *child, auto queue) {
+                queue.boundary[0] = !queue.boundary[0];
+                return std::tuple(child->board, child->policy, std::move(queue),
+                    child->hold);
             };
-            auto hold_piece_vary = [&](auto, auto, auto, auto queue, auto hold) {
-                auto h = hold;
-                h.piece = h.piece == tetris::Piece::T
+            auto hold_piece_vary = [&](auto const *child, auto queue) {
+                engine_alias::HoldState hold = child->hold;
+                hold.piece = hold.piece == tetris::Piece::T
                     ? tetris::Piece::I
                     : tetris::Piece::T;
-                return std::tuple(board, policy, queue, h);
+                return std::tuple(child->board, child->policy, std::move(queue), hold);
             };
-            auto hold_lock_vary = [&](auto, auto, auto, auto queue, auto hold) {
-                auto h = hold;
-                h.locked = !h.locked;
-                return std::tuple(board, policy, queue, h);
+            auto hold_lock_vary = [&](auto const *child, auto queue) {
+                engine_alias::HoldState hold = child->hold;
+                hold.locked = !hold.locked;
+                return std::tuple(child->board, child->policy, std::move(queue), hold);
             };
-            auto shorter_vary = [&](auto, auto, auto, auto queue, auto hold) {
-                auto q = queue;
-                q.pieces.pop_back();
-                q.boundary.pop_back();
-                return std::tuple(board, policy, q, hold);
+            auto shorter_vary = [&](auto const *child, auto queue) {
+                queue.pieces.pop_back();
+                queue.boundary.pop_back();
+                return std::tuple(child->board, child->policy, std::move(queue),
+                    child->hold);
+            };
+            auto longer_vary = [&](auto const *child, auto queue) {
+                queue.pieces.push_back(tetris::Piece::T);
+                queue.boundary.push_back(false);
+                return std::tuple(child->board, child->policy, std::move(queue),
+                    child->hold);
+            };
+            auto marker_vary = [&](auto const *child, auto queue) {
+                queue.marker_count += 1;
+                return std::tuple(child->board, child->policy, std::move(queue),
+                    child->hold);
             };
             attempt(occupancy_vary, "an upper-row occupancy change misses reuse");
             attempt(death_vary, "a death difference misses reuse");
@@ -2417,6 +2533,8 @@ namespace
             attempt(hold_piece_vary, "a hold-piece difference misses reuse");
             attempt(hold_lock_vary, "a hold-availability change misses reuse");
             attempt(shorter_vary, "a shorter remaining sequence misses reuse");
+            attempt(longer_vary, "an extended remaining sequence misses reuse");
+            attempt(marker_vary, "an invented marker misses reuse");
         }
         {
             Fixture fixture = make_fixture();
@@ -2486,11 +2604,52 @@ namespace
                 check(fresh.has_value(), "the fresh second-turn queue parses");
                 check(fixture.engine.set_root(child->board, child->policy,
                     std::move(*fresh), child->hold) != engine_alias::no_node,
+                    "the exhausted position takes a clean root");
+                check(fixture.engine.arena_size() == 1,
+                    "an exhausted queue misses reuse");
+                check(fixture.engine.node(0)->cursor == 0,
+                    "the clean root cursor is zero");
+            }
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            toj_policy::State state;
+            engine_alias::HoldState empty_hold;
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                empty_hold)
+                != engine_alias::no_node,
+                "advancing empty-hold first turn takes");
+            check(fixture.engine.run(2000), "advancing empty-hold search completes");
+            engine_alias::NodeId empty_child = engine_alias::no_node;
+            for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
+            {
+                auto const *node = fixture.engine.node(static_cast<engine_alias::NodeId>(id));
+                if (node->depth == 1 && node->cursor == 2
+                    && node->source == engine_alias::BranchSource::Hold)
+                {
+                    empty_child = static_cast<engine_alias::NodeId>(id);
+                    break;
+                }
+            }
+            check(empty_child != engine_alias::no_node,
+                "an advancing empty-hold consumption child exists");
+            if (empty_child != engine_alias::no_node)
+            {
+                auto const *child = fixture.engine.node(empty_child);
+                engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
+                    child->cursor);
+                check(!next.pieces.empty(),
+                    "the empty-hold advance leaves queue behind");
+                check(fixture.engine.set_root(child->board, child->policy,
+                    std::move(next), child->hold) != engine_alias::no_node,
                     "the empty-hold position reroots");
-                check(fixture.engine.arena_size() > 2,
+                check(fixture.engine.arena_size() > 1,
                     "the empty-hold reroot retains a subtree");
                 check(fixture.engine.node(0)->cursor == 0,
                     "the rerooted root cursor is zero");
+                check(fixture.engine.run(2000),
+                    "the empty-hold second search completes");
             }
         }
         {
@@ -2513,6 +2672,226 @@ namespace
                 "the marker-shifted position takes a clean root");
             check(fixture.engine.arena_size() == 1,
                 "a marker-shifted boundary misses reuse");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto marked = engine_alias::parse_queue("T?IS");
+            check(marked.has_value() && marked->marker_count == 1,
+                "marked reuse queue parses with one marker");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*marked),
+                no_hold) != engine_alias::no_node,
+                "marked reuse first turn takes");
+            check(fixture.engine.run(2000), "marked reuse search completes");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "marked reuse search selects");
+            if (selection.has_value())
+            {
+                auto const *child = fixture.engine.node(selection->root_child);
+                engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
+                    child->cursor);
+                check(fixture.engine.set_root(child->board, child->policy,
+                    std::move(next), child->hold) != engine_alias::no_node,
+                    "the marked position reroots");
+                check(fixture.engine.arena_size() > 1,
+                    "the marked reroot retains a subtree");
+                check(fixture.engine.run(2000),
+                    "the marked second search completes");
+                auto marked_selection = fixture.engine.select_best();
+                Fixture cold = make_fixture();
+                auto cold_queue = engine_alias::parse_queue("IS");
+                check(cold_queue.has_value(), "marked cold queue parses");
+                auto const *kept = fixture.engine.node(0);
+                check(cold.engine.set_root(kept->board, kept->policy,
+                    std::move(*cold_queue), kept->hold) != engine_alias::no_node,
+                    "marked cold second turn takes");
+                check(cold.engine.run(2000), "the marked cold search completes");
+                auto cold_selection = cold.engine.select_best();
+                check(marked_selection.has_value() && cold_selection.has_value()
+                    && marked_selection->root_child == cold_selection->root_child
+                    && marked_selection->evidence == cold_selection->evidence,
+                    "marked warm and cold searches select the same move");
+            }
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto first = engine_alias::parse_queue("TIS");
+            check(first.has_value(), "multi-turn first queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*first),
+                no_hold) != engine_alias::no_node,
+                "multi-turn first turn takes");
+            check(fixture.engine.run(2000), "multi-turn first search completes");
+            auto first_selection = fixture.engine.select_best();
+            check(first_selection.has_value(), "multi-turn first search selects");
+            if (!first_selection.has_value())
+            {
+                return;
+            }
+            auto const *first_child =
+                fixture.engine.node(first_selection->root_child);
+            engine_alias::Queue second_text = remaining_queue(fixture.engine.queue(),
+                first_child->cursor);
+            engine_alias::Queue second_cold_text = second_text;
+            toj_policy::State second_policy = first_child->policy;
+            engine_alias::Board second_board = first_child->board;
+            engine_alias::HoldState second_hold = first_child->hold;
+            check(fixture.engine.set_root(second_board, second_policy,
+                std::move(second_text), second_hold) != engine_alias::no_node,
+                "multi-turn second turn reroots");
+            check(fixture.engine.arena_size() > 1,
+                "the second turn retains a subtree");
+            check(fixture.engine.run(2000), "multi-turn second search completes");
+            auto second_selection = fixture.engine.select_best();
+            check(second_selection.has_value(), "multi-turn second search selects");
+            Fixture second_cold = make_fixture();
+            check(second_cold.engine.set_root(second_board, second_policy,
+                std::move(second_cold_text), second_hold) != engine_alias::no_node,
+                "multi-turn cold second turn takes");
+            check(second_cold.engine.run(2000), "multi-turn cold search completes");
+            auto second_cold_selection = second_cold.engine.select_best();
+            check(second_selection.has_value() && second_cold_selection.has_value()
+                && second_selection->root_child == second_cold_selection->root_child
+                && second_selection->evidence == second_cold_selection->evidence,
+                "second-turn warm and cold searches select the same move");
+            if (!second_selection.has_value())
+            {
+                return;
+            }
+            auto const *second_child =
+                fixture.engine.node(second_selection->root_child);
+            engine_alias::Queue third_text = remaining_queue(fixture.engine.queue(),
+                second_child->cursor);
+            toj_policy::State third_policy = second_child->policy;
+            engine_alias::Board third_board = second_child->board;
+            engine_alias::HoldState third_hold = second_child->hold;
+            if (third_text.pieces.empty())
+            {
+                std::size_t const live_arena = fixture.engine.arena_size();
+                check(fixture.engine.set_root(third_board, third_policy,
+                    std::move(third_text), third_hold) == engine_alias::no_node,
+                    "an exhausted third turn is rejected");
+                check(fixture.engine.arena_size() == live_arena,
+                    "the rejected third turn keeps the live tree");
+            }
+            else
+            {
+                engine_alias::Queue third_cold_text = third_text;
+                check(fixture.engine.set_root(third_board, third_policy,
+                    std::move(third_text), third_hold) != engine_alias::no_node,
+                    "multi-turn third turn reroots");
+                check(fixture.engine.arena_size() > 1,
+                    "the third turn retains a subtree");
+                check(fixture.engine.run(2000), "multi-turn third search completes");
+                auto third_selection = fixture.engine.select_best();
+                check(third_selection.has_value(),
+                    "multi-turn third search selects");
+                Fixture third_cold = make_fixture();
+                check(third_cold.engine.set_root(third_board, third_policy,
+                    std::move(third_cold_text), third_hold) != engine_alias::no_node,
+                    "multi-turn cold third turn takes");
+                check(third_cold.engine.run(2000),
+                    "multi-turn third cold completes");
+                auto third_cold_selection = third_cold.engine.select_best();
+                check(third_selection.has_value()
+                    && third_cold_selection.has_value()
+                    && third_selection->root_child
+                        == third_cold_selection->root_child
+                    && third_selection->evidence == third_cold_selection->evidence,
+                    "third-turn warm and cold searches select the same move");
+            }
+        }
+        {
+            Fixture source = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "move-reuse queue parses");
+            check(source.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "move-reuse first turn takes");
+            source.engine.run(2);
+            engine_alias::NodeId target = engine_alias::no_node;
+            for (std::size_t id = 1; id < source.engine.arena_size(); ++id)
+            {
+                auto const *node = source.engine.node(
+                    static_cast<engine_alias::NodeId>(id));
+                if (node->depth == 1 && node->child_count > 0)
+                {
+                    target = static_cast<engine_alias::NodeId>(id);
+                    break;
+                }
+            }
+            check(target != engine_alias::no_node,
+                "the move-reuse population expands a root child");
+            if (target == engine_alias::no_node)
+            {
+                return;
+            }
+            auto const *child = source.engine.node(target);
+            engine_alias::Queue next = remaining_queue(source.engine.queue(),
+                child->cursor);
+            toj_policy::State next_policy = child->policy;
+            engine_alias::Board next_board = child->board;
+            engine_alias::HoldState next_hold = child->hold;
+            std::size_t pre_move_idmap = source.engine.idmap_reserved_bytes();
+            check(pre_move_idmap > 0, "the source holds idmap scratch");
+            engine_alias::Engine moved(std::move(source.engine));
+            check(moved.idmap_reserved_bytes() == pre_move_idmap,
+                "the move transfers idmap scratch");
+            check(moved.set_root(next_board, next_policy, std::move(next),
+                next_hold) != engine_alias::no_node,
+                "the moved engine reroots");
+            check(moved.arena_size() > 1,
+                "the moved engine retains the subtree");
+            check(moved.idmap_reserved_bytes() == pre_move_idmap,
+                "the matching reroot allocates no new scratch");
+            check(source.engine.init(source.engine_config),
+                "the source reinitializes after the move");
+        }
+        {
+            Fixture fixture = make_fixture();
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "rejection-probe queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "rejection-probe root takes");
+            fixture.engine.run(2);
+            engine_alias::NodeId target = engine_alias::no_node;
+            for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
+            {
+                auto const *node = fixture.engine.node(
+                    static_cast<engine_alias::NodeId>(id));
+                if (node->depth == 1 && node->child_count > 0)
+                {
+                    target = static_cast<engine_alias::NodeId>(id);
+                    break;
+                }
+            }
+            check(target != engine_alias::no_node,
+                "the rejection probe expands a root child");
+            if (target == engine_alias::no_node)
+            {
+                return;
+            }
+            std::size_t const live_arena = fixture.engine.arena_size();
+            engine_alias::Queue empty;
+            check(fixture.engine.set_root(shelf_board(), state, std::move(empty),
+                no_hold) == engine_alias::no_node,
+                "an empty queue is rejected");
+            check(fixture.engine.arena_size() == live_arena,
+                "a rejected root keeps the live tree");
+            std::array<std::uint16_t, 48> rows = {};
+            rows[0] = tetris::Board::row_mask;
+            check(fixture.engine.set_root(tetris::Board::from_rows(rows), state,
+                *engine_alias::parse_queue("TIS"), no_hold) == engine_alias::no_node,
+                "a full-row board is rejected");
+            check(fixture.engine.arena_size() == live_arena,
+                "a rejected board keeps the live tree");
+            auto const *child = fixture.engine.node(target);
+            engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
+                child->cursor);
+            check(fixture.engine.set_root(child->board, child->policy,
+                std::move(next), child->hold) != engine_alias::no_node,
+                "the live tree still reuses after rejections");
+            check(fixture.engine.arena_size() > 1,
+                "reuse survives rejected inputs");
         }
         std::println("root reuse: retained subtrees, identity negatives, advancement");
     }

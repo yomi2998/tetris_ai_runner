@@ -33,7 +33,7 @@ namespace tetris_engine
     inline constexpr std::size_t max_candidates_per_source =
         4 * Board::width * Board::height * 2;
     inline constexpr std::size_t max_children_per_parent = 2 * max_candidates_per_source;
-    inline constexpr std::size_t transposition_entries = 65536;
+    inline constexpr std::size_t transposition_entries = 32768;
     inline constexpr std::uint8_t no_piece_code = 0xFF;
     inline constexpr std::uint64_t engine_queue_reservation =
         max_queue_length * (sizeof(Piece) + sizeof(bool));
@@ -618,6 +618,7 @@ namespace tetris_engine
             , width_cache_(other.width_cache_)
             , transposition_(std::move(other.transposition_))
             , transposition_rehash_(std::move(other.transposition_rehash_))
+            , idmap_(std::move(other.idmap_))
             , cache_(std::move(other.cache_))
             , transposition_used_(other.transposition_used_)
             , max_length_(other.max_length_)
@@ -652,6 +653,8 @@ namespace tetris_engine
         std::size_t arena_size() const;
 
         std::size_t arena_reserved_bytes() const;
+
+        std::size_t idmap_reserved_bytes() const;
 
         std::uint64_t retained_bytes() const;
 
@@ -712,7 +715,7 @@ namespace tetris_engine
         void reset_run_state();
 
         bool reuse_matches(NodeId child, Board const &board, PolicyState const &policy,
-            Queue const &queue, HoldState hold) const;
+            Queue const &queue, HoldState hold, std::size_t new_max) const;
 
         NodeId reroot(NodeId target, Queue const &queue, HoldState hold, std::size_t new_max);
 
