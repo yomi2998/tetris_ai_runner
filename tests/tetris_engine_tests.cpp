@@ -31,6 +31,15 @@ namespace
 
     int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
 
+    static_assert(!std::is_copy_constructible_v<engine_alias::Engine>,
+        "engine ownership is move-only");
+    static_assert(!std::is_copy_assignable_v<engine_alias::Engine>,
+        "engine ownership is move-only");
+    static_assert(!std::is_move_assignable_v<engine_alias::Engine>,
+        "engine ownership is construct-only");
+    static_assert(std::is_move_constructible_v<engine_alias::Engine>,
+        "a moved engine rebinds its heap to the destination arena");
+
     struct Fixture
     {
         toj_policy::Config policy_config;
@@ -1099,6 +1108,24 @@ namespace
     }
 
 
+    void run_move_tests()
+    {
+        Fixture fixture = make_zero_fixture();
+        make_root(fixture, shelf_board(), "III", std::nullopt, true);
+        engine_alias::Engine moved(std::move(fixture.engine));
+        check(moved.arena_size() == 1, "a moved engine keeps its arena");
+        check(moved.run(500), "a moved engine runs a full search");
+        check(moved.search_complete(), "a moved engine reaches completion");
+        auto selection = moved.select_best();
+        check(selection.has_value(), "a moved engine projects a selection");
+        if (selection.has_value())
+        {
+            check(moved.node(selection->root_child)->parent == 0,
+                "a moved engine attributes through its own arena");
+        }
+        std::println("engine move: heap rebinds to the destination arena");
+    }
+
     void run_pending_heap_tests()
     {
         std::vector<engine_alias::Node> arena;
@@ -1218,9 +1245,17 @@ namespace
     void run_reinit_tests()
     {
         Fixture fixture = make_zero_fixture();
-        make_root(fixture, shelf_board(), "III", std::nullopt, true);
-        check(fixture.engine.run(500), "search completes before reinitialization");
+        make_root(fixture, tetris::Board{}, "TTTTT", std::nullopt, true);
+        fixture.engine.run(2000);
+        check(fixture.engine.arena_exhausted()
+            || fixture.engine.search_stats().transposition_exhausted,
+            "exhaustion precedes reinitialization");
+        check(fixture.engine.last_stats().enumerated > 0,
+            "expansion counters precede reinitialization");
         check(fixture.engine.init(fixture.engine_config), "successful reinitialization");
+        check(!fixture.engine.arena_exhausted(), "reinitialization clears exhaustion");
+        check(fixture.engine.last_stats().enumerated == 0,
+            "reinitialization clears expansion counters");
         check(!fixture.engine.search_complete(), "reinitialization clears completion");
         check(!fixture.engine.select_best().has_value(),
             "reinitialization clears stale selection");
@@ -1228,6 +1263,7 @@ namespace
         std::size_t const good_capacity = fixture.engine_config.arena_capacity;
         fixture.engine_config.arena_capacity = engine_alias::max_nodes + 1;
         check(!fixture.engine.init(fixture.engine_config), "rejected reinitialization");
+        check(!fixture.engine.arena_exhausted(), "rejected reinit clears exhaustion");
         check(!fixture.engine.search_complete(), "rejected reinit clears completion");
         check(!fixture.engine.select_best().has_value(),
             "rejected reinit clears stale selection");
@@ -1240,38 +1276,76 @@ namespace
 
     void run_exhaustion_projection_tests()
     {
-        Fixture fixture = make_zero_fixture(25);
-        engine_alias::NodeId root = make_root(fixture, tetris::Board{}, "III",
-            std::nullopt, true);
-        check(root != engine_alias::no_node, "exhaustion projection root takes");
-        fixture.engine.run(500);
-        check(fixture.engine.arena_exhausted(), "the small arena exhausts");
-        auto selection = fixture.engine.select_best();
-        check(selection.has_value(), "the promoted parent stays selectable");
-        if (!selection.has_value())
         {
-            return;
+            Fixture fixture = make_zero_fixture(25);
+            tetris::Board board = shelf_board();
+            engine_alias::NodeId root = make_root(fixture, board, "III", std::nullopt, true);
+            check(root != engine_alias::no_node, "exhaustion projection root takes");
+            fixture.engine.run(500);
+            check(fixture.engine.arena_exhausted(), "the small arena exhausts");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "the promoted parent stays selectable");
+            if (!selection.has_value())
+            {
+                return;
+            }
+            auto const *evidence = fixture.engine.node(selection->evidence);
+            bool dominated = false;
+            for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
+            {
+                auto const *node =
+                    fixture.engine.node(static_cast<engine_alias::NodeId>(id));
+                if (node->depth != evidence->depth)
+                {
+                    continue;
+                }
+                if (node->policy.value > evidence->policy.value
+                    || (node->policy.value == evidence->policy.value
+                        && id < static_cast<std::size_t>(selection->evidence)))
+                {
+                    dominated = true;
+                }
+            }
+            check(!dominated,
+                "no same-depth node beats the selected evidence under the tie-break");
+            check(fixture.engine.node(selection->root_child)->parent == 0,
+                "exhausted selection attributes to a root child");
         }
-        auto const *evidence = fixture.engine.node(selection->evidence);
-        bool dominated = false;
-        for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
         {
-            auto const *node = fixture.engine.node(static_cast<engine_alias::NodeId>(id));
-            if (node->depth != evidence->depth)
+            Fixture fixture = make_fixture(18);
+            engine_alias::NodeId root = make_root(fixture, tetris::Board{}, "III",
+                std::nullopt, true);
+            check(root != engine_alias::no_node, "production exhaustion root takes");
+            fixture.engine.run(500);
+            check(fixture.engine.arena_exhausted(), "the production probe exhausts");
+            auto selection = fixture.engine.select_best();
+            check(selection.has_value(), "production exhaustion keeps a selection");
+            if (!selection.has_value())
             {
-                continue;
+                return;
             }
-            if (node->policy.value > evidence->policy.value
-                || (node->policy.value == evidence->policy.value
-                    && id < static_cast<std::size_t>(selection->evidence)))
+            auto const *evidence = fixture.engine.node(selection->evidence);
+            bool dominated = false;
+            for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
             {
-                dominated = true;
+                auto const *node =
+                    fixture.engine.node(static_cast<engine_alias::NodeId>(id));
+                if (node->depth != evidence->depth)
+                {
+                    continue;
+                }
+                if (node->policy.value > evidence->policy.value
+                    || (node->policy.value == evidence->policy.value
+                        && id < static_cast<std::size_t>(selection->evidence)))
+                {
+                    dominated = true;
+                }
             }
+            check(!dominated,
+                "production exhaustion preserves the best equal-score evidence");
+            check(fixture.engine.node(selection->root_child)->parent == 0,
+                "production exhaustion attributes to a root child");
         }
-        check(!dominated,
-            "no same-depth node beats the selected evidence under the tie-break");
-        check(fixture.engine.node(selection->root_child)->parent == 0,
-            "exhausted selection attributes to a root child");
         std::println("exhaustion projection: best evidence and attribution preserved");
     }
 
@@ -1288,6 +1362,7 @@ namespace
         boards.push_back(tetris::Board::from_rows(rows));
         toj_alias::MovementConfig config;
         bool keys_strict = true;
+        bool canonical = true;
         std::size_t total = 0;
         for (auto const &board : boards)
         {
@@ -1320,9 +1395,28 @@ namespace
                         keys_strict = false;
                     }
                 }
+                if (piece == tetris::Piece::S || piece == tetris::Piece::Z
+                    || piece == tetris::Piece::I)
+                {
+                    for (std::size_t a = 0; a < batch->count; ++a)
+                    {
+                        for (std::size_t b = a + 1; b < batch->count; ++b)
+                        {
+                            auto const &ca = buffer[a];
+                            auto const &cb = buffer[b];
+                            if (*toj_alias::cells(piece, ca.placement)
+                                == *toj_alias::cells(piece, cb.placement)
+                                && ca.placement.rotation() != cb.placement.rotation())
+                            {
+                                canonical = false;
+                            }
+                        }
+                    }
+                }
             }
         }
         check(keys_strict, "distinct candidates never share a canonical key");
+        check(canonical, "each occupied-cell set keeps exactly one rotation");
         check(total > 0, "adapter order probe enumerates candidates");
         std::println("adapter order: canonical keys strictly increasing, {} candidates", total);
     }
@@ -1367,6 +1461,7 @@ int main()
     run_projection_tests();
     run_search_exhaustion_tests();
     run_search_determinism_tests();
+    run_move_tests();
     run_pending_heap_tests();
     run_memory_accounting_tests();
     run_marker_boundary_tests();

@@ -267,7 +267,11 @@ namespace tetris::toj
                 {
                     return ca < cb;
                 }
-                return aa < ab;
+                if (aa != ab)
+                {
+                    return aa < ab;
+                }
+                return a.placement.rotation() < b.placement.rotation();
             };
             auto key_equal = [piece, is_t](Candidate const &a, Candidate const &b) {
                 return *cells(piece, a.placement) == *cells(piece, b.placement)

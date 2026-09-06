@@ -173,9 +173,19 @@ namespace tetris_engine
     {
     public:
         explicit PendingHeap(std::vector<Node> &arena)
-            : arena_(arena)
+            : arena_(&arena)
         {
         }
+
+        PendingHeap(PendingHeap &&other, std::vector<Node> &arena) noexcept
+            : arena_(&arena)
+            , roots_(std::move(other.roots_))
+            , counts_(std::move(other.counts_))
+        {
+        }
+
+        PendingHeap(PendingHeap const &) = delete;
+        PendingHeap &operator=(PendingHeap const &) = delete;
 
         void reset(std::size_t frontier_count)
         {
@@ -185,7 +195,7 @@ namespace tetris_engine
 
         void push(NodeId id, std::size_t level)
         {
-            Node &node = arena_[id];
+            Node &node = (*arena_)[id];
             node.pending_child = no_node;
             node.pending_sibling = no_node;
             if (roots_[level] == no_node)
@@ -202,24 +212,24 @@ namespace tetris_engine
         NodeId pop_max(std::size_t level)
         {
             NodeId root = roots_[level];
-            NodeId chain = arena_[root].pending_child;
-            arena_[root].pending_child = no_node;
-            arena_[root].pending_sibling = no_node;
+            NodeId chain = (*arena_)[root].pending_child;
+            (*arena_)[root].pending_child = no_node;
+            (*arena_)[root].pending_sibling = no_node;
             NodeId pairs = no_node;
             while (chain != no_node)
             {
                 NodeId first = chain;
-                NodeId second = arena_[first].pending_sibling;
-                NodeId rest = second != no_node ? arena_[second].pending_sibling : no_node;
+                NodeId second = (*arena_)[first].pending_sibling;
+                NodeId rest = second != no_node ? (*arena_)[second].pending_sibling : no_node;
                 NodeId pair = second != no_node ? meld(first, second) : first;
-                arena_[pair].pending_sibling = pairs;
+                (*arena_)[pair].pending_sibling = pairs;
                 pairs = pair;
                 chain = rest;
             }
             NodeId acc = no_node;
             while (pairs != no_node)
             {
-                NodeId next = arena_[pairs].pending_sibling;
+                NodeId next = (*arena_)[pairs].pending_sibling;
                 acc = acc == no_node ? pairs : meld(acc, pairs);
                 pairs = next;
             }
@@ -241,8 +251,8 @@ namespace tetris_engine
     private:
         bool better(NodeId a, NodeId b) const
         {
-            double const va = arena_[a].policy.value;
-            double const vb = arena_[b].policy.value;
+            double const va = (*arena_)[a].policy.value;
+            double const vb = (*arena_)[b].policy.value;
             if (va != vb)
             {
                 return va > vb;
@@ -258,12 +268,12 @@ namespace tetris_engine
                 a = b;
                 b = tmp;
             }
-            arena_[b].pending_sibling = arena_[a].pending_child;
-            arena_[a].pending_child = b;
+            (*arena_)[b].pending_sibling = (*arena_)[a].pending_child;
+            (*arena_)[a].pending_child = b;
             return a;
         }
 
-        std::vector<Node> &arena_;
+        std::vector<Node> *arena_;
         std::vector<NodeId> roots_;
         std::vector<std::size_t> counts_;
     };
@@ -342,6 +352,36 @@ namespace tetris_engine
     class Engine
     {
     public:
+        Engine() = default;
+        Engine(Engine &&other) noexcept
+            : config_(other.config_)
+            , policy_(std::move(other.policy_))
+            , arena_(std::move(other.arena_))
+            , heap_(std::move(other.heap_), arena_)
+            , queue_(std::move(other.queue_))
+            , stats_(other.stats_)
+            , exhausted_(other.exhausted_)
+            , eval_memo_(std::move(other.eval_memo_))
+            , candidate_buffer_(std::move(other.candidate_buffer_))
+            , child_buffer_(std::move(other.child_buffer_))
+            , expanded_count_(other.expanded_count_)
+            , expanded_max_(other.expanded_max_)
+            , width_cache_(other.width_cache_)
+            , transposition_(std::move(other.transposition_))
+            , transposition_used_(other.transposition_used_)
+            , max_length_(other.max_length_)
+            , width_(other.width_)
+            , search_complete_(other.search_complete_)
+            , search_stopped_(other.search_stopped_)
+            , transposition_exhausted_(other.transposition_exhausted_)
+            , search_stats_(other.search_stats_)
+        {
+        }
+
+        Engine(Engine const &) = delete;
+        Engine &operator=(Engine const &) = delete;
+        Engine &operator=(Engine &&) = delete;
+
         bool init(EngineConfig const &config);
 
         NodeId set_root(Board board, PolicyState policy, Queue queue, HoldState hold);
@@ -401,8 +441,6 @@ namespace tetris_engine
         std::vector<Candidate> candidate_buffer_;
         std::vector<Child> child_buffer_;
 
-        std::array<NodeId, max_frontiers> pending_root_{};
-        std::array<std::size_t, max_frontiers> pending_count_{};
         std::array<std::size_t, max_frontiers> expanded_count_{};
         std::array<NodeId, max_frontiers> expanded_max_{};
         std::array<double, max_frontiers> width_cache_{};

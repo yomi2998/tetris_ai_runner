@@ -113,6 +113,8 @@ namespace tetris_engine
         search_stopped_ = false;
         transposition_exhausted_ = false;
         search_stats_ = SearchStats{};
+        stats_ = ExpansionStats{};
+        exhausted_ = false;
         heap_.reset(max_frontiers);
         for (std::size_t i = 0; i < max_frontiers; ++i)
         {
