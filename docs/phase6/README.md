@@ -43,27 +43,32 @@ persistent evaluation cache tuning, and production cutover.
 
 `default_arena_capacity` equals the 256 MiB production budget minus
 a 1 MiB workspace reserve, divided by measured `sizeof(Node)` (256
-bytes, about one million nodes). Queue input is capped at 256
+bytes, about one million nodes). The arena is a single exact
+reservation of that capacity: allocation peaks equal the allowance
+because storage never grows or relocates, and node addresses stay
+stable from materialization onward. Queue input is capped at 256
 pieces, per-expansion scratch is bounded by the enumerated candidate
 count, and materialization additionally refuses to exceed the
-`NodeId` range, so the arena bound is enforced rather than
-assumed. Node pointers are invalidated by root replacement and
-materialization growth; callers re-fetch by id. Tests use explicit
-small capacities to prove fail-closed materialization with
-exhaustion reporting. The persistent cache, frontiers, and workspace
-shares of the total budget arrive with the full search loop; until
-then this README distinguishes the verified arena bound from the
-deferred total-engine accounting.
+`NodeId` range. Tests assert reserved bytes equal capacity times
+node size including a non-power-of-two capacity, address stability
+across fills, and no growth beyond the reservation. Node pointers
+are invalidated only by root replacement; callers still re-fetch by
+id after any mutation. Small capacities prove fail-closed
+materialization with exhaustion reporting. The persistent cache,
+frontiers, and workspace shares of the total budget arrive with the
+full search loop; until then this README distinguishes the verified
+arena allocation bound from the deferred total-engine accounting.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 384
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 393
 checks, 0 failures in all five builds) covers queue parsing against
 the legacy `queue.csv` shapes, cursor and hold-swap arithmetic,
 lock and exhaustion edges, per-child state wiring against direct
 calls with explicit contexts, the played-piece context sequence,
 cursor-overflow termination, input rejection, stats reset, dedup,
-arena limits and linkage, repeated-run determinism, lockout dead
+arena limits, linkage, exact reservation bytes, and address
+stability, repeated-run determinism, lockout dead
 results with a per-child lowest-row rule, spawn death, and budget
 derivation. Mutation probes confirm the gates: zeroed transitions,
 child-cursor policy contexts, and danger-mask shifts all fail.
