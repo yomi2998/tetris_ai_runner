@@ -102,7 +102,7 @@ namespace tetris_engine
     class Engine
     {
     public:
-        void init(EngineConfig const &config);
+        bool init(EngineConfig const &config);
 
         NodeId set_root(Board board, PolicyState policy, Queue queue, HoldState hold);
 

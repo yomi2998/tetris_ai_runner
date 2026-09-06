@@ -33,16 +33,30 @@ namespace tetris_engine
         return queue;
     }
 
-    void Engine::init(EngineConfig const &config)
+    bool Engine::init(EngineConfig const &config)
     {
         config_ = config;
         policy_.init(config_.policy);
         std::vector<Node>().swap(arena_);
-        arena_.reserve(config_.arena_capacity);
         queue_ = Queue{};
         stats_ = ExpansionStats{};
         exhausted_ = false;
         eval_memo_.clear();
+        std::uint64_t const allowance = engine_memory_budget - engine_workspace_reserve;
+        if (config_.arena_capacity > max_nodes
+            || config_.arena_capacity > allowance / sizeof(Node))
+        {
+            config_.arena_capacity = 0;
+            return false;
+        }
+        arena_.reserve(config_.arena_capacity);
+        if (static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node) > allowance)
+        {
+            std::vector<Node>().swap(arena_);
+            config_.arena_capacity = 0;
+            return false;
+        }
+        return true;
     }
 
     bool board_has_full_row(Board const &board)

@@ -45,7 +45,7 @@ namespace
         fixture.policy_config.parameters = toj_policy::Parameters::production_defaults();
         fixture.engine_config.policy = &fixture.policy_config;
         fixture.engine_config.arena_capacity = arena_capacity;
-        fixture.engine.init(fixture.engine_config);
+        check(fixture.engine.init(fixture.engine_config), "fixture engine initializes");
         return fixture;
     }
 
@@ -653,6 +653,44 @@ namespace
         std::println("reservation: exact bytes, stable addresses, no growth peaks");
     }
 
+    void run_init_validation_tests()
+    {
+        {
+            Fixture fixture;
+            fixture.policy_config.combo_table = combo_table;
+            fixture.policy_config.combo_table_max = 10;
+            fixture.policy_config.safe = 5;
+            fixture.policy_config.parameters = toj_policy::Parameters::production_defaults();
+            fixture.engine_config.policy = &fixture.policy_config;
+            fixture.engine_config.arena_capacity =
+                static_cast<std::size_t>(engine_alias::max_nodes) + 1;
+            check(!fixture.engine.init(fixture.engine_config),
+                "capacity beyond NodeId range is rejected");
+            check(fixture.engine.arena_reserved_bytes() == 0,
+                "rejected capacity allocates nothing");
+        }
+        {
+            std::size_t over_bytes =
+                static_cast<std::size_t>((engine_alias::engine_memory_budget
+                    - engine_alias::engine_workspace_reserve)
+                    / sizeof(engine_alias::Node))
+                + 1;
+            Fixture fixture;
+            fixture.policy_config.combo_table = combo_table;
+            fixture.policy_config.combo_table_max = 10;
+            fixture.policy_config.safe = 5;
+            fixture.policy_config.parameters = toj_policy::Parameters::production_defaults();
+            fixture.engine_config.policy = &fixture.policy_config;
+            fixture.engine_config.arena_capacity = over_bytes;
+            check(over_bytes <= engine_alias::max_nodes, "byte probe stays in NodeId range");
+            check(!fixture.engine.init(fixture.engine_config),
+                "capacity beyond the byte allowance is rejected");
+            check(fixture.engine.arena_reserved_bytes() == 0,
+                "rejected byte allowance allocates nothing");
+        }
+        std::println("init validation: limits reject before allocation");
+    }
+
     void run_budget_tests()
     {
         std::size_t capacity = engine_alias::default_arena_capacity;
@@ -681,6 +719,7 @@ int main()
     run_dedup_tests();
     run_arena_tests();
     run_reservation_tests();
+    run_init_validation_tests();
     run_determinism_tests();
     run_terminal_tests();
     run_budget_tests();
