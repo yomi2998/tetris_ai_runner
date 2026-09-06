@@ -136,13 +136,18 @@ any production harness:
   states, elapsed time, failures) accumulates separately from
   search counters and budgets.
 - Gates: immediate-result correctness against the root child under
-  deeper evidence, non-spawn starts with paired unreachable-start
-  failure, occupied and empty hold branches with equal-piece hold
-  behavior, exact replay (shared production replay plus the
-  independent scalar reachability oracle, applied-board and outcome
-  agreement) across 180 settings, kick-dependent terminal travel,
+  deeper evidence, engine-side production replay verification with
+  mismatch rejection, non-spawn starts with paired unreachable-start
+  failure, occupied and empty hold branches finalized from an unusable
+  pose with distinct-piece control and equal-piece hold behavior,
+  exact replay (shared production replay plus the independent scalar
+  reachability oracle, applied-board and outcome agreement, plus a
+  finalize bridge in the differential target) across discriminating
+  180 settings, kick-dependent terminal travel,
   normal and terminal T arrivals, valid zero-movement paths,
-  lifecycle (reuse, miss, partial, exhaustion, move,
+  lifecycle (telemetry-preserving reuse with retention proof,
+  populated-tree miss, partial, required-success exhaustion,
+  success-then-failure metadata, move,
   reinitialization), call-count isolation proving search-only and
   per-request behavior, bounds and memory inventory, and
   determinism of repeated finalization. Full design in
@@ -357,7 +362,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 16155
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 16236
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -452,18 +457,26 @@ a missing cache reset, dropped idmap transfer or release,
 fresh-only child linking, and a wrapping link range each
 fail, alongside the earlier zeroed transitions, child-cursor policy
 contexts, and danger-mask shift probes. The slice 6.6 gates add
-finalize composition: immediate-result correctness against the root
-child under deeper evidence, non-spawn starts with paired
-unreachable-start failure, occupied and empty hold branches with
-equal-piece hold behavior, exact replay through shared production
-replay and the independent scalar oracle with applied-board and
-outcome agreement, 180 on/off movement with spin-free paths,
-kick-dependent terminal travel with normal and terminal T arrivals,
-valid zero-movement paths, lifecycle across reuse, miss, partial,
-exhausted, moved, and reinitialized engines, call-count isolation
-for search-only and per-request behavior, bounds and memory
-inventory including the verified stack peak, and repeated
-finalization determinism.
+finalize composition with engine-side production replay verification:
+immediate-result correctness against the root child under deeper
+evidence, non-spawn starts with paired unreachable-start failure,
+occupied and empty hold branches finalized from an unusable pose to
+prove the canonical-spawn override, distinct-piece empty-hold
+control, equal-piece hold behavior, exact replay through shared
+production replay and the independent scalar oracle with applied-board
+and outcome agreement, a finalize bridge in the differential target
+replaying value-engine paths through both interpreters, discriminating
+180 on/off fixtures sharing one placement with and without 180 rotation
+in the path, kick-dependent terminal travel with normal and terminal T
+arrivals, valid zero-movement paths, lifecycle across reuse with
+telemetry preservation, populated-tree miss, partial, required-success
+exhaustion, success-then-failure metadata, moved, and reinitialized
+engines, call-count isolation for search-only and per-request behavior,
+bounds and memory inventory including the measured nested stack peak,
+and repeated finalization determinism. Mutation probes confirm the
+finalize gates: piece-compared hold usage, evidence-sourced results,
+dropped telemetry, removed hold-start override, and forced 180
+configurations each fail.
 
 ## Kernel corner note
 

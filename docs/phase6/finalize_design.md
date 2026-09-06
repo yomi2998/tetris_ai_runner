@@ -54,13 +54,24 @@ callers.
   unreachable selection returns the candidate and state with
   `path_ok == false` and an invalid empty path; there is no
   fallback search over alternative candidates in this slice.
+- Every searching finalization verifies its own path before
+  returning it: the locked production replay reruns the commands
+  with the selected piece, chosen start, root board, and movement
+  configuration, requiring exact final placement and, for T pieces,
+  exact arrival including terminal arrival surviving the lock. A
+  mismatch rejects with an invalid empty command path and a recorded
+  failure while preserving the selected-result metadata. Finder
+  construction and candidate extraction still happen exactly once;
+  the replay builds no finder.
 
 ## Start pose and movement rules
 
 - The caller supplies the actual active pose as a `Placement` value.
   The current-piece branch pathfinds from it verbatim on the
-  pre-move root board; an unfitting or out-of-range start yields an
-  explicit failure, never a disguised empty path.
+  pre-move root board; an unfitting start yields an explicit
+  failure, never a disguised empty path. Out-of-range starts cannot
+  be constructed: the checked `Placement` contract rejects them at
+  the type boundary.
 - Hold branches ignore the supplied pose and start from canonical
   spawn `(4, 20, 0)`: the held piece after `v` for occupied hold,
   the correct next concrete piece (`node.played`) after `v` for
@@ -78,10 +89,13 @@ callers.
 
 - The `Pathfinder` (measured 24,976 bytes) is constructed as a
   stack local inside `finalize`, plus its build temporary and a
-  small find/result peak. The measured worst case without return
-  elision is near 80 KiB, so `engine_stack_peak_allowance` grows
-  from 64 KiB to 128 KiB; the whole-engine budget formulas absorb
-  it with no other change (about two hundred fewer arena nodes).
+  small find/result peak. Measured without elision
+  (`-O0 -fno-elide-constructors -fstack-usage`), the nested frames
+  are 27,296 for `finalize`, 50,128 for the constructor, and 26,128
+  for the largest `build`, totaling 103,552 bytes before smaller
+  callees, so `engine_stack_peak_allowance` grows from 64 KiB to
+  128 KiB; the whole-engine budget formulas absorb it with no other
+  change (about two hundred fewer arena nodes).
 - No heap allocation occurs in `finalize`; allocation-free search
   is preserved. The returned `Path` is caller-owned and excluded
   from `retained_bytes()`.
@@ -94,8 +108,9 @@ callers.
 - Cumulative `calls` counts finalizations that ran a path search;
   `failures` counts searched but unreached selections;
   `states_expanded` sums the finder BFS push counts (`queue_tail`);
-  `elapsed_nanos` sums the construction-plus-extraction clock
-  delta. Each result also carries its own states and elapsed time.
+  `elapsed_nanos` sums the construction, extraction, and verification
+  replay clock delta. Each result also carries its own states and
+  elapsed time.
 - Path counters stay separate from `SearchStats` and search-budget
   timing; the full operation (setup, root update, search, final
   path) is left for production qualification.

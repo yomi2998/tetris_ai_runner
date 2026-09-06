@@ -382,7 +382,7 @@ self-release, and 10 of 10 in the sanitizer build excluding perft.
 ## Phase 4 status
 
 Implemented in `src/toj_pathfinder.h` and gated by
-`tests/path_differential.cpp` (CTest `path_differential`, 147690 checks,
+`tests/path_differential.cpp` (CTest `path_differential`, 147711 checks,
 0 failures):
 
 - Fixed-array breadth-first search over pose and arrival class on the full
@@ -438,7 +438,10 @@ Implemented in `src/toj_pathfinder.h` and gated by
   spawn-obstructed pairs skipped with the obstruction asserted, and those
   totals are pinned as well. A selection-shaped fixture models one finder
   per selection with deterministic reuse; counting constructions per
-  selected move belongs to Phase 6 engine integration.
+  selected move belongs to Phase 6 engine integration. A finalize
+  bridge runs value-engine searches with finalization and replays each
+  finalized path through both the production replay and the independent
+  interpreter, asserting exact placement, arrival class, and final cells.
 
 Phase 4 gates: every emitted candidate has a valid path from its tested
 start pose, terminal candidates reach the landable pose with rotation last, replay
