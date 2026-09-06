@@ -363,26 +363,49 @@ namespace tetris_engine
         for (std::size_t n = 0; n < arena_.size(); ++n)
         {
             arena_[n].first_child = no_node;
+            arena_[n].next_sibling = no_node;
             arena_[n].child_count = 0;
         }
         for (std::size_t n = 0; n < arena_.size(); ++n)
         {
-            Node &node = arena_[n];
-            if (node.parent == no_node)
+            Node const &node = arena_[n];
+            if (node.parent == no_node || node.parent >= arena_.size())
             {
                 continue;
             }
-            Node &parent = arena_[node.parent];
-            if (parent.first_child == no_node)
+            append_child_link(node.parent, static_cast<NodeId>(n));
+        }
+    }
+
+    void Engine::append_child_link(NodeId parent, NodeId child)
+    {
+        if (parent >= arena_.size() || child >= arena_.size() || parent == child)
+        {
+            return;
+        }
+        NodeId cursor = arena_[parent].first_child;
+        if (cursor == no_node)
+        {
+            arena_[parent].first_child = child;
+            arena_[parent].child_count = 1;
+            arena_[child].next_sibling = no_node;
+            return;
+        }
+        while (true)
+        {
+            if (cursor == child)
             {
-                parent.first_child = static_cast<NodeId>(n);
-                parent.child_count = 1;
+                return;
             }
-            else if (static_cast<std::size_t>(n)
-                == parent.first_child + parent.child_count)
+            NodeId sibling = arena_[cursor].next_sibling;
+            if (sibling == no_node)
             {
-                ++parent.child_count;
+                arena_[cursor].next_sibling = child;
+                arena_[child].next_sibling = no_node;
+                ++arena_[parent].child_count;
+                return;
             }
+            cursor = sibling;
         }
     }
 
@@ -674,12 +697,19 @@ namespace tetris_engine
 
     void Engine::link_children(NodeId parent, NodeId first, std::size_t count)
     {
-        if (parent >= arena_.size() || count == 0)
+        if (parent >= arena_.size() || count == 0 || first >= arena_.size()
+            || static_cast<std::uint64_t>(first) + count > arena_.size())
         {
             return;
         }
         arena_[parent].first_child = first;
         arena_[parent].child_count = count;
+        for (std::size_t k = 0; k < count; ++k)
+        {
+            NodeId id = first + static_cast<NodeId>(k);
+            arena_[id].next_sibling =
+                k + 1 < count ? static_cast<NodeId>(id + 1) : no_node;
+        }
     }
 
     Node const *Engine::node(NodeId id) const
@@ -889,11 +919,7 @@ namespace tetris_engine
             search_stopped_ = true;
             return;
         }
-        NodeId first = no_node;
-        std::size_t count = 0;
-        NodeId expected = no_node;
         std::size_t const child_level = level - 1;
-        std::size_t ordinal = 0;
         for (Child const &child : child_buffer_)
         {
             MaterializeOutcome outcome = search_materialize(child);
@@ -908,24 +934,14 @@ namespace tetris_engine
                     arena_[outcome.id].registered = true;
                     heap_.push(outcome.id, child_level);
                 }
+                if (arena_[outcome.id].parent == id)
+                {
+                    append_child_link(id, outcome.id);
+                }
                 continue;
             }
-            if (first == no_node)
-            {
-                first = outcome.id;
-                count = 1;
-                expected = outcome.id + 1;
-            }
-            else if (outcome.id == expected)
-            {
-                ++count;
-                ++expected;
-            }
+            append_child_link(id, outcome.id);
             heap_.push(outcome.id, child_level);
-        }
-        if (first != no_node)
-        {
-            link_children(id, first, count);
         }
     }
 
@@ -944,9 +960,6 @@ namespace tetris_engine
                 return;
             }
             ++search_stats_.expanded_parents;
-            NodeId first = no_node;
-            std::size_t count = 0;
-            NodeId expected = no_node;
             for (std::size_t child_index = 0; child_index < child_buffer_.size();
                 ++child_index)
             {
@@ -963,24 +976,14 @@ namespace tetris_engine
                         arena_[outcome.id].registered = true;
                         heap_.push(outcome.id, max_length_);
                     }
+                    if (arena_[outcome.id].parent == 0)
+                    {
+                        append_child_link(0, outcome.id);
+                    }
                     continue;
                 }
-                if (first == no_node)
-                {
-                    first = outcome.id;
-                    count = 1;
-                    expected = outcome.id + 1;
-                }
-                else if (outcome.id == expected)
-                {
-                    ++count;
-                    ++expected;
-                }
+                append_child_link(0, outcome.id);
                 heap_.push(outcome.id, max_length_);
-            }
-            if (first != no_node)
-            {
-                link_children(0, first, count);
             }
             width_ = 2;
         }

@@ -172,7 +172,11 @@ namespace tetris_engine
         std::size_t depth = 0;
         bool expandable = true;
         bool registered = false;
+        NodeId next_sibling = no_node;
     };
+
+    static_assert(sizeof(Node) == 320,
+        "the child-sibling link fits existing Node padding");
 
     class PendingHeap
     {
@@ -720,6 +724,8 @@ namespace tetris_engine
         NodeId reroot(NodeId target, Queue const &queue, HoldState hold, std::size_t new_max);
 
         void rebuild_child_links();
+
+        void append_child_link(NodeId parent, NodeId child);
 
         std::int64_t now_nanos() const
         {

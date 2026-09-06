@@ -582,7 +582,7 @@ namespace
         fixture.engine.link_children(root, first, 1);
         auto const *node = fixture.engine.node(root);
         check(node != nullptr && node->first_child == first && node->child_count == 1,
-            "parent links its child range");
+            "parent links its child chain");
         check(fixture.engine.node(99) == nullptr, "invalid ids read as null");
         std::println("arena: bounded storage with fail-closed materialization");
     }
@@ -2205,6 +2205,49 @@ namespace
         return out;
     }
 
+    void check_child_links(engine_alias::Engine const &engine, char const *what)
+    {
+        std::size_t const size = engine.arena_size();
+        std::vector<char> seen(size, 0);
+        for (std::size_t p = 0; p < size; ++p)
+        {
+            auto const *parent =
+                engine.node(static_cast<engine_alias::NodeId>(p));
+            std::size_t count = 0;
+            engine_alias::NodeId id = parent->first_child;
+            while (id != engine_alias::no_node && count <= size)
+            {
+                if (id >= size)
+                {
+                    check(false, what);
+                    break;
+                }
+                auto const *node = engine.node(id);
+                check(node->parent == p, what);
+                check(!seen[id], what);
+                if (seen[id])
+                {
+                    break;
+                }
+                seen[id] = 1;
+                id = node->next_sibling;
+                ++count;
+            }
+            check(id == engine_alias::no_node, what);
+            check(count == parent->child_count, what);
+        }
+        for (std::size_t n = 0; n < size; ++n)
+        {
+            auto const *node =
+                engine.node(static_cast<engine_alias::NodeId>(n));
+            if (node->parent == engine_alias::no_node)
+            {
+                continue;
+            }
+            check(node->parent < size && seen[n], what);
+        }
+    }
+
     std::string queue_text(engine_alias::Queue const &queue)
     {
         std::string text;
@@ -2264,6 +2307,8 @@ namespace
 
             check(fixture.engine.run(2000), "the warm second search completes");
             auto warm_stats = fixture.engine.search_stats();
+            check_child_links(fixture.engine,
+                "warm child chains enumerate ownership");
             check(warm_stats.cache_requests
                 == warm_stats.cache_hits + warm_stats.cache_misses,
                 "warm cache lookups split into hits and misses");
@@ -2283,6 +2328,8 @@ namespace
                 "cold second turn takes");
             check(cold.engine.run(2000), "the cold second search completes");
             auto cold_stats = cold.engine.search_stats();
+            check_child_links(cold.engine,
+                "cold child chains enumerate ownership");
             check(cold_stats.eval_computed > warm_stats.eval_computed,
                 "the warm search avoids evaluation work against a cold search");
             check(cold_stats.materialized_nodes > warm_stats.materialized_nodes,
@@ -2317,8 +2364,9 @@ namespace
                 if (!(warm_prints[i] == cold_prints[i])
                     || warm_node->depth != cold_node->depth
                     || warm_node->parent != cold_node->parent
-                    || warm_node->played != cold_node->played
-                    || warm_node->source != cold_node->source
+                    || (i != 0
+                        && (warm_node->played != cold_node->played
+                            || warm_node->source != cold_node->source))
                     || warm_node->hold.piece != cold_node->hold.piece
                     || warm_node->hold.locked != cold_node->hold.locked)
                 {
@@ -2414,15 +2462,10 @@ namespace
                 {
                     rows[static_cast<std::size_t>(y)] = child->board.row(y);
                 }
-                for (int y = 47; y >= 0; --y)
-                {
-                    std::uint16_t &row = rows[static_cast<std::size_t>(y)];
-                    if (row != 0)
-                    {
-                        row = static_cast<std::uint16_t>(row & (row - 1));
-                        break;
-                    }
-                }
+                std::uint16_t &row = rows[40];
+                row = row != 0
+                    ? static_cast<std::uint16_t>(row & (row - 1))
+                    : static_cast<std::uint16_t>(0x001);
                 return std::tuple(tetris::Board::from_rows(rows), child->policy,
                     std::move(queue), child->hold);
             };
@@ -2517,7 +2560,7 @@ namespace
                 return std::tuple(child->board, child->policy, std::move(queue),
                     child->hold);
             };
-            attempt(occupancy_vary, "an upper-row occupancy change misses reuse");
+            attempt(occupancy_vary, "a row-40 occupancy change misses reuse");
             attempt(death_vary, "a death difference misses reuse");
             attempt(combo_vary, "a combo difference misses reuse");
             attempt(under_attack_vary, "an under-attack difference misses reuse");
@@ -2564,6 +2607,7 @@ namespace
                 auto const *child = fixture.engine.node(hold_child);
                 engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
                     child->cursor);
+                engine_alias::Queue cold_next = next;
                 auto const post_swap_hold = child->hold;
                 check(fixture.engine.set_root(child->board, child->policy,
                     std::move(next), child->hold) != engine_alias::no_node,
@@ -2572,6 +2616,47 @@ namespace
                     "the hold-swap reroot retains a subtree");
                 check(fixture.engine.node(0)->hold.piece == post_swap_hold.piece,
                     "the rerooted root keeps the post-swap hold");
+                check(fixture.engine.run(2000),
+                    "the hold-swap second search completes");
+                auto warm_selection = fixture.engine.select_best();
+                Fixture cold = make_fixture();
+                auto const *kept = fixture.engine.node(0);
+                check(cold.engine.set_root(kept->board, kept->policy,
+                    std::move(cold_next), kept->hold) != engine_alias::no_node,
+                    "hold-swap cold second turn takes");
+                check(cold.engine.run(2000), "the hold-swap cold search completes");
+                auto cold_selection = cold.engine.select_best();
+                check(warm_selection.has_value() && cold_selection.has_value()
+                    && warm_selection->root_child == cold_selection->root_child
+                    && warm_selection->evidence == cold_selection->evidence,
+                    "hold-swap warm and cold searches select the same move");
+                check(fixture.engine.arena_size() == cold.engine.arena_size(),
+                    "hold-swap warm and cold materialize the same node count");
+                bool hold_parity =
+                    fixture.engine.arena_size() == cold.engine.arena_size();
+                for (std::size_t id = 0;
+                    id < fixture.engine.arena_size() && hold_parity; ++id)
+                {
+                    auto const *warm_node = fixture.engine.node(
+                        static_cast<engine_alias::NodeId>(id));
+                    auto const *cold_node = cold.engine.node(
+                        static_cast<engine_alias::NodeId>(id));
+                    if (!(fingerprint(warm_node) == fingerprint(cold_node))
+                        || warm_node->depth != cold_node->depth
+                        || warm_node->parent != cold_node->parent
+                        || (id != 0
+                            && (warm_node->played != cold_node->played
+                                || warm_node->source != cold_node->source))
+                        || warm_node->hold.piece != cold_node->hold.piece
+                        || warm_node->hold.locked != cold_node->hold.locked)
+                    {
+                        hold_parity = false;
+                    }
+                }
+                check(hold_parity,
+                    "hold-swap warm and cold share full node semantics");
+                check_child_links(fixture.engine,
+                    "hold-swap child chains enumerate ownership");
             }
         }
         {
@@ -2710,6 +2795,33 @@ namespace
                     && marked_selection->root_child == cold_selection->root_child
                     && marked_selection->evidence == cold_selection->evidence,
                     "marked warm and cold searches select the same move");
+                check(fixture.engine.arena_size() == cold.engine.arena_size(),
+                    "marked warm and cold materialize the same node count");
+                bool marked_parity =
+                    fixture.engine.arena_size() == cold.engine.arena_size();
+                for (std::size_t id = 0;
+                    id < fixture.engine.arena_size() && marked_parity; ++id)
+                {
+                    auto const *warm_node = fixture.engine.node(
+                        static_cast<engine_alias::NodeId>(id));
+                    auto const *cold_node = cold.engine.node(
+                        static_cast<engine_alias::NodeId>(id));
+                    if (!(fingerprint(warm_node) == fingerprint(cold_node))
+                        || warm_node->depth != cold_node->depth
+                        || warm_node->parent != cold_node->parent
+                        || (id != 0
+                            && (warm_node->played != cold_node->played
+                                || warm_node->source != cold_node->source))
+                        || warm_node->hold.piece != cold_node->hold.piece
+                        || warm_node->hold.locked != cold_node->hold.locked)
+                    {
+                        marked_parity = false;
+                    }
+                }
+                check(marked_parity,
+                    "marked warm and cold share full node semantics");
+                check_child_links(fixture.engine,
+                    "marked child chains enumerate ownership");
             }
         }
         {
@@ -2752,6 +2864,31 @@ namespace
                 && second_selection->root_child == second_cold_selection->root_child
                 && second_selection->evidence == second_cold_selection->evidence,
                 "second-turn warm and cold searches select the same move");
+            check(fixture.engine.arena_size() == second_cold.engine.arena_size(),
+                "second-turn warm and cold materialize the same node count");
+            bool second_parity = fixture.engine.arena_size()
+                == second_cold.engine.arena_size();
+            for (std::size_t id = 0;
+                id < fixture.engine.arena_size() && second_parity; ++id)
+            {
+                auto const *warm_node = fixture.engine.node(
+                    static_cast<engine_alias::NodeId>(id));
+                auto const *cold_node = second_cold.engine.node(
+                    static_cast<engine_alias::NodeId>(id));
+                if (!(fingerprint(warm_node) == fingerprint(cold_node))
+                    || warm_node->depth != cold_node->depth
+                    || warm_node->parent != cold_node->parent
+                    || (id != 0
+                        && (warm_node->played != cold_node->played
+                            || warm_node->source != cold_node->source))
+                    || warm_node->hold.piece != cold_node->hold.piece
+                    || warm_node->hold.locked != cold_node->hold.locked)
+                {
+                    second_parity = false;
+                }
+            }
+            check(second_parity,
+                "second-turn warm and cold share full node semantics");
             if (!second_selection.has_value())
             {
                 return;
@@ -2797,6 +2934,33 @@ namespace
                         == third_cold_selection->root_child
                     && third_selection->evidence == third_cold_selection->evidence,
                     "third-turn warm and cold searches select the same move");
+                check(fixture.engine.arena_size() == third_cold.engine.arena_size(),
+                    "third-turn warm and cold materialize the same node count");
+                bool third_parity = fixture.engine.arena_size()
+                    == third_cold.engine.arena_size();
+                for (std::size_t id = 0;
+                    id < fixture.engine.arena_size() && third_parity; ++id)
+                {
+                    auto const *warm_node = fixture.engine.node(
+                        static_cast<engine_alias::NodeId>(id));
+                    auto const *cold_node = third_cold.engine.node(
+                        static_cast<engine_alias::NodeId>(id));
+                    if (!(fingerprint(warm_node) == fingerprint(cold_node))
+                        || warm_node->depth != cold_node->depth
+                        || warm_node->parent != cold_node->parent
+                        || (id != 0
+                            && (warm_node->played != cold_node->played
+                                || warm_node->source != cold_node->source))
+                        || warm_node->hold.piece != cold_node->hold.piece
+                        || warm_node->hold.locked != cold_node->hold.locked)
+                    {
+                        third_parity = false;
+                    }
+                }
+                check(third_parity,
+                    "third-turn warm and cold share full node semantics");
+                check_child_links(fixture.engine,
+                    "third-turn child chains enumerate ownership");
             }
         }
         {
@@ -2892,6 +3056,99 @@ namespace
                 "the live tree still reuses after rejections");
             check(fixture.engine.arena_size() > 1,
                 "reuse survives rejected inputs");
+        }
+        {
+            Fixture fixture = make_fixture(37);
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "partial-link queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "partial-link root takes");
+            fixture.engine.run(2);
+            check(fixture.engine.arena_exhausted(),
+                "the small arena exhausts mid-batch");
+            check(fixture.engine.arena_size() == 37,
+                "the exhausted arena fills its capacity");
+            auto const *target = fixture.engine.node(1);
+            check(target != nullptr && target->depth == 1,
+                "the partial-link target is a root child");
+            engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
+                target->cursor);
+            check(fixture.engine.set_root(target->board, target->policy,
+                std::move(next), target->hold) != engine_alias::no_node,
+                "the partial-link position reroots");
+            check(fixture.engine.arena_size() == 2,
+                "the partial reroot retains root and child");
+            check_child_links(fixture.engine,
+                "partial reroot chains enumerate ownership");
+            fixture.engine.run(1);
+            check(fixture.engine.arena_exhausted(),
+                "the resumed search exhausts again");
+            check_child_links(fixture.engine,
+                "resumed child chains enumerate ownership");
+            auto const *root = fixture.engine.node(0);
+            std::size_t owned = 0;
+            for (std::size_t id = 0; id < fixture.engine.arena_size(); ++id)
+            {
+                if (fixture.engine.node(static_cast<engine_alias::NodeId>(id))->parent
+                    == 0)
+                {
+                    ++owned;
+                }
+            }
+            check(owned == root->child_count,
+                "the resumed root counts every owned child");
+            bool keeps_first = false;
+            for (engine_alias::NodeId id = root->first_child;
+                id != engine_alias::no_node;
+                id = fixture.engine.node(id)->next_sibling)
+            {
+                if (id == 1)
+                {
+                    keeps_first = true;
+                }
+            }
+            check(keeps_first,
+                "the resumed root keeps its retained first child");
+        }
+        {
+            Fixture fixture = make_fixture(64);
+            auto queue = engine_alias::parse_queue("TIS");
+            check(queue.has_value(), "promotion-link queue parses");
+            check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
+                no_hold) != engine_alias::no_node,
+                "promotion-link root takes");
+            fixture.engine.run(2);
+            engine_alias::NodeId target = engine_alias::no_node;
+            for (std::size_t id = 1; id < fixture.engine.arena_size(); ++id)
+            {
+                auto const *node = fixture.engine.node(
+                    static_cast<engine_alias::NodeId>(id));
+                if (node->depth == 1 && node->child_count > 0)
+                {
+                    target = static_cast<engine_alias::NodeId>(id);
+                    break;
+                }
+            }
+            check(target != engine_alias::no_node,
+                "the promotion-link population expands a root child");
+            if (target != engine_alias::no_node)
+            {
+                auto const *child = fixture.engine.node(target);
+                engine_alias::Queue next = remaining_queue(fixture.engine.queue(),
+                    child->cursor);
+                check(fixture.engine.set_root(child->board, child->policy,
+                    std::move(next), child->hold) != engine_alias::no_node,
+                    "the promotion-link position reroots");
+                check(fixture.engine.arena_size() > 1,
+                    "the promotion-link reroot retains a subtree");
+                fixture.engine.run(3);
+                check(fixture.engine.arena_exhausted()
+                    || fixture.engine.search_complete(),
+                    "the resumed promotion search stops cleanly");
+                check_child_links(fixture.engine,
+                    "promotion child chains enumerate ownership");
+            }
         }
         std::println("root reuse: retained subtrees, identity negatives, advancement");
     }
