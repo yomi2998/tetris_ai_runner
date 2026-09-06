@@ -27,6 +27,11 @@ One-parent expansion primitive with queue and hold representation:
 - Hold availability resets after placement and lock; only the root
   lock from the caller gates holding. `used_hold` stays move
   history and never becomes the child lock.
+- Policy context carries the parent remainder after the current
+  piece for every branch, preserving the legacy scoring input
+  including pieces played by empty-hold branches. Child cursors
+  still track consumption separately and never exceed the queue
+  length.
 - Instrumentation counts enumeration, evaluation, and transition
   calls. The engine never references the pathfinder.
 
@@ -38,26 +43,43 @@ persistent evaluation cache tuning, and production cutover.
 
 `default_arena_capacity` equals the 256 MiB production budget minus
 a 1 MiB workspace reserve, divided by measured `sizeof(Node)` (256
-bytes, about one million nodes). Tests use explicit small capacities
-to prove fail-closed materialization with exhaustion reporting.
+bytes, about one million nodes). Queue input is capped at 256
+pieces, per-expansion scratch is bounded by the enumerated candidate
+count, and materialization additionally refuses to exceed the
+`NodeId` range, so the arena bound is enforced rather than
+assumed. Node pointers are invalidated by root replacement and
+materialization growth; callers re-fetch by id. Tests use explicit
+small capacities to prove fail-closed materialization with
+exhaustion reporting. The persistent cache, frontiers, and workspace
+shares of the total budget arrive with the full search loop; until
+then this README distinguishes the verified arena bound from the
+deferred total-engine accounting.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 91
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 384
 checks, 0 failures in all five builds) covers queue parsing against
 the legacy `queue.csv` shapes, cursor and hold-swap arithmetic,
-lock and exhaustion edges, outcome and state wiring against direct
-rule and policy calls, same-placement dedup collapse, arena limits
-and linkage, repeated-run determinism, lockout dead results with a
-per-child lowest-row rule, spawn death, and budget derivation.
+lock and exhaustion edges, per-child state wiring against direct
+calls with explicit contexts, the played-piece context sequence,
+cursor-overflow termination, input rejection, stats reset, dedup,
+arena limits and linkage, repeated-run determinism, lockout dead
+results with a per-child lowest-row rule, spawn death, and budget
+derivation. Mutation probes confirm the gates: zeroed transitions,
+child-cursor policy contexts, and danger-mask shifts all fail.
 
 ## Kernel corner note
 
 A test board carrying 20 pre-existing full rows produced different
 line-clear collapse results under GCC and Clang release builds of
 the frozen kernel (survivor roof 14 versus 0), which changed dedup
-counts. Real boards never carry full lines: engine inputs come from
-cleared states, and gameplay clears at most 4 lines at once, so
-production behavior is unaffected and no submodule change was made.
-Engine tests avoid pre-full-row boards; the >4-line collapse path
-remains unvalidated across compilers if it is ever needed.
+counts. `set_root` now rejects any board containing a full row with
+a safe row scan, and the 20-full-row board is a rejection
+regression, so the invariant is enforced rather than assumed. Real
+boards never carry full lines: engine inputs come from cleared
+states, gameplay clears at most 4 lines at once, and a placement
+adds at most 4 cells to clear-free rows, keeping every clear inside
+the validated bound. No submodule change was made. The distinction
+stands: `Board::cleared()` accepts completed rows under a bounded
+simultaneous-clear precondition, while the engine requires
+clear-free roots.
