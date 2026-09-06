@@ -110,6 +110,44 @@ Exact root reuse across turns:
   cycled-versus-fresh retained-byte equality), and bounded retained
   bytes under separately counted arena and idmap capacities.
 
+## Slice 6.6 scope
+
+Selected-result and final-path materialization, without switching
+any production harness:
+
+- `Engine::finalize` composes the existing `select_best()` with the
+  existing fixed-array pathfinder. The value-owned result carries
+  the root child's candidate, played piece, and post-move policy
+  state (never the deeper evidence node's), branch-history hold
+  usage, movement commands only, and per-result path telemetry.
+  The later DLL layer owns the command envelope from these pieces.
+  Empty selection builds no pathfinder; unreachable selections fail
+  explicitly with no fallback search.
+- The current-piece branch pathfinds from the caller-supplied
+  actual pose on the pre-move root board; hold branches start from
+  canonical spawn for the held or next concrete piece. The movement
+  mapping is exact (`allow_180` copied), matching enumeration.
+  Terminal-rotation semantics flow through to the final lock.
+- The pathfinder lives as a stack local inside `finalize` (measured
+  24,976 bytes plus build temporary); the stack peak allowance is
+  verified at 128 KiB inside the unchanged 256 MiB budget. No heap
+  allocation occurs; search-only APIs are untouched, and search and
+  reroot construct no pathfinder. Path telemetry (calls, expanded
+  states, elapsed time, failures) accumulates separately from
+  search counters and budgets.
+- Gates: immediate-result correctness against the root child under
+  deeper evidence, non-spawn starts with paired unreachable-start
+  failure, occupied and empty hold branches with equal-piece hold
+  behavior, exact replay (shared production replay plus the
+  independent scalar reachability oracle, applied-board and outcome
+  agreement) across 180 settings, kick-dependent terminal travel,
+  normal and terminal T arrivals, valid zero-movement paths,
+  lifecycle (reuse, miss, partial, exhaustion, move,
+  reinitialization), call-count isolation proving search-only and
+  per-request behavior, bounds and memory inventory, and
+  determinism of repeated finalization. Full design in
+  `finalize_design.md`.
+
 ## Slice 6.3 scope
 
 Timed and iteration budgets on the shared search machinery:
@@ -261,7 +299,10 @@ buffer and evaluation memo (the same bound for both sources), the
 cache), the queue reservation, and a conservative stack peak
 allowance covering the measured kernel and expansion frames (the
 largest kernel workspace instantiates to 320 bytes and the frames
-nest only a few deep). `engine_buffer_reservation` computes the
+nest only a few deep) plus the final-path materialization peak: the
+fixed-array pathfinder measures 24,976 bytes with its build
+temporary, so the allowance is verified at 128 KiB from slice 6.6.
+`engine_buffer_reservation` computes the
 same inventory for the compile-time constant `engine_fixed_workspace`
 and for the post-reservation check over actual buffer capacities;
 the buffer reservations are conservative documented bounds (the
@@ -269,9 +310,9 @@ queue at the 256-piece cap, the stack at a fixed peak allowance)
 rather than runtime inspection of every control allocation.
 `default_arena_capacity` is the remainder divided by measured
 `sizeof(Node)` plus `sizeof(NodeId)` (320 and 4 bytes; the pinned
-values are a 27,091,232-byte
+values are a 27,156,768-byte
 fixed workspace including the 2,097,152-byte direct-mapped
-evaluation cache and a 744,889-node arena with the heap links, root
+evaluation cache and a 744,687-node arena with the heap links, root
 identity, and played-piece fields added in slice 6.2). The arena
 and the rotation idmap are counted separately by actual capacity,
 never by substituting one capacity for the other. Every buffer is a single reservation requested before any
@@ -290,7 +331,7 @@ queue storage is normalized: `set_root` copies at most
 reservations, so a caller's oversized vector capacity is never
 retained. The engine is move-constructible and non-copyable; a moved
 engine's pending heap rebinds to the destination arena and the idmap
-scratch transfers with it, and copy and
+scratch and path telemetry transfer with it, and copy and
 move assignment are deleted. On the
 tested implementations the retained allocation peak equals the
 allowance because storage never grows or relocates; a standard
@@ -316,7 +357,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 15939
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 16155
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -410,7 +451,19 @@ the repair gates: prefix queue matching, a removed marker bound,
 a missing cache reset, dropped idmap transfer or release,
 fresh-only child linking, and a wrapping link range each
 fail, alongside the earlier zeroed transitions, child-cursor policy
-contexts, and danger-mask shift probes.
+contexts, and danger-mask shift probes. The slice 6.6 gates add
+finalize composition: immediate-result correctness against the root
+child under deeper evidence, non-spawn starts with paired
+unreachable-start failure, occupied and empty hold branches with
+equal-piece hold behavior, exact replay through shared production
+replay and the independent scalar oracle with applied-board and
+outcome agreement, 180 on/off movement with spin-free paths,
+kick-dependent terminal travel with normal and terminal T arrivals,
+valid zero-movement paths, lifecycle across reuse, miss, partial,
+exhausted, moved, and reinitialized engines, call-count isolation
+for search-only and per-request behavior, bounds and memory
+inventory including the verified stack peak, and repeated
+finalization determinism.
 
 ## Kernel corner note
 
