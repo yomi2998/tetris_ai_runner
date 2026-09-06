@@ -30,15 +30,31 @@ namespace
         return engine_alias::Board::from_rows(rows);
     }
 
+    bool has_full_row(engine_alias::Board const &board)
+    {
+        for (int y = 0; y < engine_alias::Board::height; ++y)
+        {
+            if (board.row(y) == engine_alias::Board::row_mask)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     std::vector<engine_alias::Board> workload_boards()
     {
         std::mt19937_64 rng(20260906);
         std::vector<engine_alias::Board> boards;
-        for (int i = 0; i < 16; ++i)
+        while (boards.size() < 16)
         {
             int const roof = 4 + static_cast<int>(rng() % 14);
             int const density = 45 + static_cast<int>(rng() % 40);
-            boards.push_back(board_with_density(rng, roof, density));
+            engine_alias::Board candidate = board_with_density(rng, roof, density);
+            if (!has_full_row(candidate))
+            {
+                boards.push_back(candidate);
+            }
         }
         return boards;
     }
@@ -51,7 +67,8 @@ namespace
         std::uint64_t hits = 0;
         std::uint64_t misses = 0;
         std::uint64_t replacements = 0;
-        std::size_t arena = 0;
+        std::uint64_t fingerprint = 1469598103934665603ull;
+        std::size_t roots_rejected = 0;
     };
 
     engine_alias::CacheConfig cache_for(engine_alias::CacheConfig::Layout layout)
@@ -65,7 +82,7 @@ namespace
 
     RunCounters run_workload(engine_alias::CacheConfig::Layout layout,
         std::vector<engine_alias::Board> const &boards,
-        toj_policy::Config &policy_config)
+        toj_policy::Config &policy_config, bool verbose)
     {
         RunCounters totals;
         engine_alias::EngineConfig config;
@@ -77,7 +94,7 @@ namespace
             std::println(stderr, "bench engine failed to initialize");
             std::exit(1);
         }
-        for (auto const &board : boards)
+        for (std::size_t index = 0; index < boards.size(); ++index)
         {
             auto queue = engine_alias::parse_queue("III");
             if (!queue.has_value())
@@ -87,8 +104,14 @@ namespace
             }
             toj_policy::State state;
             engine_alias::HoldState hold;
+            hold.locked = true;
             auto begin = std::chrono::steady_clock::now();
-            engine.set_root(board, state, std::move(*queue), hold);
+            auto root = engine.set_root(boards[index], state, std::move(*queue), hold);
+            if (root == engine_alias::no_node)
+            {
+                std::println(stderr, "bench board {} was rejected as a root", index);
+                std::exit(1);
+            }
             engine.run(engine_alias::SearchBudget::by_iterations(300));
             auto finish = std::chrono::steady_clock::now();
             totals.nanos += static_cast<std::uint64_t>(
@@ -99,7 +122,24 @@ namespace
             totals.hits += stats.cache_hits;
             totals.misses += stats.cache_misses;
             totals.replacements += stats.cache_replacements;
-            totals.arena = engine.arena_size();
+            auto selection = engine.select_best();
+            if (!selection.has_value())
+            {
+                std::println(stderr, "bench board {} produced no selection", index);
+                std::exit(1);
+            }
+            for (std::size_t way = 0; way < 2; ++way)
+            {
+                totals.fingerprint =
+                    (totals.fingerprint ^ (way == 0 ? selection->root_child
+                                                    : selection->evidence))
+                    * 1099511628211ull;
+            }
+            if (verbose)
+            {
+                std::println("  board={} arena={} root_child={} evidence={}", index,
+                    engine.arena_size(), selection->root_child, selection->evidence);
+            }
         }
         return totals;
     }
@@ -117,9 +157,11 @@ int main()
     auto const boards = workload_boards();
     auto const layout_bytes = sizeof(engine_alias::EvalCacheEntry) * 16384;
 
-    std::println("workload: 16 seeded boards, queue III, hold empty locked, 300 iterations per search");
+    std::println("workload: 16 full-row-free seeded boards, queue III, hold empty+locked, 300 iterations per search");
     std::println("variant byte budget: {} bytes per cached variant (16384 entries x {} byte entry)",
         layout_bytes * 1ull, sizeof(engine_alias::EvalCacheEntry));
+    std::println("layouts: direct-mapped is one way per set; set-associative-4 uses four ways per set");
+    std::println("counters are per-search; totals accumulate the per-search snapshots");
     std::println("warmup: 1 sweep, measured: 5 sweeps, fixed variant order per sweep");
 
     struct Variant
@@ -134,27 +176,32 @@ int main()
     } };
 
     std::array<std::uint64_t, 3> totals{};
+    std::array<RunCounters, 3> last{};
     for (int warmup = 0; warmup < 1; ++warmup)
     {
         for (auto const &variant : variants)
         {
-            (void)run_workload(variant.layout, boards, policy_config);
+            (void)run_workload(variant.layout, boards, policy_config, false);
         }
     }
     for (int rep = 0; rep < 5; ++rep)
     {
         for (std::size_t v = 0; v < variants.size(); ++v)
         {
-            RunCounters const result = run_workload(variants[v].layout, boards, policy_config);
+            RunCounters const result = run_workload(variants[v].layout, boards, policy_config, rep == 0);
             totals[v] += result.nanos;
-            std::println("rep={} variant={} nanos={} passes={} computed={} hits={} misses={} replacements={} arena={}",
+            last[v] = result;
+            std::println("rep={} variant={} nanos={} passes={} computed={} hits={} misses={} replacements={} fingerprint={:016x}",
                 rep, variants[v].name, result.nanos, result.passes, result.computed,
-                result.hits, result.misses, result.replacements, result.arena);
+                result.hits, result.misses, result.replacements, result.fingerprint);
         }
     }
     for (std::size_t v = 0; v < variants.size(); ++v)
     {
         std::println("total variant={} nanos={}", variants[v].name, totals[v]);
+        std::println("last variant={} computed={} hits={} misses={} replacements={} passes={} fingerprint={:016x}",
+            variants[v].name, last[v].computed, last[v].hits, last[v].misses,
+            last[v].replacements, last[v].passes, last[v].fingerprint);
     }
     return 0;
 }

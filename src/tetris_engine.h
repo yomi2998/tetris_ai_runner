@@ -5,6 +5,7 @@
 #include "toj_policy.h"
 
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -370,15 +371,27 @@ namespace tetris_engine
     class EvalCache
     {
     public:
-        void init(std::size_t entries, std::size_t ways)
+        void init(CacheConfig::Layout layout, std::size_t entries, std::size_t ways,
+            std::uint64_t stamp_seed = 0)
         {
-            entries_ = std::vector<EvalCacheEntry>(entries);
-            ways_ = ways < 1 ? 1 : ways;
             requests_ = 0;
             hits_ = 0;
             misses_ = 0;
             replacements_ = 0;
-            stamp_ = 0;
+            stamp_ = stamp_seed;
+            std::size_t const effective_ways =
+                layout == CacheConfig::Layout::DirectMapped ? 1 : ways;
+            bool const usable = entries >= 1 && effective_ways >= 1
+                && entries % effective_ways == 0
+                && std::has_single_bit(entries / effective_ways);
+            if (!usable)
+            {
+                entries_.clear();
+                ways_ = 1;
+                return;
+            }
+            ways_ = effective_ways;
+            entries_ = std::vector<EvalCacheEntry>(entries);
         }
 
         void clear()
@@ -387,11 +400,15 @@ namespace tetris_engine
             {
                 entry = EvalCacheEntry{};
             }
+            reset_counters();
+        }
+
+        void reset_counters()
+        {
             requests_ = 0;
             hits_ = 0;
             misses_ = 0;
             replacements_ = 0;
-            stamp_ = 0;
         }
 
         std::optional<Evaluation> find(Board const &board)
@@ -435,11 +452,14 @@ namespace tetris_engine
             if (victim == entries_.size())
             {
                 victim = set * ways_;
+                std::uint64_t oldest = age_of(entries_[victim].stamp);
                 for (std::size_t way = 1; way < ways_; ++way)
                 {
-                    if (entries_[set * ways_ + way].stamp
-                        < entries_[victim].stamp)
+                    std::uint64_t const candidate_age =
+                        age_of(entries_[set * ways_ + way].stamp);
+                    if (candidate_age > oldest)
                     {
+                        oldest = candidate_age;
                         victim = set * ways_ + way;
                     }
                 }
@@ -482,6 +502,11 @@ namespace tetris_engine
         {
             std::size_t const sets = entries_.size() / ways_;
             return static_cast<std::size_t>(occupancy_hash(board.occupancy()) & (sets - 1));
+        }
+
+        std::uint64_t age_of(std::uint64_t stamp) const
+        {
+            return stamp_ - stamp;
         }
 
         std::vector<EvalCacheEntry> entries_;
@@ -577,6 +602,7 @@ namespace tetris_engine
             , expanded_max_(other.expanded_max_)
             , width_cache_(other.width_cache_)
             , transposition_(std::move(other.transposition_))
+            , cache_(std::move(other.cache_))
             , transposition_used_(other.transposition_used_)
             , max_length_(other.max_length_)
             , width_(other.width_)

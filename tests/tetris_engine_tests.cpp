@@ -1165,10 +1165,27 @@ namespace
             check(!source.engine.search_complete() || source.engine.arena_size() > 1,
                 "mid-search source has live state");
             check(source.engine.arena_size() > 1, "mid-search move has live state");
+            auto const pre_move_stats = source.engine.search_stats();
+            check(pre_move_stats.cache_requests > 0,
+                "the mid-search source has cache activity");
+            std::uint64_t const pre_move_retained = source.engine.retained_bytes();
             engine_alias::Engine relocated(std::move(source.engine));
+            auto const post_move_stats = relocated.search_stats();
+            check(post_move_stats.cache_requests == pre_move_stats.cache_requests
+                && post_move_stats.cache_hits == pre_move_stats.cache_hits
+                && post_move_stats.cache_misses == pre_move_stats.cache_misses,
+                "a mid-search move transfers cache counters");
+            check(relocated.retained_bytes() == pre_move_retained,
+                "a mid-search move preserves retained storage");
             check(source.engine.init(source.engine_config),
                 "the source reinitializes after the move");
             check(relocated.run(500), "the mid-search moved engine completes");
+            auto const relocated_stats = relocated.search_stats();
+            check(relocated_stats.cache_requests > pre_move_stats.cache_requests,
+                "cache activity continues after the move");
+            check(relocated_stats.cache_requests
+                == relocated_stats.cache_hits + relocated_stats.cache_misses,
+                "a moved engine keeps its cache accounting consistent");
             Fixture baseline = make_zero_fixture();
             make_root(baseline, shelf_board(), "III", std::nullopt, true);
             check(baseline.engine.run(500), "the unmoved baseline completes");
@@ -1638,7 +1655,7 @@ namespace
     void run_cache_unit_tests()
     {
         engine_alias::EvalCache cache;
-        cache.init(64, 1);
+        cache.init(engine_alias::CacheConfig::Layout::SetAssociative, 64, 1);
         auto board_at = [](std::uint16_t row0) {
             std::array<std::uint16_t, 48> rows = {};
             rows[0] = row0;
@@ -1702,7 +1719,7 @@ namespace
             "cleared entries miss");
         {
             engine_alias::EvalCache assoc;
-            assoc.init(64, 4);
+            assoc.init(engine_alias::CacheConfig::Layout::SetAssociative, 64, 4);
             std::mt19937_64 set_rng(0xBEEF);
             std::vector<tetris::Board> ways_boards;
             while (ways_boards.size() < 5)
@@ -1756,9 +1773,140 @@ namespace
                     "the fifth same-set insert replaces the lowest stamp");
                 check(assoc.find(ways_boards[0]) == std::nullopt,
                     "the lowest-stamp way was replaced");
+                for (std::size_t i = 1; i < 4; ++i)
+                {
+                    check(assoc.find(ways_boards[i]).has_value(),
+                        "the newer ways survive the rollover replacement");
+                }
             }
         }
-        std::println("eval cache: exact verification, replacement, counters, clear");
+        {
+            engine_alias::EvalCache rollover;
+            std::uint64_t const near_wrap = std::numeric_limits<std::uint64_t>::max() - 2;
+            rollover.init(engine_alias::CacheConfig::Layout::SetAssociative, 64, 4,
+                near_wrap);
+            std::mt19937_64 wrap_rng(0x5EED);
+            std::vector<tetris::Board> wrap_boards;
+            while (wrap_boards.size() < 5)
+            {
+                std::uint16_t row = static_cast<std::uint16_t>(wrap_rng() & 0x3ff);
+                if (row == 0)
+                {
+                    continue;
+                }
+                tetris::Board candidate = board_at(row);
+                bool duplicate = false;
+                for (auto const &existing : wrap_boards)
+                {
+                    if (existing.occupancy() == candidate.occupancy())
+                    {
+                        duplicate = true;
+                    }
+                }
+                if (!duplicate
+                    && (wrap_boards.empty()
+                            || (engine_alias::occupancy_hash(candidate.occupancy()) & 15)
+                                == (engine_alias::occupancy_hash(wrap_boards[0].occupancy())
+                                    & 15)))
+                {
+                    wrap_boards.push_back(candidate);
+                }
+            }
+            for (std::size_t i = 0; i < 4; ++i)
+            {
+                toj_policy::Evaluation value;
+                value.value = static_cast<double>(i);
+                rollover.insert(wrap_boards[i], value);
+            }
+            toj_policy::Evaluation wrapped;
+            wrapped.value = 123.0;
+            rollover.insert(wrap_boards[4], wrapped);
+            check(rollover.replacements() == 1,
+                "the stamp crossing zero replaces once by circular age");
+            check(rollover.find(wrap_boards[0]) == std::nullopt,
+                "the circular-oldest way was replaced across the wrap");
+            for (std::size_t i = 1; i < 4; ++i)
+            {
+                check(rollover.find(wrap_boards[i]).has_value(),
+                    "entries stamped after the wrap stay reachable");
+            }
+            auto wrapped_hit = rollover.find(wrap_boards[4]);
+            check(wrapped_hit.has_value() && wrapped_hit->value == wrapped.value,
+                "the wrapped insert verifies exactly");
+        }
+        {
+            engine_alias::EvalCache domain;
+            domain.init(engine_alias::CacheConfig::Layout::DirectMapped, 64, 1);
+            std::array<std::uint16_t, 48> upper_a = {};
+            upper_a[0] = 0x001;
+            upper_a[40] = 0x100;
+            std::array<std::uint16_t, 48> upper_b = {};
+            upper_b[0] = 0x001;
+            upper_b[40] = 0x200;
+            tetris::Board board_a = tetris::Board::from_rows(upper_a);
+            tetris::Board board_b = tetris::Board::from_rows(upper_b);
+            toj_policy::Evaluation value_a;
+            value_a.value = 42.0;
+            toj_policy::Evaluation value_b;
+            value_b.value = 43.0;
+            domain.insert(board_a, value_a);
+            check(domain.find(board_b) == std::nullopt,
+                "upper-domain boards differing in one high row never alias");
+            auto hit = domain.find(board_a);
+            check(hit.has_value() && hit->value == value_a.value,
+                "an upper-storage-domain board hits its own entry");
+            domain.insert(board_b, value_b);
+            auto hit_b = domain.find(board_b);
+            check(hit_b.has_value() && hit_b->value == value_b.value,
+                "a second upper-domain board keeps its own evaluation");
+            std::println("eval cache: exact verification, replacement, counters, clear");
+        }
+    }
+
+    struct NodeFingerprint
+    {
+        std::array<std::uint64_t, 8> occupancy{};
+        double eval_value = 0;
+        std::int16_t eval_t2 = 0;
+        std::int16_t eval_t3 = 0;
+        double state_value = 0;
+        double state_acc = 0;
+        double state_like = 0;
+        std::int8_t state_death = 0;
+        std::int8_t state_combo = 0;
+        std::int8_t state_under_attack = 0;
+        std::int8_t state_map_rise = 0;
+        std::int8_t state_b2b = 0;
+        std::int16_t state_t2 = 0;
+        std::int16_t state_t3 = 0;
+        std::size_t cursor = 0;
+
+        bool operator==(NodeFingerprint const &) const = default;
+    };
+
+    NodeFingerprint fingerprint(engine_alias::Node const *node)
+    {
+        NodeFingerprint print;
+        for (int i = 0; i < 8; ++i)
+        {
+            print.occupancy[static_cast<std::size_t>(i)] =
+                node->board.occupancy().logical_word(i);
+        }
+        print.eval_value = node->evaluation.value;
+        print.eval_t2 = node->evaluation.t2_value;
+        print.eval_t3 = node->evaluation.t3_value;
+        print.state_value = node->policy.value;
+        print.state_acc = node->policy.acc_value;
+        print.state_like = node->policy.like;
+        print.state_death = node->policy.death;
+        print.state_combo = node->policy.combo;
+        print.state_under_attack = node->policy.under_attack;
+        print.state_map_rise = node->policy.map_rise;
+        print.state_b2b = node->policy.b2b;
+        print.state_t2 = node->policy.t2_value;
+        print.state_t3 = node->policy.t3_value;
+        print.cursor = node->cursor;
+        return print;
     }
 
     void run_cache_parity_tests()
@@ -1780,6 +1928,7 @@ namespace
                 "parity fixture initializes");
             std::vector<engine_alias::SearchSelection> selections;
             std::vector<std::size_t> arena_sizes;
+            std::vector<NodeFingerprint> prints;
             for (auto const &board : boards)
             {
                 make_root(fixture, board, queue_text, std::nullopt, true);
@@ -1788,14 +1937,19 @@ namespace
                 check(selection.has_value(), "parity search selects");
                 selections.push_back(selection.value_or(engine_alias::SearchSelection{}));
                 arena_sizes.push_back(fixture.engine.arena_size());
+                for (std::size_t id = 0; id < fixture.engine.arena_size(); ++id)
+                {
+                    prints.push_back(fingerprint(
+                        fixture.engine.node(static_cast<engine_alias::NodeId>(id))));
+                }
             }
-            return std::pair(selections, arena_sizes);
+            return std::tuple(selections, arena_sizes, prints);
         };
         auto const disabled = run_variant(engine_alias::CacheConfig::Layout::Disabled);
         auto const direct = run_variant(engine_alias::CacheConfig::Layout::DirectMapped);
         auto const assoc = run_variant(engine_alias::CacheConfig::Layout::SetAssociative);
         check(disabled == direct && disabled == assoc,
-            "cached and disabled runs produce identical searches");
+            "cached and disabled runs produce identical materialized trees");
         std::println("cache parity: disabled, direct-mapped, set-associative agree");
     }
 
@@ -1866,6 +2020,78 @@ namespace
                 "a moved engine keeps its cache functional");
             check(after.cache_requests == after.cache_hits + after.cache_misses,
                 "a moved engine keeps its cache accounting consistent");
+        }
+        {
+            Fixture direct = make_fixture();
+            Fixture assoc = make_fixture();
+            assoc.engine_config.cache.layout = engine_alias::CacheConfig::Layout::SetAssociative;
+            check(assoc.engine.init(assoc.engine_config),
+                "set-associative fixture initializes");
+            std::uint64_t direct_replacements = 0;
+            std::uint64_t assoc_replacements = 0;
+            std::uint64_t direct_requests = 0;
+            std::uint64_t assoc_requests = 0;
+            for (int r = 0; r < 2; ++r)
+            {
+                make_root(direct, shelf_board(), "III", std::nullopt, true);
+                direct.engine.run(300);
+                make_root(assoc, shelf_board(), "III", std::nullopt, true);
+                assoc.engine.run(300);
+                auto dm_stats = direct.engine.search_stats();
+                auto sa_stats = assoc.engine.search_stats();
+                direct_replacements += dm_stats.cache_replacements;
+                assoc_replacements += sa_stats.cache_replacements;
+                direct_requests += dm_stats.cache_requests;
+                assoc_requests += sa_stats.cache_requests;
+            }
+            check(direct_replacements > assoc_replacements,
+                "direct-mapped and set-associative layouts behave differently");
+            check(assoc_replacements > 0,
+                "the set-associative layout also replaces under conflicts");
+            check(direct_requests == assoc_requests,
+                "both layouts see the same lookup stream");
+        }
+        {
+            Fixture fixture = make_fixture();
+            make_root(fixture, shelf_board(), "III", std::nullopt, true);
+            fixture.engine.run(300);
+            auto const warm_selection = fixture.engine.select_best();
+            std::vector<NodeFingerprint> warm_prints;
+            for (std::size_t id = 0; id < fixture.engine.arena_size(); ++id)
+            {
+                warm_prints.push_back(fingerprint(
+                    fixture.engine.node(static_cast<engine_alias::NodeId>(id))));
+            }
+            fixture.policy_config.parameters.base = 999.0;
+            check(fixture.engine.init(fixture.engine_config),
+                "reinitialization with changed evaluation parameters");
+            make_root(fixture, shelf_board(), "III", std::nullopt, true);
+            fixture.engine.run(300);
+            auto const changed_selection = fixture.engine.select_best();
+            std::vector<NodeFingerprint> changed_prints;
+            for (std::size_t id = 0; id < fixture.engine.arena_size(); ++id)
+            {
+                changed_prints.push_back(fingerprint(
+                    fixture.engine.node(static_cast<engine_alias::NodeId>(id))));
+            }
+            Fixture fresh = make_fixture();
+            fresh.policy_config.parameters.base = 999.0;
+            check(fresh.engine.init(fresh.engine_config),
+                "fresh changed-parameter engine initializes");
+            make_root(fresh, shelf_board(), "III", std::nullopt, true);
+            fresh.engine.run(300);
+            auto const fresh_selection = fresh.engine.select_best();
+            std::vector<NodeFingerprint> fresh_prints;
+            for (std::size_t id = 0; id < fresh.engine.arena_size(); ++id)
+            {
+                fresh_prints.push_back(fingerprint(
+                    fresh.engine.node(static_cast<engine_alias::NodeId>(id))));
+            }
+            check(changed_selection == fresh_selection
+                && changed_prints == fresh_prints,
+                "changed-parameter results match a fresh engine exactly");
+            check(changed_prints != warm_prints,
+                "stale warm-cache results cannot survive the parameter change");
         }
         std::println("cache counters: requests, hits, misses, replacements, memo");
     }

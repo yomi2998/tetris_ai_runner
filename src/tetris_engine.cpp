@@ -64,13 +64,32 @@ namespace tetris_engine
         cache_ = EvalCache{};
         queue_ = Queue{};
         reset_run_state();
-        std::uint64_t const cache_bytes =
-            config_.cache.layout == CacheConfig::Layout::Disabled
-            ? 0
-            : config_.cache.entries * sizeof(EvalCacheEntry);
-        std::uint64_t const allowance = engine_memory_budget
-            - engine_buffer_reservation(0, 0, 0, 0, 0, cache_bytes);
-        if (config_.arena_capacity > max_nodes
+        bool const cache_enabled = config_.cache.layout != CacheConfig::Layout::Disabled;
+        std::size_t const effective_ways =
+            config_.cache.layout == CacheConfig::Layout::DirectMapped
+            ? 1
+            : config_.cache.ways;
+        bool const cache_geometry_ok = !cache_enabled
+            || (config_.cache.entries >= 1 && effective_ways >= 1
+                && config_.cache.entries % effective_ways == 0
+                && std::has_single_bit(config_.cache.entries / effective_ways)
+                && config_.cache.entries
+                    <= std::numeric_limits<std::uint64_t>::max() / sizeof(EvalCacheEntry));
+        std::uint64_t cache_bytes = 0;
+        if (cache_geometry_ok && cache_enabled)
+        {
+            cache_bytes = static_cast<std::uint64_t>(config_.cache.entries)
+                * sizeof(EvalCacheEntry);
+        }
+        std::uint64_t const planned = engine_buffer_reservation(0,
+            max_candidates_per_source * sizeof(Candidate),
+            max_children_per_parent * sizeof(Child),
+            max_children_per_parent * sizeof(std::pair<Board, Evaluation>),
+            transposition_entries * sizeof(TranspositionEntry),
+            cache_bytes);
+        std::uint64_t const allowance =
+            planned <= engine_memory_budget ? engine_memory_budget - planned : 0;
+        if (!cache_geometry_ok || config_.arena_capacity > max_nodes
             || config_.arena_capacity > allowance / sizeof(Node))
         {
             config_.arena_capacity = 0;
@@ -91,7 +110,7 @@ namespace tetris_engine
         queue_.boundary.reserve(max_queue_length);
         if (config_.cache.layout != CacheConfig::Layout::Disabled)
         {
-            cache_.init(config_.cache.entries, config_.cache.ways);
+            cache_.init(config_.cache.layout, config_.cache.entries, config_.cache.ways);
         }
         std::uint64_t const used = engine_buffer_reservation(
             static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node),
@@ -127,6 +146,7 @@ namespace tetris_engine
         search_stats_ = SearchStats{};
         stats_ = ExpansionStats{};
         exhausted_ = false;
+        cache_.reset_counters();
         heap_.reset(max_frontiers);
         for (std::size_t i = 0; i < max_frontiers; ++i)
         {
