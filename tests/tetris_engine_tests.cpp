@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <limits>
 #include <print>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace engine_alias = tetris_engine;
@@ -688,6 +690,15 @@ namespace
         std::println("reservation: exact bytes, stable addresses, no growth peaks");
     }
 
+    std::size_t fixtureless_cache_bytes(engine_alias::CacheConfig::Layout layout)
+    {
+        engine_alias::CacheConfig config;
+        config.layout = layout;
+        return layout == engine_alias::CacheConfig::Layout::Disabled
+            ? std::size_t{ 0 }
+            : config.entries * sizeof(engine_alias::EvalCacheEntry);
+    }
+
     void run_init_validation_tests()
     {
         {
@@ -705,10 +716,12 @@ namespace
                 "rejected capacity allocates nothing");
         }
         {
-            std::size_t over_bytes =
-                static_cast<std::size_t>((engine_alias::engine_memory_budget
-                    - engine_alias::engine_fixed_workspace)
-                    / sizeof(engine_alias::Node))
+            std::size_t const cache_bytes =
+                fixtureless_cache_bytes(engine_alias::CacheConfig::Layout::Disabled);
+            std::size_t over_bytes = static_cast<std::size_t>(
+                (engine_alias::engine_memory_budget
+                    - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, cache_bytes))
+                / sizeof(engine_alias::Node))
                 + 1;
             Fixture fixture;
             fixture.policy_config.combo_table = combo_table;
@@ -722,6 +735,27 @@ namespace
                 "capacity beyond the byte allowance is rejected");
             check(fixture.engine.arena_reserved_bytes() == 0,
                 "rejected byte allowance allocates nothing");
+        }
+        {
+            std::size_t const cache_bytes = fixtureless_cache_bytes(
+                engine_alias::CacheConfig::Layout::DirectMapped);
+            std::size_t over_bytes = static_cast<std::size_t>(
+                (engine_alias::engine_memory_budget
+                    - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, cache_bytes))
+                / sizeof(engine_alias::Node))
+                + 1;
+            Fixture fixture;
+            fixture.policy_config.combo_table = combo_table;
+            fixture.policy_config.combo_table_max = 10;
+            fixture.policy_config.safe = 5;
+            fixture.policy_config.parameters = toj_policy::Parameters::production_defaults();
+            fixture.engine_config.policy = &fixture.policy_config;
+            fixture.engine_config.cache.layout = engine_alias::CacheConfig::Layout::DirectMapped;
+            fixture.engine_config.arena_capacity = over_bytes;
+            check(!fixture.engine.init(fixture.engine_config),
+                "the cache reservation participates in the byte allowance");
+            check(fixture.engine.arena_reserved_bytes() == 0,
+                "rejected cache-configured capacity allocates nothing");
         }
         std::println("init validation: limits reject before allocation");
     }
@@ -1601,6 +1635,241 @@ namespace
         std::println("time budget: controllable clock, legacy do-while semantics");
     }
 
+    void run_cache_unit_tests()
+    {
+        engine_alias::EvalCache cache;
+        cache.init(64, 1);
+        auto board_at = [](std::uint16_t row0) {
+            std::array<std::uint16_t, 48> rows = {};
+            rows[0] = row0;
+            return tetris::Board::from_rows(rows);
+        };
+        std::mt19937_64 rng(0xC0FFEE);
+        auto hash_of = [](tetris::Board const &board) {
+            return engine_alias::occupancy_hash(board.occupancy());
+        };
+        tetris::Board first;
+        tetris::Board second;
+        bool found_collision = false;
+        for (int attempt = 0; attempt < 100000 && !found_collision; ++attempt)
+        {
+            std::uint16_t a = static_cast<std::uint16_t>(rng());
+            std::uint16_t b = static_cast<std::uint16_t>(rng());
+            if (a == b || (a & 0x3ff) == 0 || (b & 0x3ff) == 0)
+            {
+                continue;
+            }
+            tetris::Board board_a = board_at(static_cast<std::uint16_t>(a & 0x3ff));
+            tetris::Board board_b = board_at(static_cast<std::uint16_t>(b & 0x3ff));
+            if ((hash_of(board_a) & 63) == (hash_of(board_b) & 63))
+            {
+                first = board_a;
+                second = board_b;
+                found_collision = true;
+            }
+        }
+        check(found_collision, "a forced index collision was constructed");
+        if (!found_collision)
+        {
+            return;
+        }
+        toj_policy::Evaluation one;
+        one.value = 11.5;
+        toj_policy::Evaluation two;
+        two.value = -7.25;
+        cache.insert(first, one);
+        check(cache.find(second) == std::nullopt,
+            "a same-bucket distinct board never produces a false hit");
+        cache.insert(second, two);
+        check(cache.replacements() == 1,
+            "a same-set insert without a free way replaces exactly once");
+        check(cache.find(first) == std::nullopt,
+            "the replaced entry is gone");
+        auto hit = cache.find(second);
+        check(hit.has_value() && hit->value == two.value,
+            "the surviving entry verifies exactly and returns its value");
+        check(cache.hits() == 1 && cache.misses() == 2,
+            "collision counters account requests exactly");
+        cache.insert(second, one);
+        check(cache.find(second).has_value()
+            && cache.find(second)->value == one.value,
+            "repeated hits return the refreshed evaluation");
+        cache.clear();
+        check(cache.requests() == 0 && cache.hits() == 0 && cache.misses() == 0
+            && cache.replacements() == 0,
+            "clear invalidates entries and counters");
+        check(cache.find(second) == std::nullopt,
+            "cleared entries miss");
+        {
+            engine_alias::EvalCache assoc;
+            assoc.init(64, 4);
+            std::mt19937_64 set_rng(0xBEEF);
+            std::vector<tetris::Board> ways_boards;
+            while (ways_boards.size() < 5)
+            {
+                std::uint16_t row = static_cast<std::uint16_t>(set_rng() & 0x3ff);
+                if (row == 0)
+                {
+                    continue;
+                }
+                tetris::Board candidate = board_at(row);
+                bool duplicate = false;
+                for (auto const &existing : ways_boards)
+                {
+                    if (existing.occupancy() == candidate.occupancy())
+                    {
+                        duplicate = true;
+                    }
+                }
+                if (!duplicate && (engine_alias::occupancy_hash(candidate.occupancy()) & 15)
+                    == (ways_boards.empty()
+                            ? (engine_alias::occupancy_hash(candidate.occupancy()) & 15)
+                            : (engine_alias::occupancy_hash(ways_boards[0].occupancy()) & 15)))
+                {
+                    ways_boards.push_back(candidate);
+                }
+            }
+            bool same_set = true;
+            for (std::size_t i = 1; i < ways_boards.size(); ++i)
+            {
+                if ((engine_alias::occupancy_hash(ways_boards[i].occupancy()) & 15)
+                    != (engine_alias::occupancy_hash(ways_boards[0].occupancy()) & 15))
+                {
+                    same_set = false;
+                }
+            }
+            check(same_set, "the four-way probe boards share one set");
+            if (same_set)
+            {
+                for (std::size_t i = 0; i < 4; ++i)
+                {
+                    toj_policy::Evaluation value;
+                    value.value = static_cast<double>(i);
+                    assoc.insert(ways_boards[i], value);
+                }
+                check(assoc.replacements() == 0,
+                    "a four-way set absorbs four inserts without replacement");
+                toj_policy::Evaluation fifth;
+                fifth.value = 99.0;
+                assoc.insert(ways_boards[4], fifth);
+                check(assoc.replacements() == 1,
+                    "the fifth same-set insert replaces the lowest stamp");
+                check(assoc.find(ways_boards[0]) == std::nullopt,
+                    "the lowest-stamp way was replaced");
+            }
+        }
+        std::println("eval cache: exact verification, replacement, counters, clear");
+    }
+
+    void run_cache_parity_tests()
+    {
+        std::vector<tetris::Board> boards;
+        boards.push_back(shelf_board());
+        boards.push_back(tetris::Board{});
+        std::array<std::uint16_t, 48> rows = {};
+        rows[0] = 0x0ff;
+        rows[1] = 0x1ff;
+        rows[2] = 0x0f8;
+        rows[3] = 0x3c0;
+        boards.push_back(tetris::Board::from_rows(rows));
+        std::string const queue_text = "III";
+        auto run_variant = [&](engine_alias::CacheConfig::Layout layout) {
+            Fixture fixture = make_fixture();
+            fixture.engine_config.cache.layout = layout;
+            check(fixture.engine.init(fixture.engine_config),
+                "parity fixture initializes");
+            std::vector<engine_alias::SearchSelection> selections;
+            std::vector<std::size_t> arena_sizes;
+            for (auto const &board : boards)
+            {
+                make_root(fixture, board, queue_text, std::nullopt, true);
+                fixture.engine.run(300);
+                auto selection = fixture.engine.select_best();
+                check(selection.has_value(), "parity search selects");
+                selections.push_back(selection.value_or(engine_alias::SearchSelection{}));
+                arena_sizes.push_back(fixture.engine.arena_size());
+            }
+            return std::pair(selections, arena_sizes);
+        };
+        auto const disabled = run_variant(engine_alias::CacheConfig::Layout::Disabled);
+        auto const direct = run_variant(engine_alias::CacheConfig::Layout::DirectMapped);
+        auto const assoc = run_variant(engine_alias::CacheConfig::Layout::SetAssociative);
+        check(disabled == direct && disabled == assoc,
+            "cached and disabled runs produce identical searches");
+        std::println("cache parity: disabled, direct-mapped, set-associative agree");
+    }
+
+    void run_cache_counter_tests()
+    {
+        {
+            Fixture fixture = make_fixture();
+            make_root(fixture, shelf_board(), "III", std::nullopt, true);
+            fixture.engine.run(300);
+            auto stats = fixture.engine.search_stats();
+            check(stats.cache_requests == stats.cache_hits + stats.cache_misses,
+                "cache requests split into hits and misses");
+            check(stats.cache_misses == stats.eval_computed,
+                "every cache miss computes exactly one evaluation");
+            check(stats.eval_requests == stats.eval_memo_hits + stats.cache_requests,
+                "requests split into memo hits and cache lookups");
+            check(stats.cache_hits > 0,
+                "the workload exercises cache hits");
+            stats = fixture.engine.search_stats();
+            check(stats.cache_requests == stats.cache_hits + stats.cache_misses,
+                "counters stay consistent after completion");
+        }
+        {
+            Fixture fixture = make_fixture();
+            fixture.engine_config.cache.layout = engine_alias::CacheConfig::Layout::Disabled;
+            check(fixture.engine.init(fixture.engine_config),
+                "disabled-cache fixture initializes");
+            make_root(fixture, shelf_board(), "III", std::nullopt, true);
+            fixture.engine.run(300);
+            auto stats = fixture.engine.search_stats();
+            check(stats.cache_requests == 0 && stats.cache_hits == 0
+                && stats.cache_misses == 0 && stats.cache_replacements == 0,
+                "a disabled cache reports no counters");
+            check(stats.eval_computed == stats.eval_requests - stats.eval_memo_hits,
+                "disabled-cache evaluations match requests minus memo hits");
+        }
+        {
+            Fixture fixture = make_fixture();
+            make_root(fixture, shelf_board(), "III", std::nullopt, true);
+            fixture.engine.run(3);
+            check(fixture.engine.arena_size() > 1,
+                "pre-reinitialization search materializes");
+            check(fixture.engine.init(fixture.engine_config),
+                "reinitialization with the same policy");
+            make_root(fixture, shelf_board(), "III", std::nullopt, true);
+            fixture.engine.run(300);
+            auto stats = fixture.engine.search_stats();
+            check(stats.cache_hits >= 0 && stats.cache_requests
+                    == stats.cache_hits + stats.cache_misses,
+                "reinitialization invalidates without stale hits corrupting counts");
+        }
+        {
+            Fixture fixture = make_zero_fixture();
+            make_root(fixture, shelf_board(), "III", std::nullopt, true);
+            fixture.engine.run(300);
+            engine_alias::Engine moved(std::move(fixture.engine));
+            auto before = moved.search_stats();
+            auto queue = engine_alias::parse_queue("III");
+            check(queue.has_value(), "moved-engine queue parses");
+            toj_policy::State root_state;
+            engine_alias::HoldState root_hold;
+            check(moved.set_root(shelf_board(), root_state, std::move(*queue), root_hold)
+                != engine_alias::no_node,
+                "a moved engine takes a new root");
+            moved.run(300);
+            auto after = moved.search_stats();
+            check(after.cache_requests >= before.cache_requests,
+                "a moved engine keeps its cache functional");
+            check(after.cache_requests == after.cache_hits + after.cache_misses,
+                "a moved engine keeps its cache accounting consistent");
+        }
+        std::println("cache counters: requests, hits, misses, replacements, memo");
+    }
+
     void run_budget_tests()
     {
         std::size_t capacity = engine_alias::default_arena_capacity;
@@ -1650,6 +1919,9 @@ int main()
     run_reinit_tests();
     run_exhaustion_projection_tests();
     run_adapter_order_tests();
+    run_cache_unit_tests();
+    run_cache_parity_tests();
+    run_cache_counter_tests();
     std::println("tetris_engine_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }

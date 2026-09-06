@@ -181,6 +181,14 @@ target_link_libraries(tetris_engine_tests PRIVATE fast_reachability)
 target_include_directories(tetris_engine_tests PRIVATE src tests src/fast-reachability)
 add_test(NAME tetris_engine_tests COMMAND tetris_engine_tests)
 
+add_executable(eval_cache_bench
+    tests/eval_cache_bench.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(eval_cache_bench PRIVATE fast_reachability)
+target_include_directories(eval_cache_bench PRIVATE src tests src/fast-reachability)
+
 add_executable(fast_reachability_tests
     tests/fast_reachability_tests.cpp
 )

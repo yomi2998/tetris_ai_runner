@@ -61,9 +61,15 @@ namespace tetris_engine
         std::vector<Child>().swap(child_buffer_);
         std::vector<std::pair<Board, Evaluation>>().swap(eval_memo_);
         std::vector<TranspositionEntry>().swap(transposition_);
+        cache_ = EvalCache{};
         queue_ = Queue{};
         reset_run_state();
-        std::uint64_t const allowance = engine_memory_budget - engine_fixed_workspace;
+        std::uint64_t const cache_bytes =
+            config_.cache.layout == CacheConfig::Layout::Disabled
+            ? 0
+            : config_.cache.entries * sizeof(EvalCacheEntry);
+        std::uint64_t const allowance = engine_memory_budget
+            - engine_buffer_reservation(0, 0, 0, 0, 0, cache_bytes);
         if (config_.arena_capacity > max_nodes
             || config_.arena_capacity > allowance / sizeof(Node))
         {
@@ -83,6 +89,10 @@ namespace tetris_engine
         transposition_.resize(transposition_entries);
         queue_.pieces.reserve(max_queue_length);
         queue_.boundary.reserve(max_queue_length);
+        if (config_.cache.layout != CacheConfig::Layout::Disabled)
+        {
+            cache_.init(config_.cache.entries, config_.cache.ways);
+        }
         std::uint64_t const used = engine_buffer_reservation(
             static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node),
             static_cast<std::uint64_t>(candidate_buffer_.capacity()) * sizeof(Candidate),
@@ -90,7 +100,8 @@ namespace tetris_engine
             static_cast<std::uint64_t>(eval_memo_.capacity())
                 * sizeof(std::pair<Board, Evaluation>),
             static_cast<std::uint64_t>(transposition_.capacity())
-                * sizeof(TranspositionEntry));
+                * sizeof(TranspositionEntry),
+            static_cast<std::uint64_t>(cache_.reserved_bytes()));
         if (used > engine_memory_budget)
         {
             std::vector<Node>().swap(arena_);
@@ -98,6 +109,7 @@ namespace tetris_engine
             std::vector<Child>().swap(child_buffer_);
             std::vector<std::pair<Board, Evaluation>>().swap(eval_memo_);
             std::vector<TranspositionEntry>().swap(transposition_);
+            cache_ = EvalCache{};
             queue_ = Queue{};
             config_.arena_capacity = 0;
             return false;
@@ -187,10 +199,28 @@ namespace tetris_engine
                 return entry.second;
             }
         }
+        if (config_.cache.layout != CacheConfig::Layout::Disabled)
+        {
+            ++search_stats_.cache_requests;
+            if (auto cached = cache_.find(board))
+            {
+                ++search_stats_.cache_hits;
+                if (eval_memo_.size() < eval_memo_.capacity())
+                {
+                    eval_memo_.push_back({ board, *cached });
+                }
+                return *cached;
+            }
+            ++search_stats_.cache_misses;
+        }
         Evaluation evaluation = policy_.evaluate(board);
         if (eval_memo_.size() < eval_memo_.capacity())
         {
             eval_memo_.push_back({ board, evaluation });
+        }
+        if (config_.cache.layout != CacheConfig::Layout::Disabled)
+        {
+            cache_.insert(board, evaluation);
         }
         ++search_stats_.eval_computed;
         ++stats_.evaluated;
@@ -435,7 +465,8 @@ namespace tetris_engine
             static_cast<std::uint64_t>(eval_memo_.capacity())
                 * sizeof(std::pair<Board, Evaluation>),
             static_cast<std::uint64_t>(transposition_.capacity())
-                * sizeof(TranspositionEntry));
+                * sizeof(TranspositionEntry),
+            static_cast<std::uint64_t>(cache_.reserved_bytes()));
     }
 
     bool Engine::arena_exhausted() const
@@ -453,9 +484,14 @@ namespace tetris_engine
         return max_length_ + 1;
     }
 
-    SearchStats const &Engine::search_stats() const
+    SearchStats Engine::search_stats() const
     {
-        return search_stats_;
+        SearchStats stats = search_stats_;
+        stats.cache_requests = cache_.requests();
+        stats.cache_hits = cache_.hits();
+        stats.cache_misses = cache_.misses();
+        stats.cache_replacements = cache_.replacements();
+        return stats;
     }
 
     TranspositionKey Engine::build_key(Child const &child, NodeId id) const

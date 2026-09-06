@@ -314,6 +314,10 @@ namespace tetris_engine
         std::size_t eval_requests = 0;
         std::size_t eval_memo_hits = 0;
         std::size_t eval_computed = 0;
+        std::size_t cache_requests = 0;
+        std::size_t cache_hits = 0;
+        std::size_t cache_misses = 0;
+        std::size_t cache_replacements = 0;
         std::size_t policy_transitions = 0;
         std::size_t materialized_nodes = 0;
         std::size_t transposition_merges = 0;
@@ -326,13 +330,176 @@ namespace tetris_engine
     {
         NodeId root_child = no_node;
         NodeId evidence = no_node;
+
+        bool operator==(SearchSelection const &) const = default;
+    };
+
+    inline std::uint64_t occupancy_hash(Board::occupancy_t const &occupancy)
+    {
+        std::uint64_t h = 1469598103934665603ull;
+        for (int i = 0; i < Board::occupancy_t::word_count(); ++i)
+        {
+            h ^= occupancy.logical_word(i);
+            h *= 1099511628211ull;
+        }
+        return h;
+    }
+
+    struct CacheConfig
+    {
+        enum class Layout : std::uint8_t
+        {
+            Disabled,
+            DirectMapped,
+            SetAssociative,
+        };
+
+        Layout layout = Layout::DirectMapped;
+        std::size_t entries = 16384;
+        std::size_t ways = 4;
+    };
+
+    struct EvalCacheEntry
+    {
+        Board::occupancy_t occupancy{};
+        Evaluation evaluation{};
+        std::uint64_t stamp = 0;
+        bool used = false;
+    };
+
+    class EvalCache
+    {
+    public:
+        void init(std::size_t entries, std::size_t ways)
+        {
+            entries_ = std::vector<EvalCacheEntry>(entries);
+            ways_ = ways < 1 ? 1 : ways;
+            requests_ = 0;
+            hits_ = 0;
+            misses_ = 0;
+            replacements_ = 0;
+            stamp_ = 0;
+        }
+
+        void clear()
+        {
+            for (auto &entry : entries_)
+            {
+                entry = EvalCacheEntry{};
+            }
+            requests_ = 0;
+            hits_ = 0;
+            misses_ = 0;
+            replacements_ = 0;
+            stamp_ = 0;
+        }
+
+        std::optional<Evaluation> find(Board const &board)
+        {
+            if (entries_.empty())
+            {
+                return std::nullopt;
+            }
+            ++requests_;
+            std::size_t const set = set_of(board);
+            for (std::size_t way = 0; way < ways_; ++way)
+            {
+                EvalCacheEntry &entry = entries_[set * ways_ + way];
+                if (entry.used && entry.occupancy == board.occupancy())
+                {
+                    ++hits_;
+                    return entry.evaluation;
+                }
+            }
+            ++misses_;
+            return std::nullopt;
+        }
+
+        void insert(Board const &board, Evaluation const &evaluation)
+        {
+            if (entries_.empty())
+            {
+                return;
+            }
+            std::size_t const set = set_of(board);
+            std::size_t victim = entries_.size();
+            for (std::size_t way = 0; way < ways_; ++way)
+            {
+                EvalCacheEntry &entry = entries_[set * ways_ + way];
+                if (!entry.used)
+                {
+                    victim = set * ways_ + way;
+                    break;
+                }
+            }
+            if (victim == entries_.size())
+            {
+                victim = set * ways_;
+                for (std::size_t way = 1; way < ways_; ++way)
+                {
+                    if (entries_[set * ways_ + way].stamp
+                        < entries_[victim].stamp)
+                    {
+                        victim = set * ways_ + way;
+                    }
+                }
+                ++replacements_;
+            }
+            EvalCacheEntry &entry = entries_[victim];
+            entry.occupancy = board.occupancy();
+            entry.evaluation = evaluation;
+            entry.stamp = ++stamp_;
+            entry.used = true;
+        }
+
+        std::size_t requests() const
+        {
+            return requests_;
+        }
+
+        std::size_t hits() const
+        {
+            return hits_;
+        }
+
+        std::size_t misses() const
+        {
+            return misses_;
+        }
+
+        std::size_t replacements() const
+        {
+            return replacements_;
+        }
+
+        std::size_t reserved_bytes() const
+        {
+            return entries_.capacity() * sizeof(EvalCacheEntry);
+        }
+
+    private:
+        std::size_t set_of(Board const &board) const
+        {
+            std::size_t const sets = entries_.size() / ways_;
+            return static_cast<std::size_t>(occupancy_hash(board.occupancy()) & (sets - 1));
+        }
+
+        std::vector<EvalCacheEntry> entries_;
+        std::size_t ways_ = 1;
+        std::uint64_t stamp_ = 0;
+        std::size_t requests_ = 0;
+        std::size_t hits_ = 0;
+        std::size_t misses_ = 0;
+        std::size_t replacements_ = 0;
     };
 
     inline constexpr std::uint64_t engine_buffer_reservation(
         std::uint64_t arena_bytes, std::uint64_t candidate_bytes, std::uint64_t child_bytes,
-        std::uint64_t memo_bytes, std::uint64_t transposition_bytes)
+        std::uint64_t memo_bytes, std::uint64_t transposition_bytes,
+        std::uint64_t cache_bytes)
     {
         return arena_bytes + candidate_bytes + child_bytes + memo_bytes + transposition_bytes
+            + cache_bytes
             + engine_queue_reservation + engine_stack_peak_allowance + engine_frontier_metadata;
     }
 
@@ -340,7 +507,8 @@ namespace tetris_engine
         max_candidates_per_source * sizeof(Candidate),
         max_children_per_parent * sizeof(Child),
         max_children_per_parent * sizeof(std::pair<Board, Evaluation>),
-        transposition_entries * sizeof(TranspositionEntry));
+        transposition_entries * sizeof(TranspositionEntry),
+        16384 * sizeof(EvalCacheEntry));
 
     inline constexpr std::size_t default_arena_capacity =
         static_cast<std::size_t>((engine_memory_budget - engine_fixed_workspace) / sizeof(Node));
@@ -387,6 +555,7 @@ namespace tetris_engine
         tetris::toj::MovementConfig movement;
         std::size_t arena_capacity = default_arena_capacity;
         std::function<std::int64_t()> clock_nanos = steady_clock_nanos;
+        CacheConfig cache;
     };
 
     class Engine
@@ -454,7 +623,7 @@ namespace tetris_engine
 
         std::size_t frontier_count() const;
 
-        SearchStats const &search_stats() const;
+        SearchStats search_stats() const;
 
         std::optional<SearchSelection> select_best() const;
 
@@ -487,6 +656,7 @@ namespace tetris_engine
         std::array<NodeId, max_frontiers> expanded_max_{};
         std::array<double, max_frontiers> width_cache_{};
         std::vector<TranspositionEntry> transposition_;
+        EvalCache cache_;
         std::size_t transposition_used_ = 0;
         std::size_t max_length_ = 0;
         std::size_t width_ = 0;
