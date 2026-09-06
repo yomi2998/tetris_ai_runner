@@ -74,7 +74,8 @@ Deterministic frontier search over the slice 6.1 primitive:
   fixed-array. `default_arena_capacity` is derived from the 256 MiB
   budget minus these measured fixed structures, and `init` validates
   the full sum after reservation. No allocation occurs during the
-  search loop; `set_root` adopts caller-provided queue storage.
+  search loop; `set_root` normalizes adopted queue storage into the
+  bounded engine-owned reservations.
 
 Deferred to later slices: timed budgets, root reuse, the persistent
 evaluation cache, final-path materialization, and production cutover.
@@ -127,9 +128,11 @@ cache), the queue reservation, and a conservative stack peak
 allowance covering the measured kernel and expansion frames (the
 largest kernel workspace instantiates to 320 bytes and the frames
 nest only a few deep). `engine_buffer_reservation` computes the
-identical inventory for the compile-time constant
-`engine_fixed_workspace` and for the post-reservation check over
-actual capacities, so both sides cover the same structures.
+same inventory for the compile-time constant `engine_fixed_workspace`
+and for the post-reservation check over actual buffer capacities;
+the buffer reservations are conservative documented bounds (the
+queue at the 256-piece cap, the stack at a fixed peak allowance)
+rather than runtime inspection of every control allocation.
 `default_arena_capacity` is the remainder divided by measured
 `sizeof(Node)` (320 bytes; the pinned values are a 6,644,000-byte
 fixed workspace and an 818,098-node arena with the heap links, root
@@ -142,7 +145,9 @@ post-reservation total across all buffers exceeds the budget.
 queue storage is normalized: `set_root` copies at most
 `max_queue_length` pieces and boundary bits into the engine-owned
 reservations, so a caller's oversized vector capacity is never
-retained. On the
+retained. The engine is move-constructible and non-copyable; a moved
+engine's pending heap rebinds to the destination arena, and copy and
+move assignment are deleted. On the
 tested implementations the retained allocation peak equals the
 allowance because storage never grows or relocates; a standard
 library that over-reserves would transiently allocate more than the
@@ -168,7 +173,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 602
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 621
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -193,11 +198,17 @@ determinism across repeated searches. The repair gates add direct
 pairing-heap tests (equal scores, long sibling chains, repeated
 extraction), the complete memory inventory with retained bytes and
 bounded queue adoption from oversized reservations, overflow-free
-marker boundary values, reinitialization state resets on success and
-rejection, exhaustion projection that preserves the best evidence and
-attribution under the tie-break, adapter canonical keys verified
-strictly increasing so the representative rule is deterministic, and
-the four remaining policy-key negative cases. Mutation probes confirm
+marker boundary values, reinitialization state resets including
+exhaustion flags and expansion counters on success and rejection,
+exhaustion projection that preserves the best evidence and
+attribution under the tie-break in both a zeroed-policy capacity-25
+scenario and the production-policy capacity-18 probe, a move-semantics
+gate asserting the engine is move-constructible, non-copyable, and
+non-assignable with a moved engine running a full search, adapter
+canonical keys verified strictly increasing with each occupied-cell
+set keeping exactly one rotation so the representative rule is
+deterministic, and the four remaining policy-key negative cases.
+Mutation probes confirm
 the gates: zeroed transitions, child-cursor policy contexts, and
 danger-mask shifts all fail.
 
