@@ -23,23 +23,31 @@ Bounded board-evaluation cache with explicit identity and lifecycle:
 - Storage is a fixed vector reserved during `init` and covered by
   the memory budget; nothing allocates or grows in the search loop.
   Replacement fills empty ways first, then replaces the lowest stamp
-  (ties to the lowest index), which is deterministic under the
-  deterministic access order; the 64-bit stamp does not roll over.
-  Cache clearing rides on `init`/policy reinitialization, and cache
-  contents intentionally survive `set_root` as groundwork for root
-  reuse without implementing it.
+  in circular order (ties to the lowest index), which is deterministic
+  under the deterministic access order and stays correct across
+  64-bit stamp wrap, covered by a seeded near-wrap gate. Cache
+  clearing rides on `init`/policy reinitialization, cache counters
+  are per-search and reset with the run state while entries survive
+  `set_root` as groundwork for root reuse without implementing it,
+  and enabled-cache geometry (nonzero entries, positive ways,
+  divisibility, power-of-two set count) is validated in `init`
+  before allocation with rejected configurations fail-closed.
 - Telemetry distinguishes board-evaluation requests, local memo
   hits, cache requests, hits, misses, replacements, and actual
   evaluations; with the cache enabled every miss computes exactly
   one evaluation and requests split into memo hits and cache
   lookups.
-- Layout selection is measured, not assumed: at an equal 2,097,152
-  byte budget (16,384 entries), direct-mapped beat set-associative-4
-  by median wall time (78.29 versus 78.47 ms per 16-board workload)
-  and both beat disabled (80.07 ms) with a 52 percent cache hit rate
-  reducing evaluations 122,232 to 73,980 at identical completed work
-  (4,412 passes, arena 8,193). Direct-mapped is the production
-  default. Full data in `cache_benchmark.txt`.
+- Layout selection is measured, not assumed: direct-mapped forces
+  one way per set and set-associative uses the configured count, so
+  the benchmark compares genuinely different structures. At an equal
+  2,097,152 byte budget (16,384 entries), direct-mapped beat
+  set-associative-4 by median wall time (90.868 versus 91.348 ms per
+  16-board workload) and both beat disabled (93.441 ms) with a 34.9
+  percent hit rate reducing evaluations 127,663 to 83,053 at
+  identical completed work (4,790 passes) and identical per-board
+  result fingerprints. Per-search accounting identity holds
+  (computed evaluations equal cache misses). Direct-mapped is the
+  production default. Full data in `cache_benchmark.txt`.
 
 ## Slice 6.3 scope
 
@@ -234,7 +242,7 @@ the validated accounting above.
 
 ## Gate status
 
-`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 741
+`tests/tetris_engine_tests.cpp` (CTest `tetris_engine_tests`, 777
 checks, 0 failures in all five builds) covers the slice 6.1 gates
 (queue parsing against the legacy `queue.csv` shapes, cursor and
 hold-swap arithmetic, lock and exhaustion edges, per-child state
@@ -290,9 +298,14 @@ runs produce identical selections and arena sizes on the same
 workload; counter accounting (requests split into memo hits and
 cache lookups, misses equal to computed evaluations, disabled runs
 reporting zero cache counters); byte-allowance rejection
-participating the cache reservation; and cache correctness across
-engine movement and reinitialization.
-Mutation probes confirm
+participating the cache reservation; cache behavior across engine
+movement and reinitialization; layout-distinguishing replacement
+behavior with equal lookup streams; full materialized-tree parity
+(boards, evaluations, policy states) across disabled and both cached
+layouts; reinitialization with changed evaluation parameters matching
+a fresh engine while warm-cache results differ; an
+upper-storage-domain identity case; and a seeded near-wrap stamp
+rollover gate. Mutation probes confirm
 the gates: zeroed transitions, child-cursor policy contexts, and
 danger-mask shifts all fail.
 

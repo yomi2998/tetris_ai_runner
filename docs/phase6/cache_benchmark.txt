@@ -1,37 +1,96 @@
-# Slice 6.4 board-evaluation cache benchmark
-# Recorded: 2026-09-06T15:09:48+08:00
+# Slice 6.4 board-evaluation cache benchmark (regenerated after repair)
+# Recorded: 2026-09-06T15:59:53+08:00
 # Machine: AMD Ryzen 7 7700, pinned core: taskset -c 6, governor: powersave
 # Compiler: g++ (GCC) 16.2.1 20260810
 # Build: linux-gcc-self-release preset (-O3 -march=native -flto -DNDEBUG), binary: eval_cache_bench
-# Workload: 16 deterministic seeded boards, queue III, hold empty+locked, 300 iterations per search, per-search steady_clock timing
+# Workload: 16 full-row-free deterministic seeded boards, queue III, hold empty+locked, 300 iterations per search, per-search steady_clock timing
 # Byte budgets: 2,097,152 bytes for BOTH cached variants (16384 entries x 128-byte entry); disabled variant has no cache storage
-# Arena capacity and search workload identical across variants; parent-local per-expansion memo kept in front of the cache in all variants
+# Layouts: direct-mapped forces one way per set; set-associative-4 uses four ways per set; arena capacity and search workload identical across variants
+# Parent-local per-expansion memo kept in front of the cache in all variants
+# Counters are per-search snapshots (reset at set_root); totals accumulate the per-search values
 # Warmup: 1 sweep; measured: 5 sweeps; fixed variant order per sweep (disabled, direct-mapped, set-associative-4)
+# All variants completed identical work (4,790 passes) and identical result fingerprints (f95293ada9d211fd over per-board selections)
+# Summary medians (ms): disabled 93.441, direct-mapped 90.868, set-associative-4 91.348
+# Direct-mapped selected: fastest median; hit rate 44,610 of 127,663 lookups (34.9 percent); evaluations 127,663 to 83,053
+# Accounting identity holds per search: computed evaluations equal cache misses
 # Artifact hashes:
-# c42b0c7bcb660e5ead0c26cba222a5cb0f30e70a6fd694e6d9661d36859aabe7  tests/eval_cache_bench.cpp
-# f01ce4e155e74fe473e2f7f3fe192072ff68735e4b4089733cc17269934b0962  src/tetris_engine.h
-# 9091bd2aa716b89fc44dfe9bd77e443dcf11ca927628ac254544bf3267702338  src/tetris_engine.cpp
+# b93ceedaafcf106b592c611fc1017e668d508be5bf1e9ee655067c50c0f61199  tests/eval_cache_bench.cpp
+# c887a9af0d4be482341d1f2f38689edc9dd24afaa42448ca1afbe2b08a6ad03b  src/tetris_engine.h
+# 4328fa2f98ecd06cdbdc992369f8752f9fa7999b82ac785c6c3957e906a967d8  src/tetris_engine.cpp
 # af39a3b79aaac6cf3ae8c0573eb2851ebda700d46d60395d679ba3915042e6da  src/toj_policy.h
 # abde8cab35d2e5b43888acf11c7d65c247274e398721b40295e0e5e04c0d9423  src/toj_policy.cpp
 # Full output:
-workload: 16 seeded boards, queue III, hold empty locked, 300 iterations per search
+workload: 16 full-row-free seeded boards, queue III, hold empty+locked, 300 iterations per search
 variant byte budget: 2097152 bytes per cached variant (16384 entries x 128 byte entry)
+layouts: direct-mapped is one way per set; set-associative-4 uses four ways per set
+counters are per-search; totals accumulate the per-search snapshots
 warmup: 1 sweep, measured: 5 sweeps, fixed variant order per sweep
-rep=0 variant=disabled nanos=81580955 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
-rep=0 variant=direct-mapped nanos=79482765 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-rep=0 variant=set-associative-4 nanos=79409796 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-rep=1 variant=disabled nanos=81463055 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
-rep=1 variant=direct-mapped nanos=79635197 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-rep=1 variant=set-associative-4 nanos=79870450 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-rep=2 variant=disabled nanos=81000831 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
-rep=2 variant=direct-mapped nanos=79235193 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-rep=2 variant=set-associative-4 nanos=78848199 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-rep=3 variant=disabled nanos=80869578 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
-rep=3 variant=direct-mapped nanos=79653537 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-rep=3 variant=set-associative-4 nanos=82481044 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-rep=4 variant=disabled nanos=83898506 passes=4412 computed=122232 hits=0 misses=0 replacements=0 arena=8193
-rep=4 variant=direct-mapped nanos=80063222 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-rep=4 variant=set-associative-4 nanos=79576727 passes=4412 computed=73980 hits=312106 misses=488062 replacements=452779 arena=8193
-total variant=disabled nanos=408812925
-total variant=direct-mapped nanos=398069914
-total variant=set-associative-4 nanos=400186216
+  board=0 arena=7680 root_child=3 evidence=460
+  board=1 arena=8060 root_child=18 evidence=264
+  board=2 arena=8056 root_child=3 evidence=131
+  board=3 arena=7513 root_child=17 evidence=639
+  board=4 arena=7908 root_child=16 evidence=128
+  board=5 arena=8041 root_child=13 evidence=133
+  board=6 arena=7941 root_child=5 evidence=3916
+  board=7 arena=8193 root_child=1 evidence=353
+  board=8 arena=7871 root_child=16 evidence=632
+  board=9 arena=7986 root_child=8 evidence=265
+  board=10 arena=7755 root_child=16 evidence=129
+  board=11 arena=7860 root_child=17 evidence=642
+  board=12 arena=7761 root_child=3 evidence=132
+  board=13 arena=7909 root_child=17 evidence=125
+  board=14 arena=7720 root_child=1 evidence=637
+  board=15 arena=7754 root_child=1 evidence=123
+rep=0 variant=disabled nanos=93644903 passes=4790 computed=127663 hits=0 misses=0 replacements=0 fingerprint=f95293ada9d211fd
+  board=0 arena=7680 root_child=3 evidence=460
+  board=1 arena=8060 root_child=18 evidence=264
+  board=2 arena=8056 root_child=3 evidence=131
+  board=3 arena=7513 root_child=17 evidence=639
+  board=4 arena=7908 root_child=16 evidence=128
+  board=5 arena=8041 root_child=13 evidence=133
+  board=6 arena=7941 root_child=5 evidence=3916
+  board=7 arena=8193 root_child=1 evidence=353
+  board=8 arena=7871 root_child=16 evidence=632
+  board=9 arena=7986 root_child=8 evidence=265
+  board=10 arena=7755 root_child=16 evidence=129
+  board=11 arena=7860 root_child=17 evidence=642
+  board=12 arena=7761 root_child=3 evidence=132
+  board=13 arena=7909 root_child=17 evidence=125
+  board=14 arena=7720 root_child=1 evidence=637
+  board=15 arena=7754 root_child=1 evidence=123
+rep=0 variant=direct-mapped nanos=90706271 passes=4790 computed=83053 hits=44610 misses=83053 replacements=78618 fingerprint=f95293ada9d211fd
+  board=0 arena=7680 root_child=3 evidence=460
+  board=1 arena=8060 root_child=18 evidence=264
+  board=2 arena=8056 root_child=3 evidence=131
+  board=3 arena=7513 root_child=17 evidence=639
+  board=4 arena=7908 root_child=16 evidence=128
+  board=5 arena=8041 root_child=13 evidence=133
+  board=6 arena=7941 root_child=5 evidence=3916
+  board=7 arena=8193 root_child=1 evidence=353
+  board=8 arena=7871 root_child=16 evidence=632
+  board=9 arena=7986 root_child=8 evidence=265
+  board=10 arena=7755 root_child=16 evidence=129
+  board=11 arena=7860 root_child=17 evidence=642
+  board=12 arena=7761 root_child=3 evidence=132
+  board=13 arena=7909 root_child=17 evidence=125
+  board=14 arena=7720 root_child=1 evidence=637
+  board=15 arena=7754 root_child=1 evidence=123
+rep=0 variant=set-associative-4 nanos=91246485 passes=4790 computed=79659 hits=48004 misses=79659 replacements=73061 fingerprint=f95293ada9d211fd
+rep=1 variant=disabled nanos=93226250 passes=4790 computed=127663 hits=0 misses=0 replacements=0 fingerprint=f95293ada9d211fd
+rep=1 variant=direct-mapped nanos=90763031 passes=4790 computed=83053 hits=44610 misses=83053 replacements=78618 fingerprint=f95293ada9d211fd
+rep=1 variant=set-associative-4 nanos=91908300 passes=4790 computed=79659 hits=48004 misses=79659 replacements=73061 fingerprint=f95293ada9d211fd
+rep=2 variant=disabled nanos=93451661 passes=4790 computed=127663 hits=0 misses=0 replacements=0 fingerprint=f95293ada9d211fd
+rep=2 variant=direct-mapped nanos=91066504 passes=4790 computed=83053 hits=44610 misses=83053 replacements=78618 fingerprint=f95293ada9d211fd
+rep=2 variant=set-associative-4 nanos=91246905 passes=4790 computed=79659 hits=48004 misses=79659 replacements=73061 fingerprint=f95293ada9d211fd
+rep=3 variant=disabled nanos=93441262 passes=4790 computed=127663 hits=0 misses=0 replacements=0 fingerprint=f95293ada9d211fd
+rep=3 variant=direct-mapped nanos=90867992 passes=4790 computed=83053 hits=44610 misses=83053 replacements=78618 fingerprint=f95293ada9d211fd
+rep=3 variant=set-associative-4 nanos=91347605 passes=4790 computed=79659 hits=48004 misses=79659 replacements=73061 fingerprint=f95293ada9d211fd
+rep=4 variant=disabled nanos=93143900 passes=4790 computed=127663 hits=0 misses=0 replacements=0 fingerprint=f95293ada9d211fd
+rep=4 variant=direct-mapped nanos=90915103 passes=4790 computed=83053 hits=44610 misses=83053 replacements=78618 fingerprint=f95293ada9d211fd
+rep=4 variant=set-associative-4 nanos=91412366 passes=4790 computed=79659 hits=48004 misses=79659 replacements=73061 fingerprint=f95293ada9d211fd
+total variant=disabled nanos=466907976
+last variant=disabled computed=127663 hits=0 misses=0 replacements=0 passes=4790 fingerprint=f95293ada9d211fd
+total variant=direct-mapped nanos=454318901
+last variant=direct-mapped computed=83053 hits=44610 misses=83053 replacements=78618 passes=4790 fingerprint=f95293ada9d211fd
+total variant=set-associative-4 nanos=457161661
+last variant=set-associative-4 computed=79659 hits=48004 misses=79659 replacements=73061 passes=4790 fingerprint=f95293ada9d211fd
