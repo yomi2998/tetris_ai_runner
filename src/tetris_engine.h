@@ -24,6 +24,8 @@ namespace tetris_engine
 
     inline constexpr std::uint64_t engine_memory_budget = 256ull << 20;
     inline constexpr std::uint64_t engine_workspace_reserve = 1ull << 20;
+    inline constexpr std::size_t max_queue_length = 256;
+    inline constexpr std::uint64_t max_nodes = 0xFFFFFFFEull;
 
     enum class BranchSource : std::uint8_t
     {
@@ -130,7 +132,8 @@ namespace tetris_engine
         std::vector<std::pair<Board, Evaluation>> eval_memo_;
 
         void expand_source(NodeId parent_id, Node const &parent, Piece played,
-            BranchSource source, HoldState hold, std::size_t cursor, std::vector<Child> &out);
+            BranchSource source, HoldState hold, std::size_t cursor,
+            std::span<Piece const> policy_next, std::vector<Child> &out);
 
         Evaluation evaluate_once(Board const &board);
     };

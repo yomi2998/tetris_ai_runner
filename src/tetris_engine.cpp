@@ -38,11 +38,22 @@ namespace tetris_engine
         config_ = config;
         policy_.init(config_.policy);
         arena_.clear();
-        arena_.reserve(config_.arena_capacity);
         queue_ = Queue{};
         stats_ = ExpansionStats{};
         exhausted_ = false;
         eval_memo_.clear();
+    }
+
+    bool board_has_full_row(Board const &board)
+    {
+        for (int y = 0; y < Board::height; ++y)
+        {
+            if (board.row(y) == Board::row_mask)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     NodeId Engine::set_root(Board board, PolicyState policy, Queue queue, HoldState hold)
@@ -50,6 +61,10 @@ namespace tetris_engine
         queue_ = std::move(queue);
         arena_.clear();
         exhausted_ = false;
+        if (queue_.pieces.size() > max_queue_length || board_has_full_row(board))
+        {
+            return no_node;
+        }
         if (arena_.size() >= config_.arena_capacity)
         {
             exhausted_ = true;
@@ -80,7 +95,8 @@ namespace tetris_engine
     }
 
     void Engine::expand_source(NodeId parent_id, Node const &parent, Piece played,
-        BranchSource source, HoldState hold, std::size_t cursor, std::vector<Child> &out)
+        BranchSource source, HoldState hold, std::size_t cursor,
+        std::span<Piece const> policy_next, std::vector<Child> &out)
     {
         if (!tetris::toj::can_spawn(parent.board, played))
         {
@@ -115,8 +131,7 @@ namespace tetris_engine
             }
             Evaluation evaluation = evaluate_once(applied->board);
             toj_policy::DecisionContext context;
-            context.next = std::span<Piece const>(queue_.pieces.data() + cursor,
-                queue_.pieces.size() - cursor);
+            context.next = policy_next;
             context.hold = hold.piece;
             context.used_hold = source == BranchSource::Hold;
             context.depth = parent.depth;
@@ -143,6 +158,8 @@ namespace tetris_engine
     std::vector<Child> Engine::expand(NodeId parent)
     {
         std::vector<Child> out;
+        stats_ = ExpansionStats{};
+        eval_memo_.clear();
         if (parent >= arena_.size())
         {
             return out;
@@ -152,9 +169,12 @@ namespace tetris_engine
         {
             return out;
         }
-        stats_ = ExpansionStats{};
-        eval_memo_.clear();
-        bool const has_current = node.cursor < queue_.pieces.size();
+        std::size_t const size = queue_.pieces.size();
+        std::size_t const next_start =
+            node.cursor + 1 <= size ? node.cursor + 1 : size;
+        std::span<Piece const> const policy_next(
+            queue_.pieces.data() + next_start, size - next_start);
+        bool const has_current = node.cursor < size;
         std::optional<Piece> current;
         if (has_current)
         {
@@ -162,7 +182,7 @@ namespace tetris_engine
             HoldState hold = node.hold;
             hold.locked = false;
             expand_source(parent, node, *current, BranchSource::Current, hold, node.cursor + 1,
-                out);
+                policy_next, out);
         }
         if (!node.hold.locked)
         {
@@ -171,16 +191,18 @@ namespace tetris_engine
                 HoldState hold;
                 hold.piece = current;
                 hold.locked = false;
+                std::size_t const held_cursor =
+                    node.cursor + 1 <= size ? node.cursor + 1 : size;
                 expand_source(parent, node, *node.hold.piece, BranchSource::Hold, hold,
-                    node.cursor + 1, out);
+                    held_cursor, policy_next, out);
             }
-            else if (has_current && node.cursor + 1 < queue_.pieces.size())
+            else if (has_current && node.cursor + 1 < size)
             {
                 HoldState hold;
                 hold.piece = current;
                 hold.locked = false;
                 expand_source(parent, node, queue_.pieces[node.cursor + 1], BranchSource::Hold,
-                    hold, node.cursor + 2, out);
+                    hold, node.cursor + 2, policy_next, out);
             }
         }
         return out;
@@ -188,7 +210,7 @@ namespace tetris_engine
 
     NodeId Engine::materialize(Child const &child)
     {
-        if (arena_.size() >= config_.arena_capacity)
+        if (arena_.size() >= config_.arena_capacity || arena_.size() >= max_nodes)
         {
             exhausted_ = true;
             return no_node;
