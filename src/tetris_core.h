@@ -1003,13 +1003,22 @@ namespace m_tetris
             TetrisTreeNode *alloc(TetrisTreeNode *parent)
             {
                 TetrisTreeNode *node;
+#ifdef TETRIS_LEGACY_CMP
+                legacy_cmp::Observer *cmp_observer = legacy_cmp::observer();
+                std::int64_t cmp_start = 0;
+                bool const cmp_time = cmp_observer != nullptr && cmp_observer->timers_enabled;
+                if (cmp_time)
+                {
+                    cmp_start = cmp_observer->clock();
+                }
+#endif
                 if (free_list != nullptr)
                 {
                     node = free_list;
                     free_list = node->children_next;
                     --free_count;
 #ifdef TETRIS_LEGACY_CMP
-                    if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                    if (cmp_observer != nullptr)
                     {
                         if (parent == nullptr)
                         {
@@ -1042,7 +1051,7 @@ namespace m_tetris
                     node_storage->emplace_back();
                     node = &node_storage->back();
 #ifdef TETRIS_LEGACY_CMP
-                    if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                    if (cmp_observer != nullptr)
                     {
                         if (parent == nullptr)
                         {
@@ -1055,6 +1064,12 @@ namespace m_tetris
                     }
 #endif
                 }
+#ifdef TETRIS_LEGACY_CMP
+                if (cmp_time && parent != nullptr)
+                {
+                    cmp_observer->counts.alloc_ns += cmp_observer->clock() - cmp_start;
+                }
+#endif
                 node->parent = parent;
                 return node;
             }

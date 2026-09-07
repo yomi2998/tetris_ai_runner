@@ -6,9 +6,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace legacy_cmp
 {
@@ -90,4 +92,124 @@ namespace legacy_cmp
         key.matched = true;
         return key;
     }
+
+    class ProbeDedup
+    {
+    public:
+        ProbeDedup()
+        {
+            slots_.resize(initial_capacity);
+        }
+
+        void begin_call()
+        {
+            for (std::size_t index : touched_)
+            {
+                slots_[index].used = false;
+                slots_[index].count = 0;
+            }
+            touched_.clear();
+            distinct_ = 0;
+        }
+
+        void add(NormalizedKey const &key)
+        {
+            if ((touched_.size() + 1) * 4 >= slots_.size() * 3)
+            {
+                grow();
+            }
+            std::size_t mask = slots_.size() - 1;
+            std::size_t index = hash_key(key) & mask;
+            while (true)
+            {
+                Slot &slot = slots_[index];
+                if (!slot.used)
+                {
+                    slot.used = true;
+                    slot.key = key;
+                    slot.count = 1;
+                    touched_.push_back(index);
+                    ++distinct_;
+                    return;
+                }
+                if (slot.key == key)
+                {
+                    ++slot.count;
+                    return;
+                }
+                index = (index + 1) & mask;
+            }
+        }
+
+        std::size_t distinct() const
+        {
+            return distinct_;
+        }
+
+        std::size_t unmatched() const
+        {
+            std::size_t count = 0;
+            for (std::size_t index : touched_)
+            {
+                if (!slots_[index].key.matched)
+                {
+                    ++count;
+                }
+            }
+            return count;
+        }
+
+        std::size_t capacity() const
+        {
+            return slots_.size();
+        }
+
+    private:
+        struct Slot
+        {
+            NormalizedKey key;
+            std::uint64_t count = 0;
+            bool used = false;
+        };
+
+        static constexpr std::size_t initial_capacity = 512;
+
+        static std::uint64_t hash_key(NormalizedKey const &key)
+        {
+            std::uint64_t hash = candfmt::fnv_offset;
+            hash = candfmt::fnv_mix(hash, key.cells_hash);
+            hash = candfmt::fnv_mix(hash, key.channel);
+            hash = candfmt::fnv_mix(hash, key.matched ? 1u : 0u);
+            if (!key.matched)
+            {
+                hash = candfmt::fnv_mix(hash, static_cast<std::uint64_t>(key.opaque));
+            }
+            return hash;
+        }
+
+        void grow()
+        {
+            std::vector<std::size_t> live;
+            live.swap(touched_);
+            std::size_t const grown = slots_.size() * 2;
+            std::vector<Slot> fresh(grown);
+            slots_.swap(fresh);
+            std::size_t mask = slots_.size() - 1;
+            for (std::size_t index : live)
+            {
+                std::size_t probe = hash_key(fresh[index].key) & mask;
+                while (slots_[probe].used)
+                {
+                    probe = (probe + 1) & mask;
+                }
+                slots_[probe] = fresh[index];
+                slots_[probe].used = true;
+                touched_.push_back(probe);
+            }
+        }
+
+        std::vector<Slot> slots_;
+        std::vector<std::size_t> touched_;
+        std::size_t distinct_ = 0;
+    };
 }

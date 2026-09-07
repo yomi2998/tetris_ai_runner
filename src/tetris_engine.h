@@ -655,6 +655,7 @@ namespace tetris_engine
         std::function<std::int64_t()> timer_nanos = steady_clock_nanos;
         CacheConfig cache;
         bool telemetry_enabled = true;
+        bool timers_enabled = true;
     };
 
     class Engine
@@ -807,6 +808,11 @@ namespace tetris_engine
         bool telemetry_on() const
         {
             return config_.telemetry_enabled;
+        }
+
+        bool timers_on() const
+        {
+            return config_.telemetry_enabled && config_.timers_enabled;
         }
 
         bool expand_source(NodeId parent_id, Node const &parent, Piece played,

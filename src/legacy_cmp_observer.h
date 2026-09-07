@@ -26,6 +26,7 @@ namespace legacy_cmp
         std::uint64_t recycled_nodes = 0;
         std::uint64_t root_nodes = 0;
         std::uint64_t reused_nodes = 0;
+        std::int64_t alloc_ns = 0;
         std::int64_t eval_hit_ns = 0;
         std::int64_t eval_miss_ns = 0;
         std::int64_t parent_ns = 0;

@@ -303,7 +303,7 @@ namespace
             "texhaust_moves", "path_calls", "path_states", "path_find_ns",
             "path_replay_ns", "replay_failures", "mem_retained_bytes",
             "arena_reserved_bytes", "idmap_reserved_bytes",
-            "raw_unique_ratio_x1000",
+            "raw_unique_ratio_x1000", "timers",
         };
         check(keys == expected, "V3 field order matches the contract");
         check(line.find("evals=10") != std::string::npos, "numeric counts render");
@@ -542,7 +542,7 @@ namespace
 
     void init_runner_harness(RunnerHarness &harness, bool telemetry,
         support::Runner::Config config, std::uint32_t seed,
-        std::function<std::int64_t()> clock)
+        std::function<std::int64_t()> clock, bool timers = true)
     {
         harness.policy_config.combo_table = combo_table;
         harness.policy_config.combo_table_max = 10;
@@ -551,6 +551,7 @@ namespace
             toj_policy::Parameters::production_defaults();
         harness.engine_config.policy = &harness.policy_config;
         harness.engine_config.telemetry_enabled = telemetry;
+        harness.engine_config.timers_enabled = timers;
         check(harness.engine.init(harness.engine_config), "runner engine initializes");
         harness.seed_policy.init(&harness.policy_config);
         harness.runner.emplace(harness.policy_config, harness.seed_policy,
@@ -759,6 +760,56 @@ namespace
         check(on_work, "toggle probe performs measured search work");
     }
 
+    void run_timer_mode_tests()
+    {
+        RunnerHarness full;
+        RunnerHarness counted;
+        init_runner_harness(
+            full, true, test_runner_config(), 1u, support::steady_nanos, true);
+        init_runner_harness(
+            counted, true, test_runner_config(), 1u, support::steady_nanos, false);
+        bool identical = true;
+        support::Totals counted_totals;
+        for (int move = 0; move < 4; ++move)
+        {
+            support::MoveRecord a = full.runner->step();
+            support::MoveRecord b = counted.runner->step();
+            identical = identical && a.kind == b.kind
+                && a.played == b.played && a.used_hold == b.used_hold
+                && a.path_commands == b.path_commands
+                && a.stats.eval_requests == b.stats.eval_requests
+                && a.stats.widening_passes == b.stats.widening_passes
+                && a.stats.policy_transitions == b.stats.policy_transitions;
+            identical = identical && b.timers.enum_ns == 0
+                && b.timers.eval_hit_ns == 0 && b.timers.eval_miss_ns == 0
+                && b.timers.policy_ns == 0 && b.timers.materialize_ns == 0
+                && b.timers.parent_ns == 0 && b.timers.path_find_ns == 0
+                && b.timers.path_replay_ns == 0 && b.timers.rule_ns == 0;
+            identical = identical && full.runner->board() == counted.runner->board()
+                && full.runner->queue() == counted.runner->queue();
+            counted_totals.add(b, counted.runner->last_attack());
+            if (a.kind == support::MoveRecord::Kind::Invalid)
+            {
+                break;
+            }
+        }
+        check(identical, "timers-off preserves decisions, counts, and trajectory");
+        support::Options opt;
+        opt.timers = false;
+        support::V3Row row = support::build_v3_row(counted_totals, opt, 1.0, 0.5,
+            static_cast<std::int64_t>(counted.engine.retained_bytes()),
+            static_cast<std::int64_t>(counted.engine.arena_reserved_bytes()),
+            static_cast<std::int64_t>(counted.engine.idmap_reserved_bytes()), true);
+        check(row.evals.has_value() && row.transitions.has_value(),
+            "counters-only row keeps numeric work counts");
+        check(!row.enum_ns.has_value() && !row.policy_ns.has_value()
+                && !row.path_find_ns.has_value(),
+            "counters-only row marks component timers unavailable");
+        check(row.timers == "off", "counters-only row labels its timer mode");
+        check(row.min_ms >= 0 && row.total_s == 1.0,
+            "counters-only row keeps numeric boundary timers");
+    }
+
     void run_row_mode_tests()
     {
         RunnerHarness on;
@@ -911,6 +962,7 @@ int main()
     run_runner_death_tests();
     run_no_hold_trajectory_tests();
     run_toggle_trajectory_tests();
+    run_timer_mode_tests();
     run_row_mode_tests();
     run_validator_tests();
     run_exhaustion_occupancy_tests();

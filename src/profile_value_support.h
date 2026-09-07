@@ -45,6 +45,7 @@ namespace profile_value
         std::size_t warmup_moves = 0;
         int quiet_version = 3;
         bool telemetry = true;
+        bool timers = true;
     };
 
     inline bool parse_uint_strict(std::string const &text, std::size_t &out)
@@ -127,6 +128,9 @@ namespace profile_value
         std::println("  --telemetry on|off");
         std::println("                    off disables instrumentation counters and timers;");
         std::println("                    boundary wall-time fields stay numeric");
+        std::println("  --timers on|off (default on)");
+        std::println("                    off keeps counters while disabling component timers;");
+        std::println("                    timed qualification rows use counters only");
         std::println("  --quiet --quiet-version 3");
         std::println("                    emit one PROFILE_V3 record");
         std::println("  --help            print this help");
@@ -137,6 +141,8 @@ namespace profile_value
         Options opt;
         std::string telemetry_text = "on";
         bool telemetry_seen = false;
+        std::string timers_text = "on";
+        bool timers_seen = false;
         auto fail = [&](std::string const &message) -> Options
         {
             std::println(stderr, "tetris_profile_value: invalid option: {}", message);
@@ -207,6 +213,11 @@ namespace profile_value
                 telemetry_text = next(a);
                 telemetry_seen = true;
             }
+            else if (a == "--timers")
+            {
+                timers_text = next(a);
+                timers_seen = true;
+            }
             else if (a == "--quiet") opt.quiet = true;
             else if (a == "--help")
             {
@@ -241,6 +252,22 @@ namespace profile_value
             else
             {
                 std::println(stderr, "telemetry must be on or off");
+                std::exit(1);
+            }
+        }
+        if (timers_seen)
+        {
+            if (timers_text == "on")
+            {
+                opt.timers = true;
+            }
+            else if (timers_text == "off")
+            {
+                opt.timers = false;
+            }
+            else
+            {
+                std::println(stderr, "timers must be on or off");
                 std::exit(1);
             }
         }
@@ -425,6 +452,7 @@ namespace profile_value
         std::int64_t arena_reserved_bytes = 0;
         std::int64_t idmap_reserved_bytes = 0;
         std::optional<std::int64_t> raw_unique_ratio_x1000;
+        std::string timers;
     };
 
     inline std::string format_count(std::optional<std::int64_t> v)
@@ -488,6 +516,7 @@ namespace profile_value
         out += std::format(" mem_retained_bytes={} arena_reserved_bytes={} idmap_reserved_bytes={}",
             r.mem_retained_bytes, r.arena_reserved_bytes, r.idmap_reserved_bytes);
         out += " raw_unique_ratio_x1000=" + format_count(r.raw_unique_ratio_x1000);
+        out += " timers=" + r.timers;
         return out;
     }
 }

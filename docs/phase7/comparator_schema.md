@@ -12,14 +12,19 @@ merged into the baseline series.
 tetris_profile_legacy_cmp ... --quiet
 ```
 
-`maxdepth` is bounded to 0-255, matching the value profile.
+`maxdepth` is bounded to 0-255, matching the value profile. Three modes:
+`--telemetry off` detaches everything; `--telemetry on --timers off` counts
+without timer reads and skips normalization (unique, unmatched, and all
+timer fields report unavailable while counts stay numeric); full timers is
+the default. Timed rows always use counters-only mode.
 
 ## Record format
 
 A single line beginning with the token `PROFILE_CMP`, followed by
 space-separated `key=value` fields in exactly the order listed below. Values
 contain no spaces. `na` marks a measurement disabled by `--telemetry off`;
-absent columns never occur.
+fields 16, 17, 28-32, 40, and 41 additionally report `na` under
+`--timers off`. Absent columns never occur.
 
 | Order | Key | Unit | Source and scope |
 |---:|---|---|---|
@@ -49,10 +54,13 @@ absent columns never occur.
 | 28 | `eval_hit_ns` | ns | Depth-table hit-path timer |
 | 29 | `eval_miss_ns` | ns | Policy-evaluator call timer |
 | 30 | `parent_ns` | ns | Parent-expansion span (overlapping aggregate, see field 14) |
-| 31 | `search_ns` | ns | Search-invocation span |
+| 31 | `search_ns` | ns | Search-invocation span (base call only; normalization sits outside it in field 41) |
 | 32 | `transition_ns` | ns | Policy-transition span |
 | 33-38 | `warmup_moves` `seed` `iters` `maxdepth` `budget_ms` `mode` | mixed | Same meanings as frozen V2 |
 | 39 | `telemetry` | token | `on`, or `off` meaning the observer is detached and wrapper counting is skipped; boundary wall-time fields stay numeric |
+| 40 | `alloc_ns` | ns | Search-child node allocation span (fresh plus recycled; roots excluded) |
+| 41 | `norm_ns` | ns | Normalization and dedup phase span, outside every binding span by construction |
+| 42 | `timers` | token | `on`, `off`, or `na` (when telemetry is off) |
 
 Binding component rates derive as timer divided by count: per enumeration
 call (31/12), per unique candidate (legacy numerator is the eval plus
@@ -60,7 +68,7 @@ transition spans (28 + 29 + 32) over field 16, covering attach, evaluation,
 and transition per land point; the value side reports its rule span instead,
 so the comparison carries both scopes explicitly), per eval request split by
 hit/miss (28, 29 against 8), per policy transition (32/11), per materialized
-node (allocation is sub-microsecond; reported with absolute overhead
+node (40/18, allocation timed per search child with absolute overhead
 evidence per the tiny-component rule), per selected-path state (24/23 with
 differing early-exit behavior stated).
 
@@ -72,9 +80,10 @@ occupied-cell set of the legacy status mapped through the existing
 `ExternalPoseTransform` plus, for T pieces only, the spin class and
 last-rotation channel preserved by the migration oracles. O rotation
 collapses. Statuses that do not convert keep an opaque status-bits identity
-inside the unique count and are reported under field 17. The algorithm and
-its directed fixtures (empty-board landing counts per piece) are reviewed
-with the comparator implementation before binding use.
+inside the unique count and are reported under field 17. Dedup runs in a
+reused linear-probe table over the full identity with exact comparison. The
+algorithm and its directed fixtures (empty-board landing counts per piece)
+are reviewed with the comparator implementation before binding use.
 
 ## Parity basis and known limits
 
@@ -98,5 +107,9 @@ with the comparator implementation before binding use.
   runs are bit-identical.
 - Timed comparisons never require identical trajectories.
 - Overhead evidence is reported per component where measurable; tiny
-  components carry absolute bounds. Measured rates and overhead evidence are
+  components carry absolute bounds. Per-invocation dedup uses a reused
+  linear-probe table over the full key with exact comparison (no silent
+  collision merging, no per-invocation allocation), so allocator churn
+  between spans is structurally zero; any residual is measured and bounded
+  with the absolute evidence. Measured rates and overhead evidence are
   reported separately; no global percentage is subtracted from any timing.

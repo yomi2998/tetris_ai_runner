@@ -228,6 +228,51 @@ namespace
                 "start equal to goal counts exactly the start state");
         }
     }
+
+    void run_dedup_table_tests()
+    {
+        legacy_cmp::ProbeDedup table;
+        auto key_a = legacy_cmp::normalize_land_point('T', 4, 10, 0, 0, false, 1);
+        auto key_b = legacy_cmp::normalize_land_point('T', 4, 10, 0, 0, true, 2);
+        auto key_c = legacy_cmp::normalize_land_point('O', 4, 10, 0, 0, false, 3);
+        auto key_bad = legacy_cmp::normalize_land_point('X', 0, 0, 0, 0, false, 4);
+        check(key_a.matched && key_b.matched && key_c.matched && !key_bad.matched,
+            "dedup probe keys classify");
+        table.begin_call();
+        table.add(key_a);
+        table.add(key_a);
+        table.add(key_b);
+        table.add(key_c);
+        table.add(key_bad);
+        table.add(key_bad);
+        check(table.distinct() == 4, "probe table counts distinct identities once");
+        check(table.unmatched() == 1, "probe table isolates unmatched identities");
+        table.begin_call();
+        auto same_a = legacy_cmp::normalize_land_point('T', 4, 10, 0, 0, false, 1000);
+        auto same_b = legacy_cmp::normalize_land_point('T', 4, 10, 0, 0, false, 1012);
+        table.add(same_a);
+        table.add(same_b);
+        check(table.distinct() == 1, "equal keys share a bucket despite opaque bits");
+        table.begin_call();
+        check(table.distinct() == 0, "probe table resets between invocations");
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int s = 0; s < 3; ++s)
+            {
+                for (int lr = 0; lr < 2; ++lr)
+                {
+                    for (int rep = 0; rep < 7; ++rep)
+                    {
+                        table.add(legacy_cmp::normalize_land_point('T', 4, 10, r, s,
+                            lr != 0, static_cast<std::uint32_t>(rep)));
+                    }
+                }
+            }
+        }
+        check(table.distinct() == 24, "probe table dedups repeated arrivals exactly");
+        check(table.unmatched() == 0, "probe table matches convertible inputs");
+        check(table.capacity() >= 512, "probe table retains its buffers");
+    }
 }
 
 int main()
@@ -236,6 +281,7 @@ int main()
     run_directed_fixture_tests();
     run_observer_tests();
     run_path_state_tests();
+    run_dedup_table_tests();
     std::println("legacy_cmp_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
 }

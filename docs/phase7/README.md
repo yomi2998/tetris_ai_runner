@@ -174,3 +174,39 @@ changes, no cutover work.
   diverges first-vs-second engine and reproduces identically with
   unmodified pre-7.1C sources; schema and record amended to the observed
   facts with exact repro settings instead of the earlier mechanism claim.
+
+## Slice 7.2A: qualification campaign preparation
+
+- Campaign protocol (`qualification_protocol.md`): run matrix, pair order,
+  preservation format, gate formulas for plan items 1 through 11 with V3,
+  V2, and PROFILE_CMP column mapping, overhead evidence plan, and
+  pre-execution prerequisites.
+- Machine record (`machine_record.md`) with undisguisable limits disclosed.
+- Frozen read-only artifacts with hashes; parameter bytes verified.
+- Telemetry pre-gate: median on/off 1.16466 vs the 1.005 bar (FAIL),
+  caused by per-item clock reads; baseline capture blocked.
+
+## Slice 7.2B: remediation of P1, P2, P3 (implementation)
+
+- P1: three-mode model (`off`, counters-only `--timers off`, full-timer
+  default) with counter/timer gating split in the value engine; per-item
+  component scopes unchanged; `timers` field appended to V3 with no order
+  shift. Re-gate: median counters-only/off 1.01412 vs the 1.005 bar (FAIL
+  as stated; first pair cold-start outlier, remainder noise-dominated).
+  Hardware counters show a structural +1.4 percent in cycles against +0.2
+  percent in instructions, while same-mode wall repeats spread plus or
+  minus 2 percent unpinned-frequency noise: the bar is unresolvable on
+  this machine as specified. Forwarded: batched-counting design or the
+  twin-run methodology amendment; baseline capture stays blocked.
+- P2: `alloc_ns` spans the fresh and recycled allocator branches, reported
+  per move; feeds the gate 4 materialized leg against
+  `V3(materialize_ns)`.
+- P3: per-invocation dedup replaced by a reused linear-probe table with
+  exact full-key comparison (a hash/contract mismatch that silently
+  overcounted distinct identities was caught by the new regression test
+  and fixed); base-call and normalization spans split into `search_ns`
+  and diagnostic `norm_ns`; counters-only mode skips normalization.
+  Fresh evidence (40-move workload): off 0.645 s, counters-only 0.607 s,
+  full 1.161 s with `norm_ns` 0.113 s of the delta.
+- Protocol amended per Finding A (timers field, counters-only timed rows,
+  unblocked materialized leg, leakage and representativeness statements).

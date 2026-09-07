@@ -411,6 +411,9 @@ namespace profile_value
         auto as_count = [&](std::int64_t v) -> std::optional<std::int64_t> {
             return telemetry ? std::optional<std::int64_t>(v) : std::nullopt;
         };
+        auto as_time = [&](std::int64_t v) -> std::optional<std::int64_t> {
+            return telemetry && opt.timers ? std::optional<std::int64_t>(v) : std::nullopt;
+        };
         V3Row row;
         row.moves = totals.rootsearch_ms.size();
         row.total_s = total_sec;
@@ -445,6 +448,7 @@ namespace profile_value
         row.budget_ms = opt.ms > 0 ? opt.ms : 0.0;
         row.mode = opt.iters > 0 ? "iters" : "ms";
         row.telemetry = telemetry ? "on" : "off";
+        row.timers = !telemetry ? "na" : (opt.timers ? "on" : "off");
         row.emove_min_ms = totals.emove_ms.empty()
             ? 0
             : *std::min_element(totals.emove_ms.begin(), totals.emove_ms.end());
@@ -461,15 +465,15 @@ namespace profile_value
         row.apply_ms = totals.apply_ms;
         row.init_ms = init_ms;
         row.parents = as_count(totals.parents);
-        row.parent_ns = as_count(totals.parent_ns);
+        row.parent_ns = as_time(totals.parent_ns);
         row.widening_iters = as_count(totals.widening_iters);
-        row.enum_ns = as_count(totals.enum_ns);
+        row.enum_ns = as_time(totals.enum_ns);
         row.raw_landings = as_count(totals.raw_landings);
         row.unique_candidates = as_count(totals.unique_candidates);
         row.rule_transitions = as_count(totals.rule_transitions);
-        row.rule_ns = as_count(totals.rule_ns);
-        row.eval_hit_ns = as_count(totals.eval_hit_ns);
-        row.eval_miss_ns = as_count(totals.eval_miss_ns);
+        row.rule_ns = as_time(totals.rule_ns);
+        row.eval_hit_ns = as_time(totals.eval_hit_ns);
+        row.eval_miss_ns = as_time(totals.eval_miss_ns);
         row.eval_memo_hits = as_count(totals.eval_memo_hits);
         row.eval_computed = as_count(totals.eval_computed);
         row.cache_requests = as_count(totals.cache_requests);
@@ -477,16 +481,16 @@ namespace profile_value
         row.cache_misses = as_count(totals.cache_misses);
         row.cache_replacements = as_count(totals.cache_replacements);
         row.materialized_nodes = as_count(totals.materialized_nodes);
-        row.materialize_ns = as_count(totals.materialize_ns);
-        row.policy_ns = as_count(totals.policy_ns);
+        row.materialize_ns = as_time(totals.materialize_ns);
+        row.policy_ns = as_time(totals.policy_ns);
         row.transposition_merges = as_count(totals.transposition_merges);
         row.promotions_refused = as_count(totals.promotions_refused);
         row.pending_end_max = as_count(static_cast<std::int64_t>(totals.pending_end_max));
         row.texhaust_moves = as_count(totals.texhaust_moves);
         row.path_calls = as_count(totals.path_calls);
         row.path_states = as_count(totals.path_states);
-        row.path_find_ns = as_count(totals.path_find_ns);
-        row.path_replay_ns = as_count(totals.path_replay_ns);
+        row.path_find_ns = as_time(totals.path_find_ns);
+        row.path_replay_ns = as_time(totals.path_replay_ns);
         row.replay_failures = as_count(totals.replay_failures);
         row.mem_retained_bytes = mem_retained;
         row.arena_reserved_bytes = arena_reserved;

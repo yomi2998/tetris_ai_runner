@@ -62,6 +62,7 @@ int main(int argc, char **argv)
     engine_config.policy = &policy_config;
     engine_config.movement.allow_180 = true;
     engine_config.telemetry_enabled = opt.telemetry;
+    engine_config.timers_enabled = opt.timers;
     engine_alias::Engine engine;
     if (!engine.init(engine_config))
     {

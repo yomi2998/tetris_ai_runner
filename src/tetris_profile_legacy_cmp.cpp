@@ -28,7 +28,11 @@ namespace
         static std::uint64_t unique_candidates;
         static std::uint64_t unmatched_candidates;
         static std::int64_t search_ns;
+        static std::int64_t norm_ns;
         static bool enabled;
+        static bool timers_enabled;
+
+        legacy_cmp::ProbeDedup dedup;
 
         static void reset()
         {
@@ -37,6 +41,7 @@ namespace
             unique_candidates = 0;
             unmatched_candidates = 0;
             search_ns = 0;
+            norm_ns = 0;
         }
 
         static std::int64_t now()
@@ -50,35 +55,41 @@ namespace
             m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node,
             size_t depth)
         {
-            std::int64_t start = enabled ? now() : 0;
+            bool const count = enabled;
+            bool const time = enabled && timers_enabled;
+            std::int64_t start = time ? now() : 0;
             auto const *result = search_tspin::Search::search(map, node, depth);
-            if (!enabled)
+            if (time)
+            {
+                search_ns += now() - start;
+            }
+            if (!count)
             {
                 return result;
             }
-            search_ns += now() - start;
             ++calls;
             raw_landings += result->size();
-            std::map<legacy_cmp::NormalizedKey, int> distinct;
+            if (!timers_enabled)
+            {
+                return result;
+            }
+            std::int64_t norm_start = time ? now() : 0;
+            dedup.begin_call();
             for (auto const &land : *result)
             {
                 int spin_class = land.type == search_tspin::Search::TSpinType::TSpin
                     ? 1
                     : (land.type == search_tspin::Search::TSpinType::TSpinMini ? 2 : 0);
-                legacy_cmp::NormalizedKey key = legacy_cmp::normalize_land_point(
+                dedup.add(legacy_cmp::normalize_land_point(
                     land->status.t, land->status.x, land->status.y,
                     land->status.r, spin_class, land.is_last_rotate,
-                    land->status.status);
-                distinct[key] += 1;
+                    land->status.status));
             }
-            unique_candidates += distinct.size();
-            for (auto const &[key, count] : distinct)
+            unique_candidates += dedup.distinct();
+            unmatched_candidates += dedup.unmatched();
+            if (time)
             {
-                (void)count;
-                if (!key.matched)
-                {
-                    ++unmatched_candidates;
-                }
+                norm_ns += now() - norm_start;
             }
             return result;
         }
@@ -88,13 +99,16 @@ namespace
     std::uint64_t CmpSearch::unique_candidates = 0;
     std::uint64_t CmpSearch::unmatched_candidates = 0;
     std::int64_t CmpSearch::search_ns = 0;
+    std::int64_t CmpSearch::norm_ns = 0;
     bool CmpSearch::enabled = true;
+    bool CmpSearch::timers_enabled = true;
 
     struct CmpTOJ : ai_zzz::TOJ
     {
         static std::uint64_t transitions;
         static std::int64_t transition_ns;
         static bool enabled;
+        static bool timers_enabled;
 
         static void reset()
         {
@@ -113,12 +127,17 @@ namespace
             m_tetris::TetrisMap const &map, size_t depth, Status const &status,
             m_tetris::TetrisContext::Env const &env) const
         {
-            std::int64_t start = enabled ? now() : 0;
+            bool const count = enabled;
+            bool const time = enabled && timers_enabled;
+            std::int64_t start = time ? now() : 0;
             Status out = ai_zzz::TOJ::get(
                 node, eval_result, clear, map, depth, status, env);
-            if (enabled)
+            if (count)
             {
                 ++transitions;
+            }
+            if (time)
+            {
                 transition_ns += now() - start;
             }
             return out;
@@ -127,6 +146,7 @@ namespace
     std::uint64_t CmpTOJ::transitions = 0;
     std::int64_t CmpTOJ::transition_ns = 0;
     bool CmpTOJ::enabled = true;
+    bool CmpTOJ::timers_enabled = true;
 
     using CmpEngine =
         m_tetris::TetrisEngine<rule_toj::TetrisRule, CmpTOJ, CmpSearch>;
@@ -211,6 +231,7 @@ namespace
         size_t iters = 0;
         size_t warmup_moves = 0;
         bool telemetry = true;
+        bool timers = true;
     };
 
     void print_help()
@@ -223,6 +244,8 @@ namespace
         std::println("  --moves N --warmup-moves N --level L --ms T --iters N");
         std::println("  --seed S --maxdepth D (0-255) --no-hold --param-file F");
         std::println("  --telemetry on|off --quiet --help");
+        std::println("  --timers on|off (default on) keeps counters while disabling");
+        std::println("  component timers and normalization; timed rows use counters only");
     }
 
     Options parse_args(int argc, char **argv)
@@ -230,6 +253,8 @@ namespace
         Options opt;
         std::string telemetry_text = "on";
         bool telemetry_seen = false;
+        std::string timers_text = "on";
+        bool timers_seen = false;
         auto fail = [&](std::string const &message) -> Options
         {
             std::println(stderr, "tetris_profile_legacy_cmp: invalid option: {}", message);
@@ -299,6 +324,11 @@ namespace
                 telemetry_text = next(a);
                 telemetry_seen = true;
             }
+            else if (a == "--timers")
+            {
+                timers_text = next(a);
+                timers_seen = true;
+            }
             else if (a == "--quiet") opt.quiet = true;
             else if (a == "--help")
             {
@@ -328,6 +358,22 @@ namespace
             else
             {
                 std::println(stderr, "telemetry must be on or off");
+                std::exit(1);
+            }
+        }
+        if (timers_seen)
+        {
+            if (timers_text == "on")
+            {
+                opt.timers = true;
+            }
+            else if (timers_text == "off")
+            {
+                opt.timers = false;
+            }
+            else
+            {
+                std::println(stderr, "timers must be on or off");
                 std::exit(1);
             }
         }
@@ -401,8 +447,10 @@ int main(int argc, char **argv)
 
     CmpTOJ::enabled = opt.telemetry;
     CmpSearch::enabled = opt.telemetry;
+    CmpTOJ::timers_enabled = opt.timers;
+    CmpSearch::timers_enabled = opt.timers;
     legacy_cmp::Observer observer;
-    observer.timers_enabled = opt.telemetry;
+    observer.timers_enabled = opt.timers;
 
     m_tetris::TetrisMap map(10, 40);
     std::mt19937 rng(opt.seed);
@@ -435,7 +483,9 @@ int main(int argc, char **argv)
     std::int64_t acc_eval_hit_ns = 0;
     std::int64_t acc_eval_miss_ns = 0;
     std::int64_t acc_parent_ns = 0;
+    std::int64_t acc_alloc_ns = 0;
     std::int64_t acc_search_ns = 0;
+    std::int64_t acc_norm_ns = 0;
     std::int64_t acc_transition_ns = 0;
     double acc_path_ms = 0;
     size_t node_sum = 0;
@@ -574,7 +624,9 @@ int main(int argc, char **argv)
             acc_eval_hit_ns += observer.counts.eval_hit_ns;
             acc_eval_miss_ns += observer.counts.eval_miss_ns;
             acc_parent_ns += observer.counts.parent_ns;
+            acc_alloc_ns += observer.counts.alloc_ns;
             acc_search_ns += CmpSearch::search_ns;
+            acc_norm_ns += CmpSearch::norm_ns;
             acc_transition_ns += CmpTOJ::transition_ns;
             acc_path_ms += path_ms;
             node_sum += nodes_alloc;
@@ -601,8 +653,11 @@ int main(int argc, char **argv)
     auto show = [&](std::uint64_t v) -> std::string {
         return opt.telemetry ? std::to_string(v) : std::string("na");
     };
-    auto show_ns = [&](std::int64_t v) -> std::string {
-        return opt.telemetry ? std::to_string(v) : std::string("na");
+    auto show_timed = [&](std::uint64_t v) -> std::string {
+        return opt.telemetry && opt.timers ? std::to_string(v) : std::string("na");
+    };
+    auto show_timed_ns = [&](std::int64_t v) -> std::string {
+        return opt.telemetry && opt.timers ? std::to_string(v) : std::string("na");
     };
 
     if (opt.quiet)
@@ -612,21 +667,24 @@ int main(int argc, char **argv)
             " raw_landings={} unique_candidates={} unmatched_candidates={} materialized_nodes={} recycled_nodes={} search_roots={} reused_nodes={} dedup_survivors={}"
             " path_states={} path_ms={:.3f} dead_moves={} games={} node_pool_bytes={}"
             " eval_hit_ns={} eval_miss_ns={} parent_ns={} search_ns={} transition_ns={}"
-            " warmup_moves={} seed={} iters={} maxdepth={} budget_ms={} mode={} telemetry={}",
+            " warmup_moves={} seed={} iters={} maxdepth={} budget_ms={} mode={} telemetry={}"
+            " alloc_ns={} norm_ns={} timers={}",
             move_ms.size(), total_sec,
             move_ms.empty() ? 0 : *std::min_element(move_ms.begin(), move_ms.end()),
             move_ms.empty() ? 0 : pct(move_ms, 0.5), pct(move_ms, 0.95), pct(move_ms, 0.99),
             move_ms.empty() ? 0 : *std::max_element(move_ms.begin(), move_ms.end()),
             show(acc_eval_requests), show(acc_eval_hits), show(acc_eval_calls),
             show(acc_transitions), show(acc_searches), show(acc_widening), show(acc_parents),
-            show(acc_raw), show(acc_unique), show(acc_unmatched), show(acc_fresh + acc_recycled),
+            show(acc_raw), show_timed(acc_unique), show_timed(acc_unmatched), show(acc_fresh + acc_recycled),
             show(acc_recycled), show(acc_roots), show(acc_reused), show(acc_fresh + acc_recycled + acc_reused),
             show(acc_path_states), acc_path_ms, dead_moves, games, node_sum,
-            show_ns(acc_eval_hit_ns), show_ns(acc_eval_miss_ns), show_ns(acc_parent_ns),
-            show_ns(acc_search_ns), show_ns(acc_transition_ns),
+            show_timed_ns(acc_eval_hit_ns), show_timed_ns(acc_eval_miss_ns), show_timed_ns(acc_parent_ns),
+            show_timed_ns(acc_search_ns), show_timed_ns(acc_transition_ns),
             opt.warmup_moves, opt.seed, opt.iters, opt.maxdepth,
             opt.ms > 0 ? opt.ms : 0.0, opt.iters > 0 ? "iters" : "ms",
-            opt.telemetry ? "on" : "off");
+            opt.telemetry ? "on" : "off",
+            show_timed_ns(acc_alloc_ns), show_timed_ns(acc_norm_ns),
+            !opt.telemetry ? "na" : (opt.timers ? "on" : "off"));
         return 0;
     }
 
