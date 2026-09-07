@@ -1,0 +1,2 @@
+tetris_profile_value: invalid option: --maxdepth
+reject_exit=1

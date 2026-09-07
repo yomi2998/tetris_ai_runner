@@ -49,6 +49,7 @@ namespace profile_value
         std::int64_t path_states = 0;
         std::int64_t path_failures = 0;
         std::int64_t arena_delta_bytes = 0;
+        std::size_t table_used = 0;
         bool used_hold = false;
         tetris::Piece played = tetris::Piece::T;
         tetris::Candidate candidate{};
@@ -284,6 +285,7 @@ namespace profile_value
 
             record.stats = engine_->search_stats();
             record.timers = engine_->component_timers();
+            record.table_used = engine_->transposition_used();
             tetris_engine::PathTelemetry path_after = engine_->path_telemetry();
             record.path_calls = static_cast<std::int64_t>(path_after.calls)
                 - static_cast<std::int64_t>(path_before.calls);

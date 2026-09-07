@@ -9,7 +9,9 @@ execution slice computes verdicts from this protocol after review.
 | Artifact | SHA-256 |
 |---|---|
 | `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile.baseline` | 84cb7a309f59db98b33709ececc168d330991b2226956cc7b310445870aac376 |
-| `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile_value.candidate` | c4579a8707efa5ea87a26f974ab142f2fbae4bb7a887bbda94ba9a8ce675455a |
+| `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile_value.candidate` | 816bcd7d33a7996a207d1c8bbba8bcf838baccfc6246ecb084d445f3b49938fe |
+
+The candidate row above is the 7.2D re-freeze (262,144-entry table); the 7.2B hash (`c4579a87`) identified the superseded freeze. Re-verification rows for the current freeze live in `results/phase7/resize_verify/`.
 | `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile_legacy_cmp` | 08e91644054b5bc07da45462378596f3364ae7e58459edd59e5d8a38cf885450 |
 | `artifacts/frozen_29d.bin` (29 doubles, absolute path passed via `--param-file`) | ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037 |
 

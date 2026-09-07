@@ -34,7 +34,7 @@ namespace tetris_engine
     inline constexpr std::size_t max_candidates_per_source =
         4 * Board::width * Board::height * 2;
     inline constexpr std::size_t max_children_per_parent = 2 * max_candidates_per_source;
-    inline constexpr std::size_t transposition_entries = 32768;
+    inline constexpr std::size_t transposition_entries = 262144;
     inline constexpr std::uint8_t no_piece_code = 0xFF;
     inline constexpr std::uint64_t engine_queue_reservation =
         max_queue_length * (sizeof(Piece) + sizeof(bool));
@@ -713,6 +713,8 @@ namespace tetris_engine
         ExpansionStats const &last_stats() const;
 
         std::size_t arena_size() const;
+
+        std::size_t transposition_used() const;
 
         std::size_t arena_reserved_bytes() const;
 

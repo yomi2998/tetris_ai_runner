@@ -105,7 +105,7 @@ against the retained nodes.
 
 ## Table size
 
-The transposition table holds 32,768 entries with an equal rehash
+The transposition table holds 262,144 entries with an equal rehash
 scratch, measured as follows on the slice gate matrix in the debug
 configuration: 8,192 entries exhaust on the first three-piece
 production-policy search; 16,384 entries exhaust on the unlocked
@@ -113,3 +113,27 @@ empty-hold variant; 32,768 entries complete every gate including
 warm-versus-cold parity and successive turns. The size stays a
 power of two for the direct-mapped probe mask and remains covered
 by the fixed workspace budget.
+
+### Sizing addendum (slice 7.2D): production demand exceeds the gate sizing
+
+The gate-matrix calibration above never approached production workload
+volume and is insufficient as a capacity basis: at the Section 17.2
+fixed-work reference (warmup 20, moves 200, iterations 1000, maxdepth 6),
+the 32,768-entry table exhausts on every move, fail-stopping each search
+at exactly 32,768 materialized nodes with about 32,000 states still
+pending. A 1,048,576-entry experimental build under a raised budget
+measured the true per-move distinct-state demand with zero exhaustion on
+all 660 fixed-work moves: peak 448,536 (seed 1), 429,964 (seed 2),
+408,023 (seed 3); medians cluster near 320,000 with minima above 221,000.
+Timed mode (20 ms) peaks at 22,084 with no exhaustion anywhere.
+
+262,144 entries is the largest power of two fundable within the 256 MiB
+budget (2 by 262,144 by 320 bytes of table plus scratch against a
+173,957,408-byte fixed workspace, leaving a 291,598-node arena); 524,288
+entries alone would exceed the whole budget at 320 bytes per entry. The
+new size therefore carries 12x headroom over the timed (production)
+demand peak while fixed-work reference volumes above it still fail-stop
+gracefully with best-so-far intact: a measured residual, not a silent
+change. Key compaction or a replacement policy would be required to hold
+the full fixed-work peak inside the budget; both are deferred, and the
+re-campaign will show how far the 8x relief carries gates 3, 4, and 6.

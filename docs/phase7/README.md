@@ -224,3 +224,23 @@ changes, no cutover work.
 - Plumbing smoke (`results/phase7/smoke/`): all three modes on both engines
   flow into rows plus MANIFEST with artifact hashes; all exit 0 with
   correct tokens and timer labels.
+
+## Slice 7.2D: transposition capacity repair
+
+- Measured true demand with an oversized (1,048,576-entry, raised-budget,
+  experimental only) build: zero exhaustion on all 660 fixed-work moves
+  with per-move distinct-state peaks 448,536 / 429,964 / 408,023 across
+  seeds 1/2/3 (medians near 320,000, minima above 221,000); timed mode
+  peaks at 22,084 with no exhaustion.
+- 262,144 entries is the largest fundable power of two inside 256 MiB
+  (2 by 262,144 by 320 bytes against a 173,957,408-byte fixed workspace,
+  leaving a 291,598-node arena); 524,288 entries alone would exceed the
+  budget. Semantics preserved: per-root reset, no overwrite, rehash
+  behavior, fail-stop on exhaustion. Residual fixed-work overflow
+  fail-stops gracefully with best-so-far intact; timed demand carries 12x
+  headroom. Key compaction or a replacement policy would be needed to hold
+  the full fixed-work peak and both stay deferred.
+- Permanent additions: `transposition_used()` accessor and per-move table
+  pressure in the runner record, with a unit gate pinning observability
+  inside capacity. Exhaustion fixtures use their own small capacities and
+  are unaffected.

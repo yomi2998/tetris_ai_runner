@@ -1,0 +1,1 @@
+PROFILE_V2 moves=5 total_s=0.041 min_ms=7.150 median_ms=7.733 p95_ms=10.139 p99_ms=10.139 max_ms=10.139 evals=40546 transitions=199806 searches=5521 dead_moves=0 games=0 node_pool_bytes=2849424 evals_per_s=993454 transitions_per_s=4895625 searches_per_s=135275 warmup_moves=2 seed=1 iters=100 maxdepth=6 budget_ms=0 mode=iters telemetry=on

@@ -385,6 +385,10 @@ namespace
             check(path_stats.calls == 1, "path telemetry counts the finalization");
             check(fixture.engine.component_timers().path_find_ns > 0,
                 "path find timer accumulates while enabled");
+            check(fixture.engine.transposition_used() > 0
+                    && fixture.engine.transposition_used()
+                        <= engine_alias::transposition_entries,
+                "table usage is observable and within capacity");
         }
         {
             ValueFixture on;

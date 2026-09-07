@@ -212,7 +212,8 @@ Deterministic frontier search over the slice 6.1 primitive:
   (count plus best node), which covers every legacy use.
 - Same-depth transposition with exact bounded deduplication: a
   direct-mapped linear-probe table (8,192 entries, resized to 32,768
-  in slice 6.5 per the measurement in `reuse_design.md`) with
+  in slice 6.5 per the measurement in `reuse_design.md`, then to
+  262,144 in slice 7.2D per the production-demand addendum there) with
   full-key verification and
   no overwrite of distinct states. The key is depth,
   occupancy, field-wise policy state (doubles bit-exact with `-0.0`
@@ -298,7 +299,7 @@ measured structure sizes. The full 256 MiB budget is split once in
 `init` between the node arena and the fixed search workspace: the
 candidate buffer (full search-domain bound per source), the child
 buffer and evaluation memo (the same bound for both sources), the
-32,768-entry transposition table plus the equal rehash scratch, the
+262,144-entry transposition table plus the equal rehash scratch, the
 257-frontier metadata arrays
 (pending-heap roots and counts plus the expanded trackers and width
 cache), the queue reservation, and a conservative stack peak
@@ -315,9 +316,9 @@ queue at the 256-piece cap, the stack at a fixed peak allowance)
 rather than runtime inspection of every control allocation.
 `default_arena_capacity` is the remainder divided by measured
 `sizeof(Node)` plus `sizeof(NodeId)` (320 and 4 bytes; the pinned
-values are a 27,156,768-byte
+values are a 173,957,408-byte
 fixed workspace including the 2,097,152-byte direct-mapped
-evaluation cache and a 744,687-node arena with the heap links, root
+evaluation cache and a 291,598-node arena with the heap links, root
 identity, and played-piece fields added in slice 6.2). The arena
 and the rotation idmap are counted separately by actual capacity,
 never by substituting one capacity for the other. Every buffer is a single reservation requested before any

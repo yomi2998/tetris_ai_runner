@@ -803,6 +803,11 @@ namespace tetris_engine
         return arena_.size();
     }
 
+    std::size_t Engine::transposition_used() const
+    {
+        return transposition_used_;
+    }
+
     std::size_t Engine::arena_reserved_bytes() const
     {
         return arena_.capacity() * sizeof(Node);
