@@ -221,7 +221,7 @@ namespace
         std::println("  emits one PROFILE_CMP record. Diagnostic evidence only,");
         std::println("  never a replacement historical baseline.");
         std::println("  --moves N --warmup-moves N --level L --ms T --iters N");
-        std::println("  --seed S --maxdepth D --no-hold --param-file F");
+        std::println("  --seed S --maxdepth D (0-255) --no-hold --param-file F");
         std::println("  --telemetry on|off --quiet --help");
     }
 

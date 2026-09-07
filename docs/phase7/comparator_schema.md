@@ -12,6 +12,8 @@ merged into the baseline series.
 tetris_profile_legacy_cmp ... --quiet
 ```
 
+`maxdepth` is bounded to 0-255, matching the value profile.
+
 ## Record format
 
 A single line beginning with the token `PROFILE_CMP`, followed by
@@ -89,7 +91,7 @@ with the comparator implementation before binding use.
   lookahead `TOJ`, and 4 fixed iterations), reproduced with unmodified
   pre-7.1C sources built flag-off at `-O0` (`g++ -std=c++23 -O0 -I src`
   over `tetris_core.cpp`, `rule_toj.cpp`, `search_tspin.cpp`, `ai_zzz.cpp`,
-  `random.cpp`; flaky across runs and rarer at `-O1`). The effect is
+  `random.cpp`; observed at both `-O0` and `-O1`). The effect is
   consistent with heap-reuse-dependent state in the legacy tree storage and
   predates this slice; both profile binaries construct one engine per
   process and advance it across moves exactly like the frozen loop, where
