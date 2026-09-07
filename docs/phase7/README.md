@@ -260,3 +260,24 @@ changes, no cutover work.
   harness compares kernel-versus-kernel and Reference A only, so the
   legacy placement-enumeration comparators that plan items 8 and 9
   require were never built.
+
+## Qualification repair: audit, source repairs, pre/post diagnostics (2026-09-07)
+
+- Audit of 7.1C-7.2E committed (`d928a05`): three source repairs accepted
+  after source review, exhaustive differentials, and a four-preset
+  build/ctest matrix (29/29 each) — comparator exact occupied-cell
+  identity, compact 152/160-byte transposition keys, per-candidate
+  landing validation. Gates 8/9 corrected to UNPROVEN in both verdict
+  documents; audit tooling repaired (`tests/audit_phase7_campaign.py`);
+  all recorded 7.2E numbers independently reproduced from raw rows.
+- Epoch-stamp transposition reset implemented and accepted (`510b356`,
+  design in `transposition_reset_design.md`) with the reset microbench.
+- Bounded pre/post diagnostics campaign
+  (`results/phase7/prepost_diagnostics/`, coordinator verdicts in
+  `verdict.md`): count identity exact across frozen/3-repair/post-epoch
+  binaries; paired off-mode totals D/A 0.7487 (all four changes) and
+  D/B 0.8716 (epoch alone); materialize leg 0.6318; comparator identity
+  repair verified collision-free at production scale (55.8M uniques
+  identical); recorded counters-only bound 1.02528 reproduced to 8e-05.
+  Diagnostics only — binding gates require re-frozen artifacts, the full
+  campaign protocol, and the gates 8/9 legacy comparators.
