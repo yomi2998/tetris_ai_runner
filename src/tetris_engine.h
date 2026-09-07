@@ -185,7 +185,7 @@ namespace tetris_engine
     {
         TranspositionKey key{};
         NodeId node = no_node;
-        bool used = false;
+        std::uint32_t epoch = 0;
     };
 
     static_assert(sizeof(TranspositionEntry) == 160,
@@ -719,6 +719,7 @@ namespace tetris_engine
             , idmap_(std::move(other.idmap_))
             , cache_(std::move(other.cache_))
             , transposition_used_(other.transposition_used_)
+            , transposition_epoch_(other.transposition_epoch_)
             , max_length_(other.max_length_)
             , width_(other.width_)
             , search_complete_(other.search_complete_)
@@ -753,6 +754,12 @@ namespace tetris_engine
         std::size_t arena_size() const;
 
         std::size_t transposition_used() const;
+
+        std::uint32_t transposition_epoch_for_test() const;
+
+        void set_transposition_epoch_for_test(std::uint32_t epoch);
+
+        std::size_t transposition_physical_entries_for_test() const;
 
         std::size_t arena_reserved_bytes() const;
 
@@ -813,6 +820,7 @@ namespace tetris_engine
         std::vector<NodeId> idmap_;
         EvalCache cache_;
         std::size_t transposition_used_ = 0;
+        std::uint32_t transposition_epoch_ = 0;
         std::size_t max_length_ = 0;
         std::size_t width_ = 0;
         bool search_complete_ = false;
@@ -823,6 +831,8 @@ namespace tetris_engine
         PathTelemetry path_stats_{};
 
         void reset_run_state();
+
+        void advance_transposition_epoch();
 
         void refresh_pending_occupancy();
 

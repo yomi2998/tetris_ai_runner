@@ -67,6 +67,7 @@ namespace tetris_engine
         queue_ = Queue{};
         path_stats_ = PathTelemetry{};
         reset_run_state();
+        transposition_epoch_ = 1;
         bool const cache_enabled = config_.cache.layout != CacheConfig::Layout::Disabled;
         std::size_t const effective_ways =
             config_.cache.layout == CacheConfig::Layout::DirectMapped
@@ -157,6 +158,22 @@ namespace tetris_engine
         return true;
     }
 
+    void Engine::advance_transposition_epoch()
+    {
+        if (transposition_epoch_ == std::numeric_limits<std::uint32_t>::max())
+        {
+            for (auto &entry : transposition_)
+            {
+                entry = TranspositionEntry{};
+            }
+            transposition_epoch_ = 1;
+        }
+        else
+        {
+            ++transposition_epoch_;
+        }
+    }
+
     void Engine::reset_run_state()
     {
         max_length_ = 0;
@@ -175,10 +192,7 @@ namespace tetris_engine
             expanded_count_[i] = 0;
             expanded_max_[i] = no_node;
         }
-        for (auto &entry : transposition_)
-        {
-            entry = TranspositionEntry{};
-        }
+        advance_transposition_epoch();
         transposition_used_ = 0;
     }
 
@@ -294,7 +308,7 @@ namespace tetris_engine
         std::size_t moved = 0;
         for (auto &entry : transposition_)
         {
-            if (!entry.used)
+            if (entry.epoch != transposition_epoch_)
             {
                 continue;
             }
@@ -313,19 +327,15 @@ namespace tetris_engine
             entry.key.root_child = arena_[idmap_[entry.node]].root_child;
             entry.node = idmap_[entry.node];
             transposition_rehash_[moved++] = entry;
-            entry = TranspositionEntry{};
         }
-        for (auto &entry : transposition_)
-        {
-            entry = TranspositionEntry{};
-        }
+        advance_transposition_epoch();
         transposition_used_ = 0;
         for (std::size_t i = 0; i < moved; ++i)
         {
             TranspositionProbe probe = transposition_probe(transposition_rehash_[i].key);
             probe.slot->key = transposition_rehash_[i].key;
             probe.slot->node = transposition_rehash_[i].node;
-            probe.slot->used = true;
+            probe.slot->epoch = transposition_epoch_;
         }
         transposition_used_ = moved;
         arena_.resize(new_count);
@@ -808,6 +818,29 @@ namespace tetris_engine
         return transposition_used_;
     }
 
+    std::uint32_t Engine::transposition_epoch_for_test() const
+    {
+        return transposition_epoch_;
+    }
+
+    void Engine::set_transposition_epoch_for_test(std::uint32_t epoch)
+    {
+        transposition_epoch_ = epoch;
+    }
+
+    std::size_t Engine::transposition_physical_entries_for_test() const
+    {
+        std::size_t count = 0;
+        for (auto const &entry : transposition_)
+        {
+            if (entry.epoch != 0)
+            {
+                ++count;
+            }
+        }
+        return count;
+    }
+
     std::size_t Engine::arena_reserved_bytes() const
     {
         return arena_.capacity() * sizeof(Node);
@@ -902,7 +935,7 @@ namespace tetris_engine
         for (std::size_t i = 0; i < transposition_entries; ++i)
         {
             TranspositionEntry &entry = transposition_[slot];
-            if (!entry.used)
+            if (entry.epoch != transposition_epoch_)
             {
                 return { false, no_node, &entry };
             }
@@ -963,7 +996,7 @@ namespace tetris_engine
             }
             probe.slot->key = key;
             probe.slot->node = id;
-            probe.slot->used = true;
+            probe.slot->epoch = transposition_epoch_;
             ++transposition_used_;
             arena_[id].registered = true;
             if (telemetry_on())
@@ -994,7 +1027,7 @@ namespace tetris_engine
         }
         probe.slot->key = key;
         probe.slot->node = id;
-        probe.slot->used = true;
+        probe.slot->epoch = transposition_epoch_;
         ++transposition_used_;
         if (telemetry_on())
         {

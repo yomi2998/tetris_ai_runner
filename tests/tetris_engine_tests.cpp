@@ -4029,6 +4029,198 @@ namespace
         std::println("node storage: {} bytes per node", sizeof(engine_alias::Node));
         std::println("budget: capacity derives from measured node cost");
     }
+
+    void run_epoch_isolation_tests()
+    {
+        Fixture first = make_zero_fixture();
+        check(first.engine.transposition_epoch_for_test() == 1,
+            "epoch isolation starts at the reserved never-current successor");
+        engine_alias::NodeId root =
+            make_root(first, shelf_board(), "III", std::nullopt, true);
+        check(root != engine_alias::no_node, "epoch isolation root takes");
+        std::uint32_t const epoch_after_first_root =
+            first.engine.transposition_epoch_for_test();
+        check(epoch_after_first_root == 2, "first cold root advances the epoch once");
+        check(first.engine.run(500), "epoch isolation first search completes");
+        std::size_t const merges_first =
+            first.engine.search_stats().transposition_merges;
+        std::size_t const used_first = first.engine.transposition_used();
+        check(merges_first > 0, "epoch isolation population merges within one root");
+        check(used_first > 0, "epoch isolation population occupies slots");
+        auto first_selection = first.engine.select_best();
+        check(first_selection.has_value(), "epoch isolation first search selects");
+        engine_alias::NodeId second =
+            make_root(first, shelf_board(), "III", std::nullopt, true);
+        check(second != engine_alias::no_node,
+            "identical re-root takes a clean cold root");
+        check(first.engine.arena_size() == 1,
+            "identical parameters miss reuse and retain nothing");
+        check(first.engine.transposition_used() == 0,
+            "cold boundary clears the logical transposition occupancy");
+        check(first.engine.transposition_epoch_for_test() == epoch_after_first_root + 1,
+            "cold boundary advances the epoch exactly once");
+        check(first.engine.run(500), "epoch isolation second search completes");
+        std::size_t const merges_second =
+            first.engine.search_stats().transposition_merges;
+        std::size_t const used_second = first.engine.transposition_used();
+        check(merges_second > 0, "second root merges within its own epoch");
+        auto second_selection = first.engine.select_best();
+        check(second_selection.has_value(), "epoch isolation second search selects");
+        Fixture baseline = make_zero_fixture();
+        make_root(baseline, shelf_board(), "III", std::nullopt, true);
+        check(baseline.engine.run(500), "epoch isolation baseline completes");
+        check(merges_second
+                == baseline.engine.search_stats().transposition_merges,
+            "identical key across a set_root boundary produces zero cross-root merges");
+        check(used_second == baseline.engine.transposition_used(),
+            "identical re-root materializes exactly the fresh slot count");
+        auto base_selection = baseline.engine.select_best();
+        check(second_selection.has_value() && base_selection.has_value()
+            && second_selection->root_child == base_selection->root_child
+            && second_selection->evidence == base_selection->evidence,
+            "identical re-root selects exactly like a fresh engine");
+        std::println("epoch isolation: identical keys never merge across roots");
+    }
+
+    void run_epoch_wrap_tests()
+    {
+        constexpr std::uint32_t kMax = std::numeric_limits<std::uint32_t>::max();
+        Fixture fresh = make_zero_fixture();
+        check(fresh.engine.transposition_epoch_for_test() == 1,
+            "wrap fixture starts at epoch one");
+        check(fresh.engine.transposition_physical_entries_for_test() == 0,
+            "fresh table holds no physical stamps");
+        Fixture staged = make_zero_fixture();
+        engine_alias::NodeId root =
+            make_root(staged, shelf_board(), "III", std::nullopt, true);
+        check(root != engine_alias::no_node, "wrap population root takes");
+        check(staged.engine.transposition_epoch_for_test() == 2,
+            "wrap population root advances to epoch two");
+        staged.engine.set_transposition_epoch_for_test(kMax);
+        check(staged.engine.transposition_epoch_for_test() == kMax,
+            "wrap population forced to the maximum stamp");
+        check(staged.engine.run(500), "wrap population completes at maximum epoch");
+        check(staged.engine.transposition_used() > 0,
+            "maximum-epoch search occupies slots");
+        check(staged.engine.transposition_physical_entries_for_test() > 0,
+            "maximum-epoch search stamps physical entries");
+        engine_alias::NodeId wrapped =
+            make_root(staged, shelf_board(), "III", std::nullopt, true);
+        check(wrapped != engine_alias::no_node, "wrapping cold root takes");
+        check(staged.engine.arena_size() == 1, "wrapping root retains nothing");
+        check(staged.engine.transposition_epoch_for_test() == 1,
+            "wrap restarts at epoch one");
+        check(staged.engine.transposition_used() == 0,
+            "wrap clears the logical occupancy");
+        check(staged.engine.transposition_physical_entries_for_test() == 0,
+            "wrap performs the single full clear of physical stamps");
+        check(staged.engine.run(500), "post-wrap search completes");
+        check(staged.engine.search_stats().transposition_merges > 0,
+            "post-wrap search merges normally");
+        check(staged.engine.transposition_used() > 0,
+            "post-wrap search occupies slots normally");
+        Fixture baseline = make_zero_fixture();
+        make_root(baseline, shelf_board(), "III", std::nullopt, true);
+        check(baseline.engine.run(500), "wrap baseline completes");
+        check(staged.engine.search_stats().transposition_merges
+                == baseline.engine.search_stats().transposition_merges,
+            "post-wrap merge counts match a fresh engine exactly");
+        check(staged.engine.transposition_used()
+                == baseline.engine.transposition_used(),
+            "post-wrap slot counts match a fresh engine exactly");
+        check(staged.engine.arena_size() == baseline.engine.arena_size(),
+            "post-wrap arena size matches a fresh engine exactly");
+        std::size_t const physical_before =
+            staged.engine.transposition_physical_entries_for_test();
+        check(physical_before > 0, "post-wrap run leaves physical stamps");
+        std::uint32_t const epoch_before =
+            staged.engine.transposition_epoch_for_test();
+        make_root(staged, shelf_board(), "III", std::nullopt, true);
+        check(staged.engine.transposition_epoch_for_test() == epoch_before + 1,
+            "normal advance steps the epoch once");
+        check(staged.engine.transposition_used() == 0,
+            "normal advance clears the logical occupancy");
+        check(staged.engine.transposition_physical_entries_for_test() == physical_before,
+            "normal advance keeps stale physical stamps without clearing");
+        std::println("epoch wrap: maximum advances through one clear back to one");
+    }
+
+    void run_reroot_epoch_parity_tests()
+    {
+        toj_policy::State state;
+        engine_alias::HoldState no_hold;
+        no_hold.locked = true;
+        Fixture warm = make_fixture();
+        auto first_queue = engine_alias::parse_queue("TIS");
+        check(first_queue.has_value(), "reroot-epoch first queue parses");
+        check(warm.engine.set_root(shelf_board(), state, std::move(*first_queue),
+            no_hold) != engine_alias::no_node,
+            "reroot-epoch first turn takes");
+        std::uint32_t const epoch_first_root =
+            warm.engine.transposition_epoch_for_test();
+        check(warm.engine.run(2000), "reroot-epoch first search completes");
+        check(warm.engine.transposition_used() > 0,
+            "reroot-epoch first search occupies slots");
+        auto selection = warm.engine.select_best();
+        check(selection.has_value(), "reroot-epoch first search selects");
+        if (!selection.has_value())
+        {
+            return;
+        }
+        auto const *child = warm.engine.node(selection->root_child);
+        engine_alias::Queue next = remaining_queue(warm.engine.queue(), child->cursor);
+        engine_alias::Queue cold_next = next;
+        toj_policy::State const next_policy = child->policy;
+        engine_alias::Board const next_board = child->board;
+        engine_alias::HoldState const next_hold = child->hold;
+        check(warm.engine.set_root(next_board, next_policy, std::move(next),
+            next_hold) != engine_alias::no_node,
+            "reroot-epoch second turn reroots");
+        check(warm.engine.arena_size() > 2,
+            "reroot-epoch reroot retains a nontrivial subtree");
+        check(warm.engine.transposition_epoch_for_test() == epoch_first_root + 1,
+            "reroot advances the epoch exactly once");
+        check(warm.engine.transposition_used() > 0,
+            "reroot carries retained transposition entries under the new epoch");
+        check(warm.engine.run(2000), "reroot-epoch warm second search completes");
+        auto warm_stats = warm.engine.search_stats();
+        check(warm_stats.transposition_merges > 0,
+            "reroot-epoch warm search merges retained nodes");
+        auto warm_selection = warm.engine.select_best();
+        Fixture cold = make_fixture();
+        check(cold.engine.set_root(next_board, next_policy, std::move(cold_next),
+            next_hold) != engine_alias::no_node,
+            "reroot-epoch cold second turn takes");
+        check(cold.engine.run(2000), "reroot-epoch cold second search completes");
+        auto cold_stats = cold.engine.search_stats();
+        auto cold_selection = cold.engine.select_best();
+        check(warm_selection.has_value() && cold_selection.has_value()
+            && warm_selection->root_child == cold_selection->root_child
+            && warm_selection->evidence == cold_selection->evidence,
+            "reroot-epoch warm and cold select the same move");
+        check(warm.engine.arena_size() == cold.engine.arena_size(),
+            "reroot-epoch warm and cold materialize the same node count");
+        bool parity = warm.engine.arena_size() == cold.engine.arena_size();
+        for (std::size_t id = 0; id < warm.engine.arena_size() && parity; ++id)
+        {
+            auto const *warm_node = warm.engine.node(
+                static_cast<engine_alias::NodeId>(id));
+            auto const *cold_node = cold.engine.node(
+                static_cast<engine_alias::NodeId>(id));
+            if (!same_node_print(warm_node, cold_node, id == 0))
+            {
+                parity = false;
+            }
+        }
+        check(parity, "reroot-epoch warm and cold share full node semantics");
+        check(cold_stats.materialized_nodes > 0,
+            "reroot-epoch cold search materializes within its own epoch");
+        check(warm.engine.transposition_used() > 0
+            && cold.engine.transposition_used() > 0,
+            "both reroot-epoch searches leave occupied tables");
+        check_child_links(warm.engine, "reroot-epoch warm chains enumerate ownership");
+        std::println("reroot epoch: warm and cold agree under epoch retention");
+    }
 }
 
 int main()
@@ -4070,6 +4262,9 @@ int main()
     run_cache_parity_tests();
     run_cache_counter_tests();
     run_reuse_tests();
+    run_epoch_isolation_tests();
+    run_epoch_wrap_tests();
+    run_reroot_epoch_parity_tests();
     run_finalize_tests();
     std::println("tetris_engine_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;
