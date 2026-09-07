@@ -244,3 +244,16 @@ changes, no cutover work.
   pressure in the runner record, with a unit gate pinning observability
   inside capacity. Exhaustion fixtures use their own small capacities and
   are unaffected.
+
+## Slice 7.2E: binding re-campaign (resized candidate)
+
+- Demand evidence preserved with manifest (`results/phase7/sizing/`).
+- 124 rows plus MANIFEST collected under the corrected protocol; overall
+  verdict NOT QUALIFIED (`results/phase7/recampaign_verdicts.md`): gates
+  1, 2 fail at 6-7x (honest volume, expected); gate 3 blocked (deltas now
+  +12/-17 percent class, still unpartitionable without new
+  instrumentation); gate 4 fails 6 of 7 legs with the 100-percent
+  occupancy caveat on materialization (13-14x); gate 5 passes; gate 6
+  fails at 0.22-0.32x with the timed rows now untruncated and therefore
+  informative; comparator bound unmet this session (1.02528 vs 1.02);
+  corpus verdicts stand.

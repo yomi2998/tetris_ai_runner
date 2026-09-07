@@ -1,0 +1,19 @@
+Demand measurement backing the 7.2D capacity choice (slice 7.2D authorization item 1).
+
+Experimental build (fully reverted afterward; never frozen, never shipped):
+- transposition_entries = 1048576, engine_memory_budget = 1024 MiB
+- linux-gcc-self-release preset flags (GCC 16.2.1, -O3 -march=native, LTO)
+- temporary per-move stderr trace of post-run transposition usage plus a
+  run-end peak line; trace code removed before the 7ecf43f commit
+- pinned core 7 via taskset, TETRIS_AI_PARAM_FILE unset, absolute
+  --param-file artifacts/frozen_29d.bin in every command
+
+Files (one integer per move, 220 moves = 20 warmup + 200 measured, in order):
+- fixed_seed{1,2,3}_table_use.txt: --warmup-moves 20 --moves 200 --iters 1000
+  --seed {1,2,3} --maxdepth 6; zero table exhaustion on all 660 moves
+- timed_seed1_table_use.txt: --warmup-moves 20 --moves 200 --ms 20 --seed 1
+  --maxdepth 6, measured with the 262,144-entry production-budget build
+  (timed demand fits any table under consideration)
+
+Summary statistics: peaks 448536 / 429964 / 408023 (fixed seeds 1/2/3),
+22084 (timed); see docs/phase6/reuse_design.md sizing addendum.
