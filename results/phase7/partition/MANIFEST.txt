@@ -1,0 +1,41 @@
+# Gate-3 count-partition evidence bundle manifest.
+# Spec: docs/phase7/count_partition_instrument_design.md (accepted 2026-09-07).
+# Workload for all runs: --moves 200 --maxdepth 6
+#   --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin
+#   --ms 20 (timed, budget-complete), seeds 1/2/3, warmup 0.
+# profile_v3.txt holds the first 100 chars of the PROFILE_V3 line (run marker
+# only); authoritative counts are in run_totals.tsv.
+
+binaries:
+  frozen_29d.bin = ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037
+  preserved tetris_profile_value.e = 335acc1ccd31568fd2d0f47031cc765633a4af53401ce3cf10c2a3e44137f6fd
+  candidate_partition (linux-gcc-self-release, final sources) = f8174e9eabf3bcdd1e7d76c0adce94241c58ac8d3a3ba09ae9bf19d8ba27596a
+  tetris_profile_legacy_cmp (linux-gcc-self-release) = fa830879ab9a775f590d8b327d3fa12e229ad4607cd8b0e2acbd0901bf9681c5
+  tetris_profile_value (linux-gcc-self-release, callback null) = 85116c4dc23125af6daa8c75f01302bb44a8a7d89355b446d32337028658226b
+
+commands (BIN = out/build/linux-gcc-self-release/candidate_partition):
+  record: BIN record --seed S --moves 200 --maxdepth 6 --param-file artifacts/frozen_29d.bin --ms 20 --record-out results/phase7/partition/seedS
+  drive: BIN drive --inputs results/phase7/partition/seedS.inputs.bin --legacy-out results/phase7/partition/seedS.legacy.bin
+  classify: BIN classify --inputs results/phase7/partition/seedS.inputs.bin --legacy results/phase7/partition/seedS.legacy.bin --out results/phase7/partition/seedS
+  legacy profile: out/build/linux-gcc-self-release/tetris_profile_legacy_cmp --seed S --moves 200 --maxdepth 6 --param-file artifacts/frozen_29d.bin --ms 20 --quiet
+  volume: python3 results/phase7/partition/compute_volume.py
+  selftest: BIN selftest (also CTest candidate_partition_selftest, all presets)
+
+timestamps (UTC+8 file mtimes; UTC = -8h):
+  seed1 record/drive 2026-09-08 00:20, classify 00:22
+  seed2 record/drive 00:22, classify 00:24
+  seed3 record/drive 00:24, classify 00:26
+  legacy profiles 00:26, volume table 00:27
+
+count-identity spot checks (counts-only diff, timing fields excluded):
+  seed1/moves5/iters10: preserved .e == rebuilt-null == record-set (bit-identical counts)
+  seed3/moves10/iters100: preserved .e == rebuilt-null (bit-identical counts)
+  recorder self-check in every run: recorder_sum_nV == unique_candidates,
+    recorder_calls == enum_calls, words->rows roundtrip ok (run_totals.tsv)
+
+results:
+  seedS.uniques.csv / seedS.trans.csv (per-input rows, both legs)
+  seedS.class_table.tsv (class totals + exact_S/N/R/T flags)
+  seedS.defects.tsv (header-only: zero defects on all seeds)
+  volume_table.tsv (campaign deltas + S sums + residuals, seeds 1/2/3)
+  seedS.moves.tsv (per-move pass/exhausted/pending/trans_used; exhausted=0 all moves)

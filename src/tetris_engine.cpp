@@ -584,6 +584,42 @@ namespace tetris_engine
             search_stats_.unique_candidates += batch->count;
             stats_.enumerated += batch->count;
         }
+        // Test-only hook: docs/phase7/count_partition_instrument_design.md §5. default-null; one branch when null.
+        bool const record = static_cast<bool>(config_.expand_source_record);
+        std::vector<ExpandSourceCandidateRecord> record_entries;
+        if (record)
+        {
+            record_entries.reserve(batch->count);
+        }
+        auto record_push = [&](Candidate candidate, bool apply_ok, Outcome outcome,
+            std::uint64_t hash40, bool survivor) {
+            if (!record)
+            {
+                return;
+            }
+            ExpandSourceCandidateRecord entry;
+            entry.candidate = candidate;
+            entry.apply_ok = apply_ok;
+            entry.outcome = outcome;
+            entry.result_hash40 = hash40;
+            entry.survivor = survivor;
+            record_entries.push_back(entry);
+        };
+        auto record_emit = [&](bool overflow) {
+            if (!record)
+            {
+                return;
+            }
+            ExpandSourceRecord rec;
+            rec.board = &parent.board;
+            rec.played = played;
+            rec.source = source;
+            rec.candidates =
+                std::span<ExpandSourceCandidateRecord const>(record_entries);
+            rec.raw_landings = batch->raw_landings;
+            rec.overflow = overflow;
+            config_.expand_source_record(rec);
+        };
         for (std::size_t index = 0; index < batch->count; ++index)
         {
             Candidate const &candidate = candidate_buffer_[index];
@@ -599,6 +635,7 @@ namespace tetris_engine
                 {
                     timers_.rule_ns += timer_now() - rule_start;
                 }
+                record_push(candidate, false, Outcome{}, 0, false);
                 continue;
             }
             Outcome outcome;
@@ -621,6 +658,8 @@ namespace tetris_engine
             }
             if (same_result)
             {
+                record_push(candidate, true, outcome,
+                    result_rows_hash40(applied->board), false);
                 continue;
             }
             Evaluation evaluation = evaluate_once(applied->board);
@@ -639,6 +678,7 @@ namespace tetris_engine
             }
             if (out.size() >= out.capacity())
             {
+                record_emit(true);
                 return false;
             }
             Child child;
@@ -659,7 +699,10 @@ namespace tetris_engine
                 ++search_stats_.policy_transitions;
                 ++stats_.transitions;
             }
+            record_push(candidate, true, outcome,
+                result_rows_hash40(applied->board), true);
         }
+        record_emit(false);
         return true;
     }
 

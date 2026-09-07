@@ -47,3 +47,4 @@ Icon
 
 *.bin
 *.bak
+results/phase7/partition/*.bin

@@ -1,0 +1,12 @@
+9606d348c3efdaf1117351fee3b9475f58b88387be7e4288ed9c0cd5ee32259d  results/phase7/partition/seed1.inputs.bin
+5b3db1ff98dae1f3a46ebeecc3b686506bb29d7c4fb4a52a626640f3b10de45c  results/phase7/partition/seed1.legacy.bin
+4608fa731d1ae68a8f7c40f367df08db145e27e296791b87b73fd9d244eb9cab  results/phase7/partition/seed2.inputs.bin
+af3c9cc642e4577d6205af414976cabed6142340cbec2ac7310280870667f081  results/phase7/partition/seed2.legacy.bin
+3f579b8dee7837e518d73dd0fbcd20900fd3003ad0d2f19e2c66ea1b7a6a8c46  results/phase7/partition/seed3.inputs.bin
+f2067c4a8c74e3f9590e6b06f8911a9e6fe97fcf29fd25107e33b4dd23c20d49  results/phase7/partition/seed3.legacy.bin
+The six .bin streaming artifacts (recorded distinct inputs and legacy
+drive dumps, ~300 MB total) are intentionally NOT versioned: they are
+regenerable by re-running `candidate_partition record` and `drive` with
+the recorded MANIFEST commands, and the durable partition evidence is
+the committed CSV/class-table set. Hashes above pin the originals from
+the 2026-09-07 run.

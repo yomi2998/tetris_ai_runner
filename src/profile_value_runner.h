@@ -173,6 +173,9 @@ namespace profile_value
             bool hold = true;
             std::size_t iters = 0;
             std::uint64_t budget_ms = 0;
+            // Test-only hook: docs/phase7/count_partition_instrument_design.md §5. default-null; one branch per
+            // return site when null.
+            std::function<void(MoveRecord const &)> on_move;
         };
 
         Runner(toj_policy::Config &policy_config, toj_policy::Policy &seed_policy,
@@ -215,6 +218,12 @@ namespace profile_value
         MoveRecord step()
         {
             MoveRecord record;
+            auto emit = [&] {
+                if (config_.on_move)
+                {
+                    config_.on_move(record);
+                }
+            };
             std::int64_t t_setup0 = now();
             scenario_.start_move(config_.maxdepth);
             auto current_piece = tetris::try_from_char(scenario_.current());
@@ -233,6 +242,7 @@ namespace profile_value
                 record.setup_ms = millis(now() - t_setup0);
                 record.emove_ms = record.setup_ms;
                 reset_on_death();
+                emit();
                 return record;
             }
 
@@ -308,6 +318,7 @@ namespace profile_value
 
             if (!result.has_selection || !result.path_ok)
             {
+                emit();
                 return invalid(record,
                     "finalization failed (missing selection or unverified path)");
             }
@@ -322,6 +333,7 @@ namespace profile_value
             {
                 record.kind = MoveRecord::Kind::LockoutDeath;
                 reset_on_death();
+                emit();
                 return record;
             }
 
@@ -330,6 +342,7 @@ namespace profile_value
                 tetris::toj::apply(board_, result.played, *result.candidate);
             if (!applied.has_value())
             {
+                emit();
                 return invalid(record,
                     "rule application rejected the finalized candidate");
             }
@@ -353,6 +366,7 @@ namespace profile_value
             record.emove_ms += record.apply_ms;
             record.kind = MoveRecord::Kind::Placed;
             last_attack_ = attack;
+            emit();
             return record;
         }
 

@@ -288,3 +288,18 @@ changes, no cutover work.
   0.0422 against the 1.02 bar, plus the earlier Reference A half
   (0.0928). Plan items 8 and 9 are now proven; both verdict documents
   updated.
+- Hotspot attribution (`docs/phase7/hotspot_attribution_d.md`):
+  materialize/transposition 54.3 percent of run (probe 46.9 percent of
+  cycles), canonicalization ~18 percent, eval ~8 percent; kernel BFS
+  near zero. Count-safe accelerations committed (`e055cf5`: word-wise
+  hash, cells caching; count identity 37/37 exact; paired totals
+  post/pre 0.7961).
+- Gate-3 partition instrument implemented and run
+  (`results/phase7/partition/`, design in
+  `count_partition_instrument_design.md`): on the timed workload the
+  entire per-input semantic delta is class (a) new-legal candidates
+  proven by live oracles (seed 1: +395,300; seeds 2/3 repeat), zero
+  defects on both legs across all seeds, exact integer accounting
+  independently rechecked, and the campaign count deltas fully
+  reconciled into semantic partition plus exactly-counted volume terms
+  (legacy re-walk asymmetry: 238,654 vs 117,589 parents).

@@ -239,6 +239,20 @@ target_link_libraries(path_differential PRIVATE fast_reachability)
 target_include_directories(path_differential PRIVATE src tests src/fast-reachability)
 add_test(NAME path_differential COMMAND path_differential)
 
+add_executable(candidate_partition
+    tests/candidate_partition.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_link_libraries(candidate_partition PRIVATE fast_reachability)
+target_include_directories(candidate_partition PRIVATE src tests src/fast-reachability)
+add_test(NAME candidate_partition_selftest COMMAND candidate_partition selftest)
+
 add_executable(toj_policy_tests
     tests/toj_policy_tests.cpp
     src/toj_policy.cpp
@@ -436,7 +450,7 @@ add_test(NAME raw_parity_frozen_180off
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/reach_parity_check.cmake
 )
 
-set_tests_properties(tetris_board_tests rule_differential path_differential fast_reachability_tests
+set_tests_properties(tetris_board_tests rule_differential path_differential candidate_partition_selftest fast_reachability_tests
     fast_reachability_perft profile_value_tests profile_value_determinism profile_value_no_hold
     profile_value_telemetry_off profile_value_timers_off profile_value_rejects_garbage_maxdepth
     profile_value_rejects_wrapping_totals profile_value_rejects_bad_telemetry

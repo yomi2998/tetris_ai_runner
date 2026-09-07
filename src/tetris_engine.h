@@ -712,7 +712,43 @@ namespace tetris_engine
         CacheConfig cache;
         bool telemetry_enabled = true;
         bool timers_enabled = true;
+        // Test-only hook: docs/phase7/count_partition_instrument_design.md §5. default-null; one branch when null.
+        // Set only by the test-only candidate_partition target.
+        std::function<void(struct ExpandSourceRecord const &)> expand_source_record;
     };
+
+    // Test-only count-partition record for one Engine::expand_source call.
+    // board is borrowed for the callback duration; copy words synchronously.
+    struct ExpandSourceCandidateRecord
+    {
+        Candidate candidate{};
+        bool apply_ok = false;
+        Outcome outcome{};
+        std::uint64_t result_hash40 = 0; // FNV-1a over result rows 0..39
+        bool survivor = false; // intra-source dedup survivor (implies apply_ok)
+    };
+
+    struct ExpandSourceRecord
+    {
+        Board const *board = nullptr;
+        Piece played = Piece::T;
+        BranchSource source = BranchSource::Current;
+        std::span<ExpandSourceCandidateRecord const> candidates{};
+        std::size_t raw_landings = 0;
+        bool overflow = false; // child-buffer fail-stop path taken
+    };
+
+    // FNV-1a over result rows 0..39; the driver computes identically.
+    inline std::uint64_t result_rows_hash40(Board const &board)
+    {
+        std::uint64_t h = 1469598103934665603ull;
+        for (int y = 0; y < 40; ++y)
+        {
+            h ^= static_cast<std::uint64_t>(board.row(y));
+            h *= 1099511628211ull;
+        }
+        return h;
+    }
 
     class Engine
     {
