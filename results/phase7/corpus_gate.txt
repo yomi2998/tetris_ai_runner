@@ -1,0 +1,144 @@
+=== environment
+host icly-desktop kernel 7.2.3-1-cachyos
+cpu AMD Ryzen 7 7700 8-Core Processor
+logical_cpus 16 pin_core 7
+governor powersave
+current_freq_khz 4342555
+min_max_freq 3021308 5392872
+boost 1
+compiler g++ (GCC) 16.2.1 20260810 cmake version 4.4.3
+build_dir out/build/linux-gcc-self-release build_preset_flags -O3 -march=native -flto=2
+ordering ABBA per repetition plus a trailing A control repetitions 5
+internal_reps_per_run T 300 raw 3000 warmup 10
+binary_sha256 reference_a_frozen 36b20830435c290c1239d849dfb1156672d447be3ccfb36fec6ddd1c985b6f85
+binary_sha256 arrival_candidates 40c0932a29716493c64d8835b7bf8f028af3992682931d50c693878ddfbe49c5
+binary_sha256 raw_bench_current cccf6b6c19f64c0299312d629ec7157cc240c3dfe1f12874593ee6ec819e50a6
+binary_sha256 raw_bench_frozen_180fix f4376a18c70b8bf5ea018b75217a8c1c8b973fcdcf7cceb045eb72ae5746482e
+binary_sha256 raw_bench_frozen 6bf4819515350ceb312a0e1d9d4d2a670454fd9e9f681b8b95a47a51599b18b8
+=== T semantic enumeration versus Reference A (production flags)
+=== raw BFS versus frozen 0c35e13 with the isolated 180 fix (production flags)
+=== raw BFS versus plain frozen 0c35e13 with 180 disabled on both sides
+=== gates
+time_ratio_medians_current_over_reference_a T=0.0928 Z=0.3041 S=0.2997 J=0.3700 L=0.3214 O=0.1643 I=0.3346 (lower is better; gate is T <= 0.500) PASS
+speedup_medians_reference_a_over_current T=10.771 Z=3.289 S=3.336 J=2.703 L=3.112 O=6.086 I=2.988 (times reported include board preparation and candidate normalization on both sides)
+raw_ratio_medians_current_over_frozen_180fix total T=0.8804 Z=0.9525 S=0.9337 J=0.9379 L=0.9743 O=0.9868 I=0.9383 (lower is better; gate is every non-T piece <= 1.020) PASS
+raw_ratio_medians_current_over_frozen_180fix search_only T=0.8007 Z=0.9365 S=0.9113 J=0.8952 L=0.9552 O=0.9879 I=0.9196 (lower is better; gate is every non-T piece <= 1.020) PASS
+| Gate | Requirement | Measured | Verdict |
+|---|---|---|---|
+| T semantic enumeration versus Reference A | at least 2x faster | T time ratio 0.0928, Reference A is 10.77x slower | PASS |
+| Raw non-T BFS regression | at most 1.020 versus the equal-semantics frozen comparator | worst total ratio 0.9868 (O), worst search-only 0.9879 (O) | PASS |
+| Raw non-T at 180 off versus plain frozen | informational | worst total ratio 0.9893 (O), worst search-only 0.9857 (O) | PASS |
+| Perft vectors | exact | 8 of 8 in `fast_reachability_perft` | PASS |
+raw_ratio_medians_current_over_plain_frozen_180off total T=0.8758 Z=0.9469 S=0.9491 J=0.9353 L=0.9738 O=0.9893 I=0.9389
+raw_ratio_medians_current_over_plain_frozen_180off search_only T=0.7919 Z=0.9290 S=0.9299 J=0.8862 L=0.9521 O=0.9857 I=0.9202
+=== detail lines
+PROVENANCE reference_a_frozen PRODUCER reference_a_frozen refa_root=e9a90d8dbc8e2e5f513691c1c83b211097fb21eb refa_worktree=clean refa_kernel=0c35e130abb733caefababe0d08c8faf466740e7 root=357481493e367d31f9123c3b5f9df4b03ca12e6a root_worktree=clean kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 refa_src_search_reachability_search.cpp=58f6bda895994508836c01d7cea381d478eef379837f253fbda4c841d70ff6cc refa_src_fast-reachability_search.hpp=853d662aea2e0a84b0cbe23fc17a022b41d1d9a3fe319d0a187e9775f3d54488 tests_reference_a_frozen_main.cpp=769ca3cd01d5c851e07403535cd35ad29d1bb84b94aeb8bb3b0ea5ba10650e29 src_candidate_format.h=e83b373879ef8a9d79c704964ce23131ceeb5cc848d6dc8131be516680d069d9
+PROVENANCE current_arrival PRODUCER current_arrival root=2bfd201a66a6e9b4f2ac52ba6fb22c33ced51547 root_worktree= M CMakeLists.txt, M src/legacy_cmp_normalize.h, M src/legacy_cmp_observer.h, M src/profile_value_runner.h, M src/profile_value_support.h, M src/tetris_core.h, M src/tetris_engine.cpp, M src/tetris_engine.h, M src/tetris_profile_legacy_cmp.cpp, M src/tetris_profile_value.cpp, M tests/legacy_cmp_tests.cpp, M tests/profile_value_tests.cpp kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 src_fast-reachability_search.hpp=76b2460769f95ef6cebf20441fe80140a54055ae21587f17fea18994289e092c src_arrival_candidates.cpp=00db5d52a8f546bf860bd35ceab079974b0da6564b791eeaeb6843204561afe1 src_candidate_format.h=e83b373879ef8a9d79c704964ce23131ceeb5cc848d6dc8131be516680d069d9
+PROVENANCE current_raw PRODUCER current_raw root=2bfd201a66a6e9b4f2ac52ba6fb22c33ced51547 root_worktree= M CMakeLists.txt, M src/legacy_cmp_normalize.h, M src/legacy_cmp_observer.h, M src/profile_value_runner.h, M src/profile_value_support.h, M src/tetris_core.h, M src/tetris_engine.cpp, M src/tetris_engine.h, M src/tetris_profile_legacy_cmp.cpp, M src/tetris_profile_value.cpp, M tests/legacy_cmp_tests.cpp, M tests/profile_value_tests.cpp kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 src_fast-reachability_search.hpp=76b2460769f95ef6cebf20441fe80140a54055ae21587f17fea18994289e092c tests_raw_bench_main.cpp=98f63ffc5c78bf6b619c4be5bfd6b970f9e12e708f7f536329781c640671312b
+PROVENANCE frozen_180fix_raw PRODUCER frozen_180fix_raw root=2bfd201a66a6e9b4f2ac52ba6fb22c33ced51547 root_worktree= M CMakeLists.txt, M src/legacy_cmp_normalize.h, M src/legacy_cmp_observer.h, M src/profile_value_runner.h, M src/profile_value_support.h, M src/tetris_core.h, M src/tetris_engine.cpp, M src/tetris_engine.h, M src/tetris_profile_legacy_cmp.cpp, M src/tetris_profile_value.cpp, M tests/legacy_cmp_tests.cpp, M tests/profile_value_tests.cpp kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 tests_frozen_0c35e13_180fix_search.hpp=e7d4473b37d766fa7932925f23578058fa1098684fa74fb82cb60a73a0cb3b1b tests_raw_bench_main.cpp=98f63ffc5c78bf6b619c4be5bfd6b970f9e12e708f7f536329781c640671312b
+PROVENANCE frozen_raw PRODUCER frozen_raw root=2bfd201a66a6e9b4f2ac52ba6fb22c33ced51547 root_worktree= M CMakeLists.txt, M src/legacy_cmp_normalize.h, M src/legacy_cmp_observer.h, M src/profile_value_runner.h, M src/profile_value_support.h, M src/tetris_core.h, M src/tetris_engine.cpp, M src/tetris_engine.h, M src/tetris_profile_legacy_cmp.cpp, M src/tetris_profile_value.cpp, M tests/legacy_cmp_tests.cpp, M tests/profile_value_tests.cpp kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 tests_frozen_0c35e13_search.hpp=853d662aea2e0a84b0cbe23fc17a022b41d1d9a3fe319d0a187e9775f3d54488 tests_raw_bench_main.cpp=98f63ffc5c78bf6b619c4be5bfd6b970f9e12e708f7f536329781c640671312b
+current_arrivalvsreference_a_frozen seq=00 side=A T=250.8+0.0 Z=281.7+0.0 S=277.7+0.0 J=295.5+0.0 L=261.1+0.0 O=67.4+0.0 I=333.4+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=01 side=B T=2723.1+0.0 Z=947.3+0.0 S=939.3+0.0 J=803.7+0.0 L=815.7+0.0 O=406.1+0.0 I=990.6+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=02 side=B T=2668.8+0.0 Z=917.8+0.0 S=917.9+0.0 J=791.0+0.0 L=808.3+0.0 O=406.0+0.0 I=978.0+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=03 side=A T=251.8+0.0 Z=285.2+0.0 S=278.9+0.0 J=317.6+0.0 L=277.4+0.0 O=74.2+0.0 I=338.7+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=04 side=A T=250.3+0.0 Z=280.5+0.0 S=278.3+0.0 J=293.8+0.0 L=260.4+0.0 O=67.5+0.0 I=329.6+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=05 side=B T=2662.0+0.0 Z=918.0+0.0 S=917.3+0.0 J=792.9+0.0 L=804.9+0.0 O=408.4+0.0 I=980.5+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=06 side=B T=2285.6+0.0 Z=783.8+0.0 S=783.2+0.0 J=675.8+0.0 L=686.7+0.0 O=345.2+0.0 I=834.6+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=07 side=A T=208.9+0.0 Z=235.1+0.0 S=236.9+0.0 J=247.3+0.0 L=216.0+0.0 O=56.1+0.0 I=272.7+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=08 side=A T=208.9+0.0 Z=239.3+0.0 S=230.8+0.0 J=243.9+0.0 L=217.1+0.0 O=56.0+0.0 I=272.4+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=09 side=B T=2254.5+0.0 Z=777.6+0.0 S=774.8+0.0 J=672.1+0.0 L=682.0+0.0 O=342.5+0.0 I=830.1+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=10 side=B T=2251.4+0.0 Z=776.3+0.0 S=777.4+0.0 J=670.5+0.0 L=683.0+0.0 O=343.3+0.0 I=826.7+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=11 side=A T=208.5+0.0 Z=234.6+0.0 S=233.6+0.0 J=247.8+0.0 L=218.9+0.0 O=56.6+0.0 I=273.8+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=12 side=A T=208.9+0.0 Z=235.0+0.0 S=233.1+0.0 J=246.9+0.0 L=217.6+0.0 O=56.7+0.0 I=278.7+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=13 side=B T=2256.2+0.0 Z=774.3+0.0 S=777.3+0.0 J=669.8+0.0 L=681.8+0.0 O=344.1+0.0 I=829.7+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=14 side=B T=2245.5+0.0 Z=772.3+0.0 S=776.4+0.0 J=668.2+0.0 L=678.6+0.0 O=343.1+0.0 I=824.5+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=15 side=A T=209.1+0.0 Z=235.3+0.0 S=233.3+0.0 J=248.1+0.0 L=219.6+0.0 O=56.3+0.0 I=274.8+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=16 side=A T=210.7+0.0 Z=237.3+0.0 S=230.1+0.0 J=248.1+0.0 L=219.1+0.0 O=57.3+0.0 I=275.7+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=17 side=B T=2268.6+0.0 Z=788.5+0.0 S=784.4+0.0 J=682.5+0.0 L=694.5+0.0 O=349.1+0.0 I=839.9+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=18 side=B T=2254.3+0.0 Z=775.3+0.0 S=776.9+0.0 J=671.8+0.0 L=679.3+0.0 O=345.4+0.0 I=828.7+0.0 | CORPUS reference_a_frozen cases 259 candidates 4416 27f4998e663f3604
+current_arrivalvsreference_a_frozen seq=19 side=A T=220.2+0.0 Z=254.8+0.0 S=234.5+0.0 J=278.7+0.0 L=241.3+0.0 O=56.0+0.0 I=332.1+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+current_arrivalvsreference_a_frozen seq=20 side=A T=209.7+0.0 Z=237.6+0.0 S=235.0+0.0 J=247.3+0.0 L=219.8+0.0 O=58.2+0.0 I=277.5+0.0 | CORPUS current_arrival cases 259 candidates 4535 21615cb90be7f22a
+RATIO current_arrival/reference_a_frozen T total 0.0932 0.0928 0.0926 0.0928 0.0953 median=0.0928
+RATIO current_arrival/reference_a_frozen T search 0.0932 0.0928 0.0926 0.0928 0.0953 median=0.0928
+RATIO current_arrival/reference_a_frozen Z total 0.3040 0.3030 0.3050 0.3041 0.3147 median=0.3041
+RATIO current_arrival/reference_a_frozen Z search 0.3040 0.3030 0.3050 0.3041 0.3147 median=0.3041
+RATIO current_arrival/reference_a_frozen S total 0.2997 0.3029 0.2992 0.3001 0.2976 median=0.2997
+RATIO current_arrival/reference_a_frozen S search 0.2997 0.3029 0.2992 0.3001 0.2976 median=0.2997
+RATIO current_arrival/reference_a_frozen J total 0.3845 0.3684 0.3662 0.3700 0.3890 median=0.3700
+RATIO current_arrival/reference_a_frozen J search 0.3845 0.3684 0.3662 0.3700 0.3890 median=0.3700
+RATIO current_arrival/reference_a_frozen L total 0.3316 0.3194 0.3194 0.3214 0.3352 median=0.3214
+RATIO current_arrival/reference_a_frozen L search 0.3316 0.3194 0.3194 0.3214 0.3352 median=0.3214
+RATIO current_arrival/reference_a_frozen O total 0.1743 0.1641 0.1643 0.1644 0.1632 median=0.1643
+RATIO current_arrival/reference_a_frozen O search 0.1743 0.1641 0.1643 0.1644 0.1632 median=0.1643
+RATIO current_arrival/reference_a_frozen I total 0.3414 0.3318 0.3297 0.3346 0.3643 median=0.3346
+RATIO current_arrival/reference_a_frozen I search 0.3414 0.3318 0.3297 0.3346 0.3643 median=0.3346
+current_rawvsfrozen_180fix_raw seq=00 side=A T=132.7+60.1 Z=116.3+27.6 S=111.4+27.6 J=143.1+60.3 L=139.6+60.2 O=47.8+16.3 I=118.5+27.8 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=01 side=B T=148.8+59.9 Z=115.3+27.5 S=111.9+27.4 J=149.4+59.7 L=140.3+59.9 O=48.1+16.3 I=125.7+27.5 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=02 side=B T=148.9+60.2 Z=115.7+27.6 S=111.6+27.6 J=149.5+60.0 L=140.5+60.1 O=48.2+16.4 I=126.1+27.7 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=03 side=A T=138.2+60.3 Z=109.4+27.9 S=104.2+27.8 J=147.6+60.4 L=143.2+60.2 O=47.6+16.2 I=123.4+27.7 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=04 side=A T=131.2+60.1 Z=109.7+27.7 S=104.4+27.6 J=140.3+60.0 L=136.5+60.2 O=47.4+16.2 I=118.2+27.7 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=05 side=B T=149.5+60.1 Z=115.4+27.7 S=111.4+27.6 J=149.6+60.1 L=140.1+60.3 O=48.2+16.4 I=126.3+27.6 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=06 side=B T=149.3+60.3 Z=115.3+27.7 S=111.9+27.6 J=149.8+59.9 L=140.4+60.4 O=48.2+16.3 I=126.2+27.6 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=07 side=A T=131.8+60.1 Z=110.0+27.8 S=104.2+27.8 J=140.5+60.2 L=136.8+60.4 O=47.7+16.2 I=118.7+27.7 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=08 side=A T=131.8+60.2 Z=109.7+27.8 S=104.2+28.0 J=140.4+60.2 L=136.8+60.3 O=47.7+16.2 I=118.4+27.9 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=09 side=B T=156.8+65.5 Z=121.5+29.6 S=117.9+30.6 J=160.6+62.8 L=163.0+63.4 O=50.5+24.4 I=133.4+28.9 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=10 side=B T=155.7+61.4 Z=119.8+28.4 S=118.2+28.1 J=158.3+61.5 L=151.3+61.4 O=50.0+16.7 I=130.6+28.2 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=11 side=A T=132.4+60.7 Z=110.7+27.7 S=105.0+27.7 J=141.6+60.6 L=137.5+61.0 O=47.9+16.5 I=119.1+28.0 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=12 side=A T=131.2+60.2 Z=110.1+27.9 S=104.5+27.8 J=140.5+60.2 L=137.0+60.3 O=47.8+16.4 I=118.8+27.9 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=13 side=B T=151.6+60.6 Z=117.0+28.0 S=113.3+28.0 J=151.5+60.8 L=142.3+60.4 O=48.8+16.6 I=128.0+28.0 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=14 side=B T=149.7+60.0 Z=115.8+27.6 S=111.8+27.7 J=150.2+60.0 L=140.8+59.9 O=48.6+16.4 I=126.6+27.7 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=15 side=A T=131.9+60.3 Z=110.0+27.7 S=104.3+27.8 J=140.6+60.3 L=136.9+60.4 O=48.0+16.3 I=118.8+27.8 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=16 side=A T=132.8+60.9 Z=111.0+27.8 S=105.5+27.7 J=142.0+60.6 L=138.2+61.0 O=48.2+16.4 I=119.7+27.8 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=17 side=B T=149.4+60.3 Z=115.7+27.6 S=111.9+27.7 J=150.0+60.4 L=140.5+60.2 O=48.4+16.4 I=126.2+27.9 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=18 side=B T=150.0+60.2 Z=115.9+27.9 S=112.0+27.8 J=150.4+60.4 L=140.9+60.3 O=48.6+16.4 I=126.6+27.9 | RAWCORPUS frozen_180fix_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=19 side=A T=132.0+60.3 Z=110.2+27.9 S=104.4+27.9 J=140.9+60.3 L=136.9+60.3 O=47.8+16.2 I=118.9+27.9 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+current_rawvsfrozen_180fix_raw seq=20 side=A T=132.1+60.6 Z=110.5+27.6 S=104.5+27.6 J=140.7+60.4 L=136.8+60.6 O=47.7+16.3 I=118.8+27.7 | RAWCORPUS current_raw cases 259 bits 5819 d731b27d2f850919
+RATIO current_raw/frozen_180fix_raw T total 0.9100 0.8804 0.8454 0.8733 0.8843 median=0.8804
+RATIO current_raw/frozen_180fix_raw T search 0.8473 0.8007 0.7720 0.7892 0.8026 median=0.8007
+RATIO current_raw/frozen_180fix_raw Z total 0.9770 0.9525 0.9131 0.9459 0.9553 median=0.9525
+RATIO current_raw/frozen_180fix_raw Z search 0.9675 0.9365 0.8987 0.9289 0.9397 median=0.9365
+RATIO current_raw/frozen_180fix_raw S total 0.9646 0.9337 0.8860 0.9278 0.9373 median=0.9337
+RATIO current_raw/frozen_180fix_raw S search 0.9509 0.9113 0.8652 0.9047 0.9155 median=0.9113
+RATIO current_raw/frozen_180fix_raw J total 0.9723 0.9379 0.8842 0.9318 0.9418 median=0.9379
+RATIO current_raw/frozen_180fix_raw J search 0.9483 0.8952 0.8280 0.8877 0.9016 median=0.8952
+RATIO current_raw/frozen_180fix_raw L total 1.0073 0.9743 0.8728 0.9676 0.9776 median=0.9743
+RATIO current_raw/frozen_180fix_raw L search 1.0106 0.9552 0.8080 0.9413 0.9559 median=0.9552
+RATIO current_raw/frozen_180fix_raw O total 0.9903 0.9868 0.9511 0.9831 0.9896 median=0.9868
+RATIO current_raw/frozen_180fix_raw O search 0.9883 0.9840 1.0599 0.9800 0.9879 median=0.9879
+RATIO current_raw/frozen_180fix_raw I total 0.9607 0.9383 0.8997 0.9337 0.9436 median=0.9383
+RATIO current_raw/frozen_180fix_raw I search 0.9487 0.9196 0.8776 0.9150 0.9285 median=0.9196
+current_rawvsfrozen_raw seq=00 side=A T=130.9+60.6 Z=109.0+28.0 S=103.8+28.0 J=134.9+60.6 L=135.8+60.5 O=47.9+16.4 I=119.6+27.8 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=01 side=B T=149.7+60.4 Z=115.0+27.7 S=109.3+27.8 J=144.1+60.3 L=139.4+60.7 O=48.3+16.4 I=127.2+27.7 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=02 side=B T=149.7+60.1 Z=115.3+27.6 S=109.6+27.7 J=144.2+60.0 L=139.6+59.9 O=48.3+16.4 I=127.4+27.5 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=03 side=A T=130.0+60.4 Z=108.9+27.9 S=103.9+27.8 J=134.8+60.1 L=135.8+60.4 O=47.8+16.2 I=119.5+27.7 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=04 side=A T=130.9+60.2 Z=108.9+27.7 S=103.7+27.7 J=135.1+59.9 L=135.9+60.3 O=47.7+16.4 I=119.4+27.6 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=05 side=B T=149.4+60.0 Z=115.1+27.7 S=109.0+27.6 J=144.1+60.0 L=139.3+60.0 O=48.4+16.3 I=127.1+27.8 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=06 side=B T=152.2+60.2 Z=115.2+27.8 S=109.5+27.8 J=147.0+60.3 L=142.5+60.1 O=48.3+16.5 I=127.4+27.8 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=07 side=A T=131.0+60.2 Z=109.0+27.9 S=103.7+27.7 J=135.1+60.4 L=136.0+60.2 O=47.7+16.2 I=119.4+27.8 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=08 side=A T=130.8+60.5 Z=109.3+27.7 S=104.7+27.7 J=135.3+60.7 L=136.0+60.3 O=47.8+16.4 I=119.8+27.8 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=09 side=B T=150.0+60.5 Z=114.6+27.8 S=109.6+27.8 J=144.9+60.2 L=140.2+60.3 O=48.2+16.4 I=127.6+27.7 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=10 side=B T=149.0+60.3 Z=114.7+27.7 S=109.7+27.7 J=144.5+60.3 L=139.4+60.2 O=48.4+16.4 I=127.3+27.8 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=11 side=A T=131.1+60.3 Z=109.1+27.7 S=103.9+27.8 J=135.2+60.3 L=135.9+60.1 O=47.7+16.3 I=119.5+28.0 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=12 side=A T=133.0+60.9 Z=110.6+28.1 S=105.4+28.1 J=136.8+61.1 L=137.7+61.1 O=48.3+16.5 I=121.0+28.2 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=13 side=B T=150.4+60.7 Z=115.2+27.8 S=110.5+27.7 J=145.2+60.5 L=140.0+60.5 O=48.6+16.5 I=128.2+27.8 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=14 side=B T=150.0+60.6 Z=114.9+27.9 S=109.6+27.9 J=144.1+60.4 L=139.2+60.7 O=48.4+16.5 I=127.5+27.7 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=15 side=A T=130.8+60.3 Z=108.7+27.8 S=103.5+27.9 J=135.0+60.0 L=135.8+60.2 O=47.7+16.2 I=119.1+27.9 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=16 side=A T=131.2+60.3 Z=108.8+27.7 S=103.4+27.9 J=134.7+60.2 L=135.4+60.2 O=47.9+16.2 I=119.3+27.9 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=17 side=B T=150.0+59.9 Z=114.7+27.7 S=109.7+27.5 J=144.2+60.0 L=139.3+59.8 O=48.3+16.3 I=127.5+27.6 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=18 side=B T=149.2+60.1 Z=114.8+27.7 S=109.2+27.6 J=144.2+60.2 L=139.0+59.9 O=48.3+16.5 I=126.8+27.8 | RAWCORPUS frozen_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=19 side=A T=135.9+60.3 Z=108.5+27.9 S=103.5+27.8 J=140.0+60.3 L=139.0+60.3 O=48.0+16.4 I=122.3+27.9 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+current_rawvsfrozen_raw seq=20 side=A T=131.2+60.4 Z=109.0+27.6 S=103.9+27.7 J=135.1+60.1 L=135.7+60.3 O=47.8+16.2 I=119.6+27.7 | RAWCORPUS current_raw cases 259 bits 5650 1a502b27ef7174be
+RATIO current_raw/frozen_raw T total 0.8717 0.8682 0.8758 0.8783 0.8927 median=0.8758
+RATIO current_raw/frozen_raw T search 0.7829 0.7801 0.7919 0.7967 0.8173 median=0.7919
+RATIO current_raw/frozen_raw Z total 0.9462 0.9461 0.9526 0.9529 0.9469 median=0.9469
+RATIO current_raw/frozen_raw Z search 0.9265 0.9281 0.9377 0.9371 0.9290 median=0.9290
+RATIO current_raw/frozen_raw S total 0.9494 0.9491 0.9512 0.9490 0.9452 median=0.9491
+RATIO current_raw/frozen_raw S search 0.9299 0.9321 0.9347 0.9294 0.9235 median=0.9299
+RATIO current_raw/frozen_raw J total 0.9353 0.9282 0.9347 0.9394 0.9524 median=0.9353
+RATIO current_raw/frozen_raw J search 0.8862 0.8778 0.8854 0.8946 0.9160 median=0.8862
+RATIO current_raw/frozen_raw L total 0.9738 0.9648 0.9726 0.9798 0.9858 median=0.9738
+RATIO current_raw/frozen_raw L search 0.9519 0.9369 0.9521 0.9639 0.9700 median=0.9521
+RATIO current_raw/frozen_raw O total 0.9893 0.9877 0.9879 0.9898 0.9929 median=0.9893
+RATIO current_raw/frozen_raw O search 0.9857 0.9855 0.9841 0.9879 0.9920 median=0.9857
+RATIO current_raw/frozen_raw I total 0.9387 0.9381 0.9389 0.9390 0.9500 median=0.9389
+RATIO current_raw/frozen_raw I search 0.9199 0.9218 0.9202 0.9194 0.9338 median=0.9202

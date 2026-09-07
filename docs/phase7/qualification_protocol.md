@@ -221,25 +221,30 @@ follows.
   deviates from the frozen profile's on-mode recording convention; the
   baseline side of gates 1 and 2 therefore uses off-mode baseline rows,
   collected under the same pair order and controls.
-- Binding counts come from deterministic counters-only twins of the same
-  workload (bit-identical work vectors proven across modes); binding rates
+- Binding counts come from deterministic twins of the same workload
+  (bit-identical work vectors proven across modes): counters-only twins on
+  the candidate side, full-timer twins on the comparator side (its
+  normalization is skipped counters-only); binding rates
   come from full-timer fixed-work twins.
 - Per-mode measured overhead is still disclosed: the value perf
   decomposition (+1.4 percent cycles structural, Section 8), the
   comparator on/off/disarmed evidence, and the paired
   counters-only-vs-frozen total delta with its 1.02 bound for gate 6 legs.
-- Per-side bias statements accompany the gate 4 and gate 6 verdicts at
-  execution: the candidate totals exclude its ~1 percent counting cost
-  while comparator timed rows include counting plus `make_path`, so both
-  comparisons err conservative against the candidate and the report states
-  the direction explicitly.
+- Per-side measured overhead accompanies each gate 4 and gate 6 verdict:
+  the measured overhead on each side is stated from measurement, the bias
+  direction is stated from measurement (never assumed conservative), and
+  worst-case bands are given. In particular no claim is made that both
+  comparisons err against the candidate: the candidate side carries its
+  measured counting cost while the comparator side carries counting plus
+  `make_path` under its bound, so the net bias may favor either side by a
+  bounded amount that the verdict must quantify.
 
 ### Per-gate row sourcing
 
 | Gate | Rows per seed and mode | Pair order and count |
 |---|---|---|
 | 1, 2 (fixed-work totals) | Off-mode rows, both engines, seeds 1/2/3 | Five ABBA+A pairs per mode per seed |
-| 3 (count partition) | Counters-only rows, both engines, seeds 1/2/3 | Same pairs (counts are deterministic twins of the totals runs) |
+| 3 (count partition) | Candidate counters-only rows plus comparator full-timer rows, seeds 1/2/3 (the comparator skips normalization in counters-only mode, so its gate 3 rows must be full-timer twins) | Deterministic twins, two runs per side per seed |
 | 4 (component rates) | Full-timer fixed-work rows, both engines, seed 1 (seeds 2/3 diagnostics) | Same pairs |
 | 5 (path overhead) | Value full-timer fixed-work rows, seed 1 (seeds 2/3 diagnostics) | Within-run share, no pairing |
 | 6 (timed throughput) | Counters-only timed rows, both engines, seed 1 (seeds 2/3 diagnostics) | Five ABBA+A pairs |
