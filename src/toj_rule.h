@@ -193,6 +193,19 @@ namespace tetris::toj
         return cells_empty(piece, placement, board);
     }
 
+    // Validate only the requested pose, without rebuilding all usable-position
+    // bitboards for every candidate in an already enumerated parent.
+    inline bool is_landing(Board const &board, Piece piece, Placement placement)
+    {
+        if (!cells_empty(piece, placement, board))
+        {
+            return false;
+        }
+        auto below = Placement::try_make(placement.x(), placement.y() - 1,
+            placement.rotation());
+        return !below || !cells_empty(piece, *below, board);
+    }
+
     inline bool can_spawn(Board const &board, Piece piece)
     {
         return fits(piece, Placement::unchecked(spawn_x, spawn_y, 0), board);
@@ -345,13 +358,11 @@ namespace tetris::toj
             return std::nullopt;
         }
         return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::optional<SpinType> {
-            reachability::search::search_workspace<B, Board::occupancy_t> ws(board.occupancy());
-            auto checker = ws.checker();
             Placement const placement = candidate.placement;
             int const rotation = placement.rotation();
             int const x = placement.x();
             int const y = placement.y();
-            if (!checker.is_valid(rotation, x, y) || checker.is_valid(rotation, x, y - 1))
+            if (!is_landing(board, piece, placement))
             {
                 return std::nullopt;
             }
@@ -430,14 +441,8 @@ namespace tetris::toj
 
     inline std::optional<RuleResult> apply(Board const &board, Piece piece, Candidate candidate)
     {
-        int const rotation = candidate.placement.rotation();
-        int const x = candidate.placement.x();
-        int const y = candidate.placement.y();
         return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::optional<RuleResult> {
-            reachability::search::search_workspace<B, Board::occupancy_t> ws(board.occupancy());
-            auto checker = ws.checker();
-            if (rotation < 0 || rotation >= B.orientations
-                || !checker.is_valid(rotation, x, y) || checker.is_valid(rotation, x, y - 1))
+            if (!is_landing(board, piece, candidate.placement))
             {
                 return std::nullopt;
             }

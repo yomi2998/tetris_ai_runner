@@ -16,6 +16,7 @@ namespace legacy_cmp
 {
     struct NormalizedKey
     {
+        candfmt::Cells occupied_cells{};
         std::uint64_t cells_hash = 0;
         std::uint64_t channel = 0;
         bool matched = false;
@@ -25,7 +26,7 @@ namespace legacy_cmp
         {
             if (matched && other.matched)
             {
-                return cells_hash == other.cells_hash && channel == other.channel;
+                return occupied_cells == other.occupied_cells && channel == other.channel;
             }
             if (!matched && !other.matched)
             {
@@ -42,9 +43,9 @@ namespace legacy_cmp
             }
             if (matched)
             {
-                if (cells_hash != other.cells_hash)
+                if (occupied_cells != other.occupied_cells)
                 {
-                    return cells_hash < other.cells_hash;
+                    return occupied_cells < other.occupied_cells;
                 }
                 return channel < other.channel;
             }
@@ -85,6 +86,7 @@ namespace legacy_cmp
         }
         candfmt::Cells sorted = *cells;
         std::sort(sorted.begin(), sorted.end());
+        key.occupied_cells = sorted;
         key.cells_hash = candfmt::occupancy_hash(sorted);
         key.channel = *piece == tetris::Piece::T
             ? static_cast<std::uint64_t>(spin_channel(spin_class, last_rotate))

@@ -1001,7 +1001,18 @@ namespace
         base.state.t2_value = 3;
         std::array<std::uint16_t, 48> rows = {};
         rows[0] = 0x100;
-        base.occupancy = tetris::Board::from_rows(rows).occupancy();
+        tetris::Board const occupancy_board = tetris::Board::from_rows(rows);
+        base.occupancy = occupancy_board.occupancy();
+        bool same_words = true;
+        for (int i = 0; i < tetris::Board::occupancy_t::word_count(); ++i)
+        {
+            same_words = same_words
+                && base.occupancy.logical_word(i) == occupancy_board.occupancy().logical_word(i);
+        }
+        check(sizeof(engine_alias::TranspositionKey) == 152
+                && sizeof(engine_alias::TranspositionEntry) == 160,
+            "transposition slots omit kernel alignment padding");
+        check(same_words, "compact transposition occupancy preserves every logical word");
         auto differs = [&](TranspositionKey const &key, char const *what) {
             check(!(key == base), what);
             check(transposition_hash(key) != transposition_hash(base), what);

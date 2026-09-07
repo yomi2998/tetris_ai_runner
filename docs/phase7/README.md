@@ -256,4 +256,7 @@ changes, no cutover work.
   occupancy caveat on materialization (13-14x); gate 5 passes; gate 6
   fails at 0.22-0.32x with the timed rows now untruncated and therefore
   informative; comparator bound unmet this session (1.02528 vs 1.02);
-  corpus verdicts stand.
+  gates 8 and 9 corrected to UNPROVEN (2026-09-07 audit): the corpus
+  harness compares kernel-versus-kernel and Reference A only, so the
+  legacy placement-enumeration comparators that plan items 8 and 9
+  require were never built.

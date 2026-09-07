@@ -1218,8 +1218,45 @@ namespace
     }
 }
 
+void run_landing_validation_tests()
+{
+    std::mt19937 rng(0x712e);
+    for (int sample = 0; sample < 32; ++sample)
+    {
+        std::array<std::uint16_t, Board::height> rows{};
+        int const roof = sample == 0 ? 0 : (sample * 7) % Board::height + 1;
+        for (int y = 0; y < roof; ++y)
+        {
+            rows[y] = rng() & Board::row_mask;
+        }
+        Board const board = Board::from_rows(rows);
+        for (char const *p = piece_order; *p; ++p)
+        {
+            Piece const piece = piece_of(*p);
+            reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() {
+                reachability::search::search_workspace<B, Board::occupancy_t> ws(board.occupancy());
+                auto checker = ws.checker();
+                for (int r = 0; r < 4; ++r)
+                    for (int y = 0; y < Board::height; ++y)
+                        for (int x = 0; x < Board::width; ++x)
+                        {
+                            // The generic kernel has an open ceiling; the rule
+                            // additionally rejects masks extending above row 47.
+                            bool const expected = checker.is_valid(r, x, y)
+                                && !checker.is_valid(r, x, y - 1)
+                                && in_bounds(piece, Placement::unchecked(x, y, r));
+                            check(is_landing(board, piece, Placement::unchecked(x, y, r)) == expected,
+                                std::format("direct landing validation sample {} piece {} pose {},{},{} expected {}", sample, *p, x, y, r, expected));
+                        }
+                return true;
+            });
+        }
+    }
+}
+
 int main()
 {
+    run_landing_validation_tests();
     Engine engine = make_engine();
     search_tspin::Search legacy_search;
     legacy_search.init(engine.context().get(), engine.search_config());

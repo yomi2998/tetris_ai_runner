@@ -98,23 +98,40 @@ Comparator-vs-frozen fixed-work total ratios: 0.99422, 1.03845, 1.01801,
 bound on individual pairs; under the noise rule this prerequisite holds
 only narrowly and must be re-established if any gate 6 leg is revisited.
 
-## Gates 8 and 9 (corpus rates)
+## Gates 8 and 9 (CORRECTED 2026-09-07: UNPROVEN, not PASS)
 
-`tests/run_perf_gate.py` over the frozen corpus on pinned core 7
-(`results/phase7/corpus_gate.txt`, five ABBA-plus-control repetitions,
-per-piece medians):
+The original close of this campaign recorded item 8 as PASS "against the
+1.00 bar" and item 9 as PASS from the same corpus run. That mapping was
+wrong and is withdrawn. `tests/run_perf_gate.py` over the frozen corpus on
+pinned core 7 (`results/phase7/corpus_gate.txt`, five ABBA-plus-control
+repetitions, per-piece medians) measures kernel-versus-kernel and
+Reference-A comparisons only:
 
-- Item 8 (raw non-T enumeration vs frozen kernel): worst total ratio 0.9868
-  (O), worst search-only 0.9879 (O) against the 1.00 bar: PASS. 180-off
-  informational leg: worst 0.9893/0.9857: PASS.
-- Item 9 (T search): time ratio 0.0928 vs the Reference A wrapper (gate: at
-  most 0.50): PASS with Reference A 10.77x slower; raw T vs the
-  equal-semantics frozen comparator 0.8804 total / 0.8007 search-only: PASS.
-- Perft vectors exact, 8 of 8: PASS.
+- Raw BFS of the current kernel versus the frozen `0c35e13`-lineage kernel
+  builds (the Phase-2 regression gate, bar 1.020): worst total ratio 0.9868
+  (O), worst search-only 0.9879 (O). 180-off informational leg: worst
+  0.9893/0.9857. These numbers stand as Phase-2 evidence.
+- T semantic enumeration versus the frozen Reference A wrapper: ratio
+  0.0928, Reference A 10.77x slower. This satisfies the Reference A half of
+  plan item 9 and stands.
+- Perft vectors exact, 8 of 8: stands.
+
+Neither number is a comparison against legacy placement enumeration, which
+plan Section 17.3 items 8 and 9 require: item 8's 1.00 bar is against
+frozen legacy placement enumeration per parent, and item 9's first half is
+at most 1.02 per normalized semantic candidate against the frozen legacy
+`search_tspin` enumerator. No such legacy comparator binary exists in the
+harness or the CMake target set, so both items are UNPROVEN, not PASS.
 - Provenance notes the worktree dirty with the 7.2C correction files; none
   touches the measured kernel (`search.hpp` identical), and the comparator
   flag is unset on every measured binary, so the dirt cannot affect these
-  rates.
+  rates. That statement remains true for the comparisons actually run.
+- Separately (audit 2026-09-07): 57 manifest rows in this campaign's
+  `results/phase7/campaign/` reference the superseded `c4579a87...`
+  candidate binary through a path that now holds the re-frozen `816bcd7d...`
+  build, and the old executable is absent. Old-binary reproducibility
+  cannot be claimed without an immutable copy; the raw rows and manifest
+  remain preserved as collected.
 
 ## Gate 7 (seed diagnostics)
 

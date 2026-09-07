@@ -1,8 +1,9 @@
 # Binding re-campaign verdicts (7.2E execution, resized candidate)
 
 No cutover decision is made here; verdicts feed a separate decision. Overall
-campaign result: NOT QUALIFIED. Gates 5, 8, and 9 pass; gates 1, 2, 3, 4,
-and 6 fail; the comparator bound is unmet this session. All 124 rows plus
+campaign result: NOT QUALIFIED. Gate 5 passes; gates 1, 2, 3, 4, and 6 fail;
+gates 8 and 9 are UNPROVEN (corrected 2026-09-07, see the final section);
+the comparator bound is unmet this session. All 124 rows plus
 MANIFEST are preserved in `results/phase7/recampaign/` with no aggregation
 during collection. Gate 7 seed diagnostics and items 10/11 are covered at
 the end.
@@ -106,8 +107,38 @@ machine record attached. Item 11: the same absolute parameter file and
 combo bytes feed every collected command (verified from MANIFEST); no
 retuning occurred.
 
-## Gates 8 and 9
+## Gates 8 and 9 (CORRECTED 2026-09-07: UNPROVEN, not PASS)
 
-Unchanged from the 7.2C verdicts (PASS): the enumeration kernel is
-untouched by the capacity repair, so the corpus rates stand without
-re-running.
+The 7.2E close originally recorded "unchanged from the 7.2C verdicts (PASS):
+the enumeration kernel is untouched by the capacity repair, so the corpus
+rates stand without re-running." That claim is unsupported and is withdrawn.
+
+What `results/phase7/corpus_gate.txt` actually proves (still valid, still
+standing as Phase-2 comparisons):
+
+- Phase-2 kernel regression: current raw BFS versus the frozen
+  `0c35e13`-lineage kernel builds, every non-T piece at or below 1.020
+  (worst total 0.9868 O, worst search-only 0.9879 O): PASS.
+- Reference A T gate: the current T semantic enumerator is at least 2x
+  faster than the frozen Reference A wrapper (ratio 0.0928; Reference A
+  10.77x slower): PASS.
+- Perft vectors exact, 8 of 8: PASS.
+
+What it does not prove, and what plan Section 17.3 items 8 and 9 require:
+
+- Item 8: median paired time-per-parent of raw non-T enumeration versus
+  frozen **legacy placement enumeration** at the 1.00 bar. No legacy
+  placement-enumeration comparator binary exists in `tests/run_perf_gate.py`
+  or the CMake target set; the raw leg compares kernel against kernel.
+- Item 9: the new T enumerator at most 1.02 per normalized semantic
+  candidate versus the frozen **legacy `search_tspin` enumerator**. Only the
+  Reference A half of item 9 is covered; the legacy half has no comparator,
+  and the harness performs no per-normalized-candidate division on any
+  legacy timing.
+
+Gates 8 and 9 are therefore UNPROVEN pending the two frozen legacy
+comparators the plan requires. The recorded corpus numbers remain valid
+evidence for the comparisons they actually measured; nothing was re-run or
+re-measured for this correction. The audit tooling that establishes this is
+`tests/audit_phase7_campaign.py` (repaired 2026-09-07; see
+`docs/phase7/audit_71c_72e.md`).

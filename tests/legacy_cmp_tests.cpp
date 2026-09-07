@@ -272,6 +272,19 @@ namespace
         check(table.distinct() == 24, "probe table dedups repeated arrivals exactly");
         check(table.unmatched() == 0, "probe table matches convertible inputs");
         check(table.capacity() >= 512, "probe table retains its buffers");
+
+        auto digest_collision_a = key_a;
+        auto digest_collision_b = key_a;
+        digest_collision_b.occupied_cells = {{{0, 0}, {0, 1}, {1, 0}, {1, 1}}};
+        digest_collision_b.cells_hash = digest_collision_a.cells_hash;
+        check(digest_collision_a.cells_hash == digest_collision_b.cells_hash
+                && !(digest_collision_a == digest_collision_b),
+            "full occupied-cell identity survives a digest collision");
+        table.begin_call();
+        table.add(digest_collision_a);
+        table.add(digest_collision_b);
+        check(table.distinct() == 2,
+            "probe table does not merge distinct cells with the same digest");
     }
 }
 

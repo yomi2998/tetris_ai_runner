@@ -67,15 +67,47 @@ namespace tetris_engine
         max_frontiers * (2 * sizeof(NodeId) + 2 * sizeof(std::size_t))
         + max_frontiers * sizeof(double);
 
+    // board_t is deliberately over-aligned for the reachability kernel.  Storing
+    // one in every transposition slot would carry that alignment and 56 bytes of
+    // padding into each key.  The table only needs the logical words, so keep a
+    // compact value copy with the same exact word-wise identity.
+    struct TranspositionOccupancy
+    {
+        std::array<std::uint64_t, Board::occupancy_t::word_count()> words{};
+
+        TranspositionOccupancy() = default;
+
+        TranspositionOccupancy(Board::occupancy_t const &occupancy)
+        {
+            *this = occupancy;
+        }
+
+        TranspositionOccupancy &operator=(Board::occupancy_t const &occupancy)
+        {
+            for (int i = 0; i < Board::occupancy_t::word_count(); ++i)
+            {
+                words[static_cast<std::size_t>(i)] = occupancy.logical_word(i);
+            }
+            return *this;
+        }
+
+        std::uint64_t logical_word(int index) const
+        {
+            return words[static_cast<std::size_t>(index)];
+        }
+
+        bool operator==(TranspositionOccupancy const &) const = default;
+    };
+
     struct TranspositionKey
     {
+        TranspositionOccupancy occupancy{};
+        std::array<std::uint64_t, 4> boundary_bits{};
+        PolicyState state{};
         std::uint16_t depth = 0;
         std::uint16_t cursor = 0;
         std::uint16_t boundary_count = 0;
         std::uint32_t root_child = no_node;
-        Board::occupancy_t occupancy{};
-        PolicyState state{};
-        std::array<std::uint64_t, 4> boundary_bits{};
         std::uint8_t active_piece = no_piece_code;
         std::uint8_t hold_piece = no_piece_code;
         bool hold_available = false;
@@ -97,6 +129,9 @@ namespace tetris_engine
                 && hold_available == other.hold_available;
         }
     };
+
+    static_assert(sizeof(TranspositionKey) == 152,
+        "the transposition key stores occupancy without kernel alignment padding");
 
     inline double normalize_zero(double v)
     {
@@ -152,6 +187,9 @@ namespace tetris_engine
         NodeId node = no_node;
         bool used = false;
     };
+
+    static_assert(sizeof(TranspositionEntry) == 160,
+        "the transposition slot stays compact and naturally aligned");
 
     struct Node
     {
