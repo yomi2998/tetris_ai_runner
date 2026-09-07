@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <numeric>
 #include <print>
 #include <string_view>
 #include <vector>
@@ -21,6 +22,7 @@ struct Options
     int warmup = 2;
     bool allow_180 = true;
     bool dump_keys = false;
+    bool legacy_subcorpus = false;
 };
 
 Options parse_args(int argc, char **argv)
@@ -44,6 +46,10 @@ Options parse_args(int argc, char **argv)
         else if (arg == "--dump-keys")
         {
             o.dump_keys = true;
+        }
+        else if (arg == "--legacy-subcorpus")
+        {
+            o.legacy_subcorpus = true;
         }
     }
     return o;
@@ -99,9 +105,10 @@ std::size_t enumerate_normalized(BOARD const &board, search::search_config const
 }
 
 template <auto B>
-void run_report(candfmt::Report &report, std::vector<std::array<uint16_t, 48>> const &boards, search::search_config const &cfg, char piece)
+void run_report(candfmt::Report &report, std::vector<std::array<uint16_t, 48>> const &boards,
+    std::vector<std::size_t> const &order, search::search_config const &cfg, char piece)
 {
-    for (std::size_t b = 0; b < boards.size(); ++b)
+    for (std::size_t b : order)
     {
         BOARD board = board_from_rows(boards[b]);
         enumerate_normalized<B>(board, cfg, &report, b, piece);
@@ -129,6 +136,26 @@ int main(int argc, char **argv)
     Options const opts = parse_args(argc, argv);
     producer_info::print("current_arrival");
     auto const boards = reach_corpus::make();
+    // Default: the full 37-board corpus (existing gate outputs unchanged).
+    // --legacy-subcorpus restricts both the report and the timed pass to the
+    // 33 legacy-comparable boards, keyed by ORIGINAL board index so CASE rows
+    // pair 1:1 with legacy_corpus_bench (231 cases on both sides).
+    std::vector<std::size_t> order;
+    if (opts.legacy_subcorpus)
+    {
+        order = reach_corpus::legacy_subcorpus_indices();
+    }
+    else
+    {
+        order.resize(boards.size());
+        std::iota(order.begin(), order.end(), static_cast<std::size_t>(0));
+    }
+    std::vector<std::array<uint16_t, 48>> timed_boards;
+    timed_boards.reserve(order.size());
+    for (std::size_t b : order)
+    {
+        timed_boards.push_back(boards[b]);
+    }
     search::search_config cfg{};
     cfg.allow_180 = opts.allow_180;
     cfg.allow_softdrop = true;
@@ -140,7 +167,7 @@ int main(int argc, char **argv)
     for (char piece : std::string_view(reach_corpus::pieces))
     {
         call_with_block<SRS>(Tetromino::from_name(piece), [&]<block B>() {
-            run_report<B>(report, boards, cfg, piece);
+            run_report<B>(report, boards, order, cfg, piece);
             return 0;
         });
     }
@@ -152,7 +179,7 @@ int main(int argc, char **argv)
         {
             call_with_block<SRS>(Tetromino::from_name(piece), [&]<block B>() {
                 std::size_t sink = 0;
-                double ns = run_timed<B>(boards, cfg, sink);
+                double ns = run_timed<B>(timed_boards, cfg, sink);
                 if (rep >= 0)
                 {
                     std::println("REP {} {} {:016x} {:9.1f} current_arrival", rep, piece, sink, ns);

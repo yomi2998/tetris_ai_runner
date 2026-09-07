@@ -28,26 +28,34 @@ def shell(command):
     return subprocess.run(command, shell=True, capture_output=True, text=True).stdout.strip()
 
 
+def parse_lines(text):
+    samples = {piece: [] for piece in PIECES}
+    cases = {piece: [0, 0] for piece in PIECES}
+    corpus = ""
+    for line in text.splitlines():
+        parts = line.split()
+        if parts and parts[0] == "REP" and len(parts) >= 5:
+            samples[parts[2]].append((float(parts[4]), 0.0))
+        elif parts and parts[0] == "RAWREP" and len(parts) >= 6:
+            samples[parts[2]].append((float(parts[4]), float(parts[5])))
+        elif parts and parts[0] == "CASE" and len(parts) >= 5 and parts[1] in cases:
+            cases[parts[1]][0] += int(parts[3])
+            cases[parts[1]][1] += 1
+        elif parts and parts[0] in ("CORPUS", "RAWCORPUS"):
+            corpus = line
+    totals = {}
+    for piece, pairs in samples.items():
+        totals[piece] = (statistics.mean(t for t, e in pairs), statistics.mean(e for t, e in pairs))
+    return totals, corpus, cases
+
+
 def run(binary, extra, iters):
     command = ["taskset", "-c", CORE, os.path.join(BUILD, binary),
         "--reps", str(iters), "--warmup", WARMUP] + extra
     if binary.startswith("raw_bench") and "--producer" not in extra:
         command += ["--producer", extra_label(binary)]
     out = subprocess.run(command, capture_output=True, text=True, check=True)
-    samples = {piece: [] for piece in PIECES}
-    corpus = ""
-    for line in out.stdout.splitlines():
-        parts = line.split()
-        if parts and parts[0] == "REP" and len(parts) >= 5:
-            samples[parts[2]].append((float(parts[4]), 0.0))
-        elif parts and parts[0] == "RAWREP" and len(parts) >= 6:
-            samples[parts[2]].append((float(parts[4]), float(parts[5])))
-        elif parts and parts[0] in ("CORPUS", "RAWCORPUS"):
-            corpus = line
-    totals = {}
-    for piece, pairs in samples.items():
-        totals[piece] = (statistics.mean(t for t, e in pairs), statistics.mean(e for t, e in pairs))
-    return totals, corpus
+    return parse_lines(out.stdout)
 
 
 LABELS = {}
@@ -62,13 +70,16 @@ def sequence(label_a, bin_a, label_b, bin_b, extra, iters, raw_lines):
     LABELS[bin_b] = label_b
     order = ["A", "B", "B", "A"] * REPS + ["A"]
     obs = {"A": [], "B": []}
+    first_cases = {}
     for index, side in enumerate(order):
-        rows, corpus = run(bin_a if side == "A" else bin_b, extra, iters)
+        rows, corpus, cases = run(bin_a if side == "A" else bin_b, extra, iters)
         obs[side].append(rows)
+        if side not in first_cases:
+            first_cases[side] = cases
         raw_lines.append(f"{label_a}vs{label_b} seq={index:02d} side={side} "
             + " ".join(f"{piece}={rows[piece][0]:.1f}+{rows[piece][1]:.1f}" for piece in PIECES)
             + f" | {corpus}")
-    return obs
+    return obs, first_cases
 
 
 def summarize(obs, label_a, label_b, raw_lines):
@@ -118,32 +129,38 @@ def main():
         shell(f"grep -m1 CMAKE_CXX_FLAGS:STRING {BUILD}/CMakeCache.txt | cut -d= -f2-"))
     print("ordering", "ABBA per repetition plus a trailing A control", "repetitions", REPS)
     print("internal_reps_per_run", "T", ITERS_T, "raw", ITERS_RAW, "warmup", WARMUP)
-    for binary in ("reference_a_frozen", "arrival_candidates", "raw_bench_current",
-            "raw_bench_frozen_180fix", "raw_bench_frozen"):
+    for binary in ("reference_a_frozen", "arrival_candidates", "legacy_corpus_bench",
+            "raw_bench_current", "raw_bench_frozen_180fix", "raw_bench_frozen"):
         path = os.path.join(BUILD, binary)
         if os.path.exists(path):
             print("binary_sha256", binary, sha256(path))
     for binary, name in (("reference_a_frozen", "reference_a_frozen"),
             ("arrival_candidates", "current_arrival"),
+            ("legacy_corpus_bench", "legacy_corpus"),
             ("raw_bench_current", "current_raw"),
             ("raw_bench_frozen_180fix", "frozen_180fix_raw"),
             ("raw_bench_frozen", "frozen_raw")):
         provenance(binary, name, raw_lines)
 
     print("=== T semantic enumeration versus Reference A (production flags)")
-    obs = sequence("current_arrival", "arrival_candidates", "reference_a_frozen",
+    obs, _ = sequence("current_arrival", "arrival_candidates", "reference_a_frozen",
         "reference_a_frozen", [], ITERS_T, raw_lines)
     t_ratios = summarize(obs, "current_arrival", "reference_a_frozen", raw_lines)
 
     print("=== raw BFS versus frozen 0c35e13 with the isolated 180 fix (production flags)")
-    obs = sequence("current_raw", "raw_bench_current", "frozen_180fix_raw",
+    obs, _ = sequence("current_raw", "raw_bench_current", "frozen_180fix_raw",
         "raw_bench_frozen_180fix", [], ITERS_RAW, raw_lines)
     raw_ratios = summarize(obs, "current_raw", "frozen_180fix_raw", raw_lines)
 
     print("=== raw BFS versus plain frozen 0c35e13 with 180 disabled on both sides")
-    obs = sequence("current_raw", "raw_bench_current", "frozen_raw",
+    obs, _ = sequence("current_raw", "raw_bench_current", "frozen_raw",
         "raw_bench_frozen", ["--no-180"], ITERS_RAW, raw_lines)
     no180_ratios = summarize(obs, "current_raw", "frozen_raw", raw_lines)
+
+    print("=== current arrival versus frozen legacy search on the 33-board legacy subcorpus (gates 8/9 inputs)")
+    obs, sub_cases = sequence("current_arrival", "arrival_candidates", "legacy_corpus",
+        "legacy_corpus_bench", ["--legacy-subcorpus"], ITERS_T, raw_lines)
+    sub_ratios = summarize(obs, "current_arrival", "legacy_corpus", raw_lines)
 
     print("=== gates")
     t_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in t_ratios.items()}
@@ -179,6 +196,35 @@ def main():
         f"{no180_medians[worst_no180][0]:.4f} ({worst_no180}), worst search-only "
         f"{no180_medians[worst_no180_search][1]:.4f} ({worst_no180_search}) | "
         f"{'PASS' if max(no180_medians[p][0] for p in non_t) <= 1.02 else 'FAIL'} |")
+    sub_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in sub_ratios.items()}
+    for side, label in (("A", "current_arrival"), ("B", "legacy_corpus")):
+        sub_n = sum(sub_cases[side][piece][1] for piece in PIECES)
+        print(f"legacy_subcorpus_cases_{label}", sub_n,
+            "(expected 231 on both sides)", "PASS" if sub_n == 231 else "FAIL")
+    print("legacy_subcorpus_time_ratio_medians_current_over_legacy total",
+        " ".join(f"{piece}={sub_medians[piece][0]:.4f}" for piece in PIECES),
+        "(lower is better; gate 8 is every non-T piece <= 1.000)")
+    worst8 = max(non_t, key=lambda p: sub_medians[p][0])
+    print(f"| Raw non-T enumeration versus frozen legacy search (33-board legacy subcorpus) | at most 1.000 per parent | "
+        f"worst non-T ratio {sub_medians[worst8][0]:.4f} ({worst8}) | "
+        f"{'PASS' if max(sub_medians[p][0] for p in non_t) <= 1.00 else 'FAIL'} |")
+    cpp_a = sub_cases["A"]["T"][0] / sub_cases["A"]["T"][1]
+    cpp_b = sub_cases["B"]["T"][0] / sub_cases["B"]["T"][1]
+    t_time_vals, _ = sub_ratios["T"]
+    t_time_median = statistics.median(t_time_vals)
+    t_pc_vals = [value * (cpp_b / cpp_a) for value in t_time_vals]
+    t_pc_median = statistics.median(t_pc_vals)
+    print(f"legacy_subcorpus_T_per_candidate_ratio_median {t_pc_median:.4f}",
+        f"(raw T time ratio {t_time_median:.4f}, T candidates-per-parent "
+        f"current={cpp_a:.2f} legacy={cpp_b:.2f} from each side's own CASE rows; "
+        f"gate 9 is <= 1.020)")
+    print(f"| T per normalized candidate versus frozen legacy search | at most 1.020 | "
+        f"T per-candidate ratio {t_pc_median:.4f} (raw T time ratio {t_time_median:.4f}, "
+        f"candidates-per-parent current {cpp_a:.2f} over {sub_cases['A']['T'][1]} cases, "
+        f"legacy {cpp_b:.2f} over {sub_cases['B']['T'][1]} cases) | "
+        f"{'PASS' if t_pc_median <= 1.02 else 'FAIL'} |")
+    print(f"| T raw time current versus legacy (informational) | none | "
+        f"T time ratio {t_time_median:.4f} | - |")
     print("| Perft vectors | exact | 8 of 8 in `fast_reachability_perft` | PASS |")
     for kind, label in ((0, "total"), (1, "search_only")):
         print("raw_ratio_medians_current_over_plain_frozen_180off", label,
@@ -188,4 +234,5 @@ def main():
         print(line)
 
 
-main()
+if __name__ == "__main__":
+    main()

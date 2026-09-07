@@ -338,6 +338,17 @@ target_include_directories(raw_bench_frozen_180fix BEFORE PRIVATE tests/frozen_0
 target_include_directories(raw_bench_frozen_180fix PRIVATE src tests)
 target_compile_options(raw_bench_frozen_180fix PRIVATE -O3 -march=native)
 
+add_executable(legacy_corpus_bench
+    tests/legacy_corpus_bench.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_include_directories(legacy_corpus_bench PRIVATE src tests)
+target_compile_options(legacy_corpus_bench PRIVATE -O3 -march=native)
+
 find_program(GIT_EXECUTABLE git)
 
 function(reach_provenance target detail_name)
@@ -389,6 +400,8 @@ reach_provenance(raw_bench_frozen_180fix PRODUCER_DETAIL AUTO_GIT
     SOURCES tests/frozen_0c35e13_180fix/search.hpp tests/raw_bench_main.cpp)
 reach_provenance(arrival_candidates PRODUCER_DETAIL AUTO_GIT
     SOURCES src/fast-reachability/search.hpp src/arrival_candidates.cpp src/candidate_format.h)
+reach_provenance(legacy_corpus_bench PRODUCER_DETAIL AUTO_GIT
+    SOURCES tests/legacy_corpus_bench.cpp tests/reach_corpus.h src/candidate_format.h src/legacy_cmp_normalize.h src/search_tspin.h src/search_tspin.cpp src/tetris_core.h src/tetris_core.cpp)
 
 add_test(NAME raw_bench_warmup_smoke
     COMMAND $<TARGET_FILE:raw_bench_current> --reps 2 --warmup 3 --producer smoke
@@ -398,6 +411,10 @@ add_test(NAME raw_bench_warmup_smoke_frozen
 )
 add_test(NAME raw_bench_warmup_smoke_frozen_plain
     COMMAND $<TARGET_FILE:raw_bench_frozen> --reps 2 --warmup 3 --producer smoke
+)
+
+add_test(NAME legacy_corpus_bench_smoke
+    COMMAND bash -c "$<TARGET_FILE:legacy_corpus_bench> --reps 1 --warmup 1 | grep -q 'CORPUS legacy_corpus cases 231 candidates'"
 )
 
 add_test(NAME raw_parity_frozen_180fix
@@ -427,6 +444,7 @@ set_tests_properties(tetris_board_tests rule_differential path_differential fast
     legacy_cmp_telemetry_off legacy_cmp_rejects_garbage_maxdepth
     legacy_cmp_rejects_garbage_moves legacy_cmp_rejects_wrapping_totals
     raw_bench_warmup_smoke raw_bench_warmup_smoke_frozen raw_bench_warmup_smoke_frozen_plain
+    legacy_corpus_bench_smoke
     raw_parity_frozen_180fix raw_parity_frozen_180off
     PROPERTIES FAIL_REGULAR_EXPRESSION "runtime error:"
     ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1")

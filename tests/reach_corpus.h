@@ -111,4 +111,27 @@ inline std::vector<std::array<uint16_t, height>> make()
     return boards;
 }
 
+// Legacy-comparable subcorpus for phase-7 gates 8/9: indices into make()
+// whose occupancy fits the legacy TetrisMap height 40. Excludes {22, 23,
+// 24} (stack height 44, occupancy rows 0..43) and {26} (near-top, rows
+// 38..45). The remaining 33 boards keep their ORIGINAL indices so CASE
+// rows pair 1:1 across the current and legacy sides (33 x 7 = 231 cases).
+// Clipping is forbidden; both sides import rows 0..39 unmodified.
+inline std::vector<std::size_t> legacy_subcorpus_indices()
+{
+    std::vector<std::size_t> indices;
+    for (std::size_t i = 0; i <= 21; ++i)
+    {
+        indices.push_back(i);
+    }
+    indices.push_back(25);
+    for (std::size_t i = 27; i <= 36; ++i)
+    {
+        indices.push_back(i);
+    }
+    return indices;
+}
+
+inline constexpr std::size_t legacy_subcorpus_boards = 33;
+
 } // namespace reach_corpus

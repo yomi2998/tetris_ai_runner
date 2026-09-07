@@ -49,8 +49,10 @@ Gate table additions: non-T time-per-parent `current/legacy_corpus` at
 most 1.00 (item 8); T `current/legacy_corpus` time-per-parent divided by
 the per-side normalized candidate counts at most 1.02 (item 9). The
 per-candidate normalization uses each side's own candidate count on the
-same boards, computed inside the harness from the CORPUS lines, never a
-count borrowed from a different comparison.
+same boards, computed inside the harness — for the T leg from each
+side's own T CASE rows over the 33 T cases (the CORPUS line totals all
+pieces and cannot yield T-only counts; coordinator-confirmed
+2026-09-07), never a count borrowed from a different comparison.
 
 ## Resolved design questions (2026-09-07 audit; evidence-graded)
 
