@@ -34,7 +34,9 @@ namespace tetris_engine
     inline constexpr std::size_t max_candidates_per_source =
         4 * Board::width * Board::height * 2;
     inline constexpr std::size_t max_children_per_parent = 2 * max_candidates_per_source;
-    inline constexpr std::size_t transposition_entries = 262144;
+    inline constexpr std::size_t transposition_entries = 1048576;
+    static_assert(std::has_single_bit(transposition_entries),
+        "the transposition probe masks with the table size");
     inline constexpr std::uint8_t no_piece_code = 0xFF;
     inline constexpr std::uint64_t engine_queue_reservation =
         max_queue_length * (sizeof(Piece) + sizeof(bool));
@@ -199,15 +201,18 @@ namespace tetris_engine
         return h;
     }
 
+    // docs/phase7/transposition_capacity_design.md §2: fingerprint-gated slot.
+    // Merge soundness comes from exact key verification on fp match, never the
+    // fingerprint alone.
     struct TranspositionEntry
     {
-        TranspositionKey key{};
+        std::uint64_t fp = 0;
         NodeId node = no_node;
         std::uint32_t epoch = 0;
     };
 
-    static_assert(sizeof(TranspositionEntry) == 160,
-        "the transposition slot stays compact and naturally aligned");
+    static_assert(sizeof(TranspositionEntry) == 16,
+        "the fingerprint-gated slot stays compact and naturally aligned");
 
     struct Node
     {
@@ -385,6 +390,12 @@ namespace tetris_engine
         std::size_t materialized_nodes = 0;
         std::size_t transposition_merges = 0;
         std::size_t promotions_refused = 0;
+        // docs/phase7/transposition_capacity_design.md §5 Step 0: per-visited-entry
+        // probe cost telemetry. probe_histogram buckets probe lengths
+        // [1,2,3-4,5-8,9-16,17-32,33-64,65+], one increment per probe call.
+        std::uint64_t probe_steps = 0;
+        std::array<std::uint64_t, 8> probe_histogram{};
+        std::uint64_t probe_rebuilds = 0;
         std::size_t pending_occupancy = 0;
         bool transposition_exhausted = false;
     };
@@ -815,6 +826,20 @@ namespace tetris_engine
 
         std::size_t transposition_physical_entries_for_test() const;
 
+        TranspositionKey build_key_for_test(Child const &child) const;
+
+        TranspositionKey key_from_node_for_test(NodeId id) const;
+
+        bool transposition_reinsert_for_test(
+            std::uint64_t fp, TranspositionKey const &key, NodeId node);
+
+        std::size_t transposition_table_size_for_test() const;
+
+        TranspositionEntry transposition_entry_for_test(std::size_t slot) const;
+
+        void set_transposition_entry_for_test(
+            std::size_t slot, TranspositionEntry entry);
+
         std::size_t arena_reserved_bytes() const;
 
         std::size_t idmap_reserved_bytes() const;
@@ -847,6 +872,7 @@ namespace tetris_engine
             bool merged = false;
             NodeId node = no_node;
             TranspositionEntry *slot = nullptr;
+            std::uint64_t fp = 0;
         };
 
         struct MaterializeOutcome
@@ -935,7 +961,17 @@ namespace tetris_engine
 
         TranspositionProbe transposition_probe(TranspositionKey const &key);
 
+        TranspositionProbe transposition_probe_prehashed(
+            std::uint64_t fp, TranspositionKey const &expect);
+
+        // docs/phase7/transposition_capacity_design.md §2: false on merge (the
+        // first staged entry wins), true after occupying the probed slot.
+        bool transposition_reinsert(
+            std::uint64_t fp, TranspositionKey const &key, NodeId node);
+
         TranspositionKey build_key(Child const &child, NodeId id) const;
+
+        TranspositionKey key_from_node(NodeId id) const;
 
         void run_pass();
     };

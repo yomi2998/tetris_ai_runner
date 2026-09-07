@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <print>
+#include <string_view>
 
 namespace engine_alias = tetris_engine;
 
@@ -36,10 +37,67 @@ namespace
         out.marker_count = full.marker_count;
         return out;
     }
+
+    // docs/phase7/transposition_capacity_design.md §5 Step 0 / Leg 4: fixed-work
+    // counters-only probe attribution. Deterministic iteration budget, timers off.
+    int run_probe_mode()
+    {
+        toj_policy::Config policy_config;
+        policy_config.combo_table = combo_table;
+        policy_config.combo_table_max = 10;
+        policy_config.safe = 5;
+        policy_config.parameters = toj_policy::Parameters::production_defaults();
+
+        engine_alias::EngineConfig config;
+        config.policy = &policy_config;
+        config.telemetry_enabled = true;
+        config.timers_enabled = false;
+        engine_alias::Engine engine;
+        if (!engine.init(config))
+        {
+            std::println(stderr, "transposition_reset_bench: probe engine init failed");
+            return 1;
+        }
+        auto queue = engine_alias::parse_queue("TIS");
+        if (!queue.has_value())
+        {
+            std::println(stderr, "transposition_reset_bench: probe queue parse failed");
+            return 1;
+        }
+        toj_policy::State state;
+        engine_alias::HoldState no_hold;
+        no_hold.locked = true;
+        if (engine.set_root(shelf_board(), state, std::move(*queue), no_hold)
+            == engine_alias::no_node)
+        {
+            std::println(stderr, "transposition_reset_bench: probe root rejected");
+            return 1;
+        }
+        bool const complete = engine.run(2000);
+        auto stats = engine.search_stats();
+        std::uint64_t probes = 0;
+        for (std::uint64_t bucket : stats.probe_histogram)
+        {
+            probes += bucket;
+        }
+        std::println("PROBE complete={} steps={} probes={} hist=[{},{},{},{},{},{},{},{}]",
+            complete ? 1 : 0, stats.probe_steps, probes, stats.probe_histogram[0],
+            stats.probe_histogram[1], stats.probe_histogram[2], stats.probe_histogram[3],
+            stats.probe_histogram[4], stats.probe_histogram[5], stats.probe_histogram[6],
+            stats.probe_histogram[7]);
+        std::println("PROBE_CTX merges={} materialized={} nodes={} exhausted={} rebuilds={}",
+            stats.transposition_merges, stats.materialized_nodes, engine.arena_size(),
+            stats.transposition_exhausted ? 1 : 0, stats.probe_rebuilds);
+        return 0;
+    }
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    if (argc > 1 && std::string_view(argv[1]) == "probe")
+    {
+        return run_probe_mode();
+    }
     constexpr int kRoots = 200;
 
     toj_policy::Config policy_config;

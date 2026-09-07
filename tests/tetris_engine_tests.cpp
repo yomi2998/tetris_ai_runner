@@ -4,6 +4,8 @@
 #include "scalar_arrival_oracle.h"
 
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -131,6 +133,24 @@ namespace
         rows[17] = 0x1ff & ~(0x038);
         rows[18] = 0x1ff & ~(0x010);
         rows[19] = 0x1ff;
+        return tetris::Board::from_rows(rows);
+    }
+
+    tetris::Board high_board_a()
+    {
+        std::array<std::uint16_t, 48> rows = {};
+        rows[40] = 0x001;
+        rows[41] = 0x200;
+        rows[47] = 0x155;
+        return tetris::Board::from_rows(rows);
+    }
+
+    tetris::Board high_board_b()
+    {
+        std::array<std::uint16_t, 48> rows = {};
+        rows[39] = 0x3fb;
+        rows[44] = 0x0f0;
+        rows[46] = 0x00f;
         return tetris::Board::from_rows(rows);
     }
 
@@ -1010,8 +1030,10 @@ namespace
                 && base.occupancy.logical_word(i) == occupancy_board.occupancy().logical_word(i);
         }
         check(sizeof(engine_alias::TranspositionKey) == 152
-                && sizeof(engine_alias::TranspositionEntry) == 160,
-            "transposition slots omit kernel alignment padding");
+                && sizeof(engine_alias::TranspositionEntry) == 16,
+            "fingerprint-gated slots omit the stored key");
+        check(engine_alias::transposition_entries == 1048576,
+            "the fingerprint table holds four times the stored-key capacity");
         check(same_words, "compact transposition occupancy preserves every logical word");
         auto differs = [&](TranspositionKey const &key, char const *what) {
             check(!(key == base), what);
@@ -1084,6 +1106,302 @@ namespace
             && transposition_hash(zero_positive) == transposition_hash(zero_negative),
             "signed zero agrees between equality and hashing");
         std::println("transposition key: every field participates exactly");
+    }
+
+    engine_alias::Queue remaining_queue(engine_alias::Queue const &full,
+        std::size_t from);
+
+    void check_rebuilt_equals_built(Fixture &fixture, engine_alias::Child const &child,
+        char const *what)
+    {
+        engine_alias::TranspositionKey built =
+            fixture.engine.build_key_for_test(child);
+        engine_alias::NodeId id = fixture.engine.materialize(child);
+        check(id != engine_alias::no_node, what);
+        if (id == engine_alias::no_node)
+        {
+            return;
+        }
+        engine_alias::TranspositionKey rebuilt =
+            fixture.engine.key_from_node_for_test(id);
+        check(built == rebuilt, what);
+        check(engine_alias::transposition_hash(built)
+            == engine_alias::transposition_hash(rebuilt),
+            what);
+    }
+
+    void run_key_reconstruction_tests()
+    {
+        check(engine_alias::normalize_zero(-0.0) == 0.0,
+            "negative zero normalizes to positive zero");
+        check(std::bit_cast<std::uint64_t>(engine_alias::normalize_zero(-0.0))
+            == std::bit_cast<std::uint64_t>(0.0),
+            "normalized zeros agree bitwise");
+        double const quiet_nan = std::nan("");
+        check(engine_alias::normalize_zero(quiet_nan) != engine_alias::normalize_zero(quiet_nan),
+            "NaN passes through to the guard assert shared by both builders");
+        std::vector<tetris::Board> boards;
+        boards.push_back(tetris::Board{});
+        boards.push_back(shelf_board());
+        boards.push_back(pocket_board());
+        boards.push_back(lip_board());
+        boards.push_back(high_board_a());
+        boards.push_back(high_board_b());
+        std::vector<std::string> queues{ "TIS", "T?IS", "TZSJLOI" };
+        struct HoldCase
+        {
+            std::optional<tetris::Piece> piece;
+            bool locked = false;
+        };
+        std::vector<HoldCase> holds{
+            { std::nullopt, true }, { tetris::Piece::I, false }, { std::nullopt, false },
+        };
+        std::size_t depth_one = 0;
+        std::size_t depth_two = 0;
+        for (auto const &board : boards)
+        {
+            for (auto const &queue_text : queues)
+            {
+                for (auto const &hold_case : holds)
+                {
+                    Fixture fixture = make_fixture();
+                    engine_alias::NodeId root = make_root(fixture, board, queue_text,
+                        hold_case.piece, hold_case.locked);
+                    if (root == engine_alias::no_node)
+                    {
+                        check(false, "reconstruction root takes");
+                        continue;
+                    }
+                    auto children = fixture.engine.expand(root);
+                    check(!children.empty(), "reconstruction fixture expands");
+                    for (auto const &child : children)
+                    {
+                        check_rebuilt_equals_built(fixture, child,
+                            "rebuilt key matches the built key");
+                        ++depth_one;
+                        for (int variant = 0; variant < 4; ++variant)
+                        {
+                            engine_alias::Child tweaked = child;
+                            tweaked.state.acc_value =
+                                (variant & 1) != 0 ? 0.0 : -0.0;
+                            tweaked.state.like =
+                                (variant & 2) != 0 ? -0.0 : 0.0;
+                            tweaked.state.value =
+                                variant < 2 ? -0.0 : 0.0;
+                            check_rebuilt_equals_built(fixture, tweaked,
+                                "signed-zero policy values rebuild identically");
+                        }
+                    }
+                    std::size_t expanded = 0;
+                    for (std::size_t id = 1;
+                        id < fixture.engine.arena_size() && expanded < 3; ++id)
+                    {
+                        auto grandchildren = fixture.engine.expand(
+                            static_cast<engine_alias::NodeId>(id));
+                        if (grandchildren.empty())
+                        {
+                            continue;
+                        }
+                        ++expanded;
+                        std::size_t checked = 0;
+                        for (auto const &grandchild : grandchildren)
+                        {
+                            if (checked >= 8)
+                            {
+                                break;
+                            }
+                            check_rebuilt_equals_built(fixture, grandchild,
+                                "depth-two keys rebuild through the inherit branch");
+                            ++checked;
+                            ++depth_two;
+                        }
+                    }
+                }
+            }
+        }
+        check(depth_one > 1000 && depth_two > 100,
+            "the reconstruction corpus covers both key branches");
+        std::println("key reconstruction: rebuilt keys match built keys over the corpus");
+    }
+
+    void run_reroot_collision_tests()
+    {
+        {
+            Fixture fixture = make_fixture();
+            engine_alias::NodeId root =
+                make_root(fixture, shelf_board(), "TIS", std::nullopt, true);
+            check(root == 0, "collision root takes the first arena slot");
+            auto children = fixture.engine.expand(root);
+            check(!children.empty(), "collision fixture expands");
+            if (children.empty())
+            {
+                return;
+            }
+            engine_alias::TranspositionKey key =
+                fixture.engine.build_key_for_test(children[0]);
+            std::uint64_t const fp = engine_alias::transposition_hash(key);
+            engine_alias::NodeId first = fixture.engine.materialize(children[0]);
+            engine_alias::NodeId second = fixture.engine.materialize(children[0]);
+            check(first != engine_alias::no_node && second != engine_alias::no_node
+                && first != second,
+                "duplicate materializations occupy distinct nodes");
+            std::size_t const used_before = fixture.engine.transposition_used();
+            check(fixture.engine.transposition_reinsert_for_test(fp, key, first),
+                "the first staged entry occupies");
+            check(fixture.engine.transposition_used() == used_before + 1,
+                "the first staged entry counts once");
+            check(!fixture.engine.transposition_reinsert_for_test(fp, key, second),
+                "the duplicate staged entry loses");
+            check(fixture.engine.transposition_used() == used_before + 1,
+                "the skipped duplicate stages nothing");
+            std::size_t hits = 0;
+            engine_alias::NodeId survivor = engine_alias::no_node;
+            std::uint32_t const epoch = fixture.engine.transposition_epoch_for_test();
+            for (std::size_t s = 0;
+                s < fixture.engine.transposition_table_size_for_test(); ++s)
+            {
+                auto entry = fixture.engine.transposition_entry_for_test(s);
+                if (entry.epoch == epoch && entry.fp == fp)
+                {
+                    ++hits;
+                    survivor = entry.node;
+                }
+            }
+            check(hits == 1 && survivor == first,
+                "the first staged node survives the collision");
+        }
+        {
+            auto populate = []() {
+                Fixture f = make_fixture();
+                auto queue = engine_alias::parse_queue("TIS");
+                check(queue.has_value(), "collision-population queue parses");
+                engine_alias::HoldState no_hold;
+                no_hold.locked = true;
+                toj_policy::State state;
+                check(f.engine.set_root(shelf_board(), state, std::move(*queue),
+                    no_hold) != engine_alias::no_node,
+                    "collision-population root takes");
+                check(f.engine.run(2000), "collision population completes");
+                return f;
+            };
+            Fixture a = populate();
+            Fixture b = populate();
+            std::uint32_t const epoch = a.engine.transposition_epoch_for_test();
+            engine_alias::TranspositionEntry dup{};
+            engine_alias::NodeId target = engine_alias::no_node;
+            for (std::size_t s = 0;
+                s < a.engine.transposition_table_size_for_test()
+                && target == engine_alias::no_node;
+                ++s)
+            {
+                auto entry = a.engine.transposition_entry_for_test(s);
+                if (entry.epoch != epoch)
+                {
+                    continue;
+                }
+                auto const *node = a.engine.node(entry.node);
+                if (node == nullptr || node->depth != 2)
+                {
+                    continue;
+                }
+                engine_alias::NodeId t = entry.node;
+                while (a.engine.node(t)->depth > 1)
+                {
+                    t = a.engine.node(t)->parent;
+                }
+                dup = entry;
+                target = t;
+            }
+            check(target != engine_alias::no_node,
+                "a carried depth-two entry exists");
+            if (target == engine_alias::no_node)
+            {
+                return;
+            }
+            bool placed = false;
+            for (std::size_t s = 0;
+                s < a.engine.transposition_table_size_for_test(); ++s)
+            {
+                if (a.engine.transposition_entry_for_test(s).epoch != epoch)
+                {
+                    a.engine.set_transposition_entry_for_test(s, dup);
+                    placed = true;
+                    break;
+                }
+            }
+            check(placed, "the forced duplicate lands in a stale slot");
+            auto reroot_into = [](Fixture &f, engine_alias::NodeId t) {
+                auto const *child = f.engine.node(t);
+                engine_alias::Queue next = remaining_queue(f.engine.queue(),
+                    child->cursor);
+                return f.engine.set_root(child->board, child->policy,
+                    std::move(next), child->hold);
+            };
+            check(reroot_into(a, target) != engine_alias::no_node
+                && reroot_into(b, target) != engine_alias::no_node,
+                "both engines reroot into the duplicated subtree");
+            check(a.engine.arena_size() > 1 && b.engine.arena_size() > 1,
+                "both reroots retain the subtree");
+            check(a.engine.transposition_used() == b.engine.transposition_used(),
+                "the forced duplicate stages exactly once");
+            check(a.engine.run(2000) && b.engine.run(2000),
+                "both post-collision searches complete");
+            auto sa = a.engine.select_best();
+            auto sb = b.engine.select_best();
+            check(sa.has_value() && sb.has_value() && sa == sb,
+                "the forced duplicate changes no selection");
+            check(a.engine.arena_size() == b.engine.arena_size(),
+                "the forced duplicate changes no materialization");
+        }
+        std::println("reroot collision: first-staged-wins under a forced duplicate");
+    }
+
+    void run_probe_histogram_tests()
+    {
+        Fixture first = make_zero_fixture();
+        make_root(first, shelf_board(), "III", std::nullopt, true);
+        check(first.engine.run(500), "histogram workload completes");
+        auto stats = first.engine.search_stats();
+        std::uint64_t probes = 0;
+        for (std::uint64_t bucket : stats.probe_histogram)
+        {
+            probes += bucket;
+        }
+        check(probes > 0, "the workload probes the table");
+        check(stats.probe_steps >= probes,
+            "every probe visits at least one entry");
+        check(stats.probe_steps
+            >= stats.materialized_nodes + stats.transposition_merges,
+            "every materialization or merge probes at least once");
+        check(stats.probe_histogram[0] > 0,
+            "single-visit probes populate the first bucket");
+        Fixture second = make_zero_fixture();
+        make_root(second, shelf_board(), "III", std::nullopt, true);
+        check(second.engine.run(500), "histogram control completes");
+        auto again = second.engine.search_stats();
+        check(again.probe_steps == stats.probe_steps
+            && again.probe_histogram == stats.probe_histogram
+            && again.probe_rebuilds == stats.probe_rebuilds,
+            "probe telemetry is deterministic");
+        Fixture quiet;
+        quiet.policy_config.combo_table = combo_table;
+        quiet.policy_config.combo_table_max = 10;
+        quiet.policy_config.safe = 0;
+        quiet.policy_config.parameters = toj_policy::Parameters{};
+        quiet.engine_config.policy = &quiet.policy_config;
+        quiet.engine_config.telemetry_enabled = false;
+        check(quiet.engine.init(quiet.engine_config),
+            "telemetry-off fixture initializes");
+        make_root(quiet, shelf_board(), "III", std::nullopt, true);
+        quiet.engine.run(500);
+        auto off = quiet.engine.search_stats();
+        bool silent = off.probe_steps == 0 && off.probe_rebuilds == 0;
+        for (std::uint64_t bucket : off.probe_histogram)
+        {
+            silent = silent && bucket == 0;
+        }
+        check(silent, "telemetry-off runs count no probe steps");
+        std::println("probe histogram: lengths, determinism, telemetry gating");
     }
 
     void run_widening_tests()
@@ -1263,14 +1581,14 @@ namespace
             Fixture fixture = make_fixture();
             tetris::Board board;
             engine_alias::NodeId root = make_root(fixture, board, "TTTTT", std::nullopt, true);
-            check(root != engine_alias::no_node, "table-exhaustion root takes");
+            check(root != engine_alias::no_node, "capacity-relief root takes");
             fixture.engine.run(2000);
-            check(fixture.engine.search_stats().transposition_exhausted,
-                "a full transposition table stops the search");
-            check(!fixture.engine.search_complete(),
-                "table exhaustion never pretends completeness");
+            check(!fixture.engine.search_stats().transposition_exhausted,
+                "no fail-stop under the relieved capacity");
+            check(fixture.engine.transposition_used() > 262144,
+                "live entries exceed the entire old table");
             check(fixture.engine.select_best().has_value(),
-                "best-so-far selection survives table exhaustion");
+                "best-so-far selection survives capacity relief");
         }
         std::println("exhaustion: arena and table limits stop safely");
     }
@@ -1562,11 +1880,10 @@ namespace
 
     void run_reinit_tests()
     {
-        Fixture fixture = make_zero_fixture();
+        Fixture fixture = make_zero_fixture(40);
         make_root(fixture, tetris::Board{}, "TTTTT", std::nullopt, true);
         fixture.engine.run(2000);
-        check(fixture.engine.arena_exhausted()
-            || fixture.engine.search_stats().transposition_exhausted,
+        check(fixture.engine.arena_exhausted(),
             "exhaustion precedes reinitialization");
         check(fixture.engine.last_stats().enumerated > 0,
             "expansion counters precede reinitialization");
@@ -1587,6 +1904,9 @@ namespace
             "rejected reinit clears stale selection");
         fixture.engine_config.arena_capacity = good_capacity;
         check(fixture.engine.init(fixture.engine_config), "restored reinitialization");
+        fixture.engine_config.arena_capacity = engine_alias::default_arena_capacity;
+        check(fixture.engine.init(fixture.engine_config),
+            "restored reinitialization at full capacity");
         make_root(fixture, shelf_board(), "III", std::nullopt, true);
         check(fixture.engine.run(500), "search runs after reinitialization");
         {
@@ -2476,13 +2796,19 @@ namespace
                 "the new root retains children");
             {
                 auto fresh_stats = fixture.engine.search_stats();
+                bool probe_quiet = fresh_stats.probe_steps == 0
+                    && fresh_stats.probe_rebuilds == 0;
+                for (std::uint64_t bucket : fresh_stats.probe_histogram)
+                {
+                    probe_quiet = probe_quiet && bucket == 0;
+                }
                 check(fresh_stats.eval_requests == 0 && fresh_stats.eval_computed == 0
                     && fresh_stats.cache_requests == 0 && fresh_stats.cache_hits == 0
                     && fresh_stats.cache_misses == 0
                     && fresh_stats.materialized_nodes == 0
                     && fresh_stats.transposition_merges == 0
                     && fresh_stats.expanded_parents == 0
-                    && fresh_stats.widening_passes == 0,
+                    && fresh_stats.widening_passes == 0 && probe_quiet,
                     "a matching root change resets per-search telemetry");
             }
 
@@ -4024,6 +4350,7 @@ namespace
                 - engine_alias::engine_fixed_workspace)
                 / (sizeof(engine_alias::Node) + sizeof(engine_alias::NodeId)));
         check(capacity == expect && capacity > 1024, "arena capacity derives from the budget");
+        check(capacity == 705851, "the fingerprint budget funds the design arithmetic");
         check(capacity < engine_alias::max_nodes, "capacity stays in NodeId range");
         check(engine_alias::max_queue_length == 256, "queue bound is declared");
         std::println("node storage: {} bytes per node", sizeof(engine_alias::Node));
@@ -4265,6 +4592,9 @@ int main()
     run_epoch_isolation_tests();
     run_epoch_wrap_tests();
     run_reroot_epoch_parity_tests();
+    run_key_reconstruction_tests();
+    run_reroot_collision_tests();
+    run_probe_histogram_tests();
     run_finalize_tests();
     std::println("tetris_engine_tests: {} checks, {} failures", checks, failures);
     return failures == 0 ? 0 : 1;

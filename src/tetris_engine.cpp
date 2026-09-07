@@ -50,6 +50,39 @@ namespace tetris_engine
             }
             return false;
         }
+
+        std::size_t probe_length_bucket(std::size_t length)
+        {
+            if (length <= 1)
+            {
+                return 0;
+            }
+            if (length == 2)
+            {
+                return 1;
+            }
+            if (length <= 4)
+            {
+                return 2;
+            }
+            if (length <= 8)
+            {
+                return 3;
+            }
+            if (length <= 16)
+            {
+                return 4;
+            }
+            if (length <= 32)
+            {
+                return 5;
+            }
+            if (length <= 64)
+            {
+                return 6;
+            }
+            return 7;
+        }
     }
 
     bool Engine::init(EngineConfig const &config)
@@ -305,41 +338,8 @@ namespace tetris_engine
             node.first_child = no_node;
             node.child_count = 0;
         }
-        std::size_t moved = 0;
-        for (auto &entry : transposition_)
-        {
-            if (entry.epoch != transposition_epoch_)
-            {
-                continue;
-            }
-            if (entry.node >= idmap_.size() || idmap_[entry.node] == no_node
-                || entry.key.depth < 2 || entry.key.cursor < played_cursor)
-            {
-                continue;
-            }
-            std::size_t const new_depth = entry.key.depth - 1;
-            if (new_depth > new_max + 1)
-            {
-                continue;
-            }
-            entry.key.depth = static_cast<std::uint16_t>(new_depth);
-            entry.key.cursor = static_cast<std::uint16_t>(entry.key.cursor - played_cursor);
-            entry.key.root_child = arena_[idmap_[entry.node]].root_child;
-            entry.node = idmap_[entry.node];
-            transposition_rehash_[moved++] = entry;
-        }
-        advance_transposition_epoch();
-        transposition_used_ = 0;
-        for (std::size_t i = 0; i < moved; ++i)
-        {
-            TranspositionProbe probe = transposition_probe(transposition_rehash_[i].key);
-            probe.slot->key = transposition_rehash_[i].key;
-            probe.slot->node = transposition_rehash_[i].node;
-            probe.slot->epoch = transposition_epoch_;
-        }
-        transposition_used_ = moved;
-        arena_.resize(new_count);
-        rebuild_child_links();
+        // Keys are re-derived from the rewritten nodes against the new queue, so
+        // the queue swap precedes staging (docs/phase7/transposition_capacity_design.md §2).
         queue_.pieces.clear();
         queue_.boundary.clear();
         for (Piece piece : queue.pieces)
@@ -352,6 +352,36 @@ namespace tetris_engine
         }
         queue_.marker_count = queue.marker_count;
         max_length_ = new_max;
+        std::size_t moved = 0;
+        for (auto &entry : transposition_)
+        {
+            if (entry.epoch != transposition_epoch_)
+            {
+                continue;
+            }
+            if (entry.node >= idmap_.size() || idmap_[entry.node] == no_node)
+            {
+                continue;
+            }
+            NodeId const new_node = idmap_[entry.node];
+            if (arena_[new_node].depth < 1 || arena_[new_node].depth > new_max + 1)
+            {
+                continue;
+            }
+            TranspositionKey key = key_from_node(new_node);
+            transposition_rehash_[moved++] =
+                TranspositionEntry{ transposition_hash(key), new_node, entry.epoch };
+        }
+        advance_transposition_epoch();
+        transposition_used_ = 0;
+        for (std::size_t i = 0; i < moved; ++i)
+        {
+            TranspositionKey key = key_from_node(transposition_rehash_[i].node);
+            transposition_reinsert(transposition_rehash_[i].fp, key,
+                transposition_rehash_[i].node);
+        }
+        arena_.resize(new_count);
+        rebuild_child_links();
         width_ = 0;
         search_complete_ = false;
         search_stopped_ = false;
@@ -884,6 +914,38 @@ namespace tetris_engine
         return count;
     }
 
+    TranspositionKey Engine::build_key_for_test(Child const &child) const
+    {
+        return build_key(child, no_node);
+    }
+
+    TranspositionKey Engine::key_from_node_for_test(NodeId id) const
+    {
+        return key_from_node(id);
+    }
+
+    bool Engine::transposition_reinsert_for_test(
+        std::uint64_t fp, TranspositionKey const &key, NodeId node)
+    {
+        return transposition_reinsert(fp, key, node);
+    }
+
+    std::size_t Engine::transposition_table_size_for_test() const
+    {
+        return transposition_.size();
+    }
+
+    TranspositionEntry Engine::transposition_entry_for_test(std::size_t slot) const
+    {
+        return transposition_[slot];
+    }
+
+    void Engine::set_transposition_entry_for_test(
+        std::size_t slot, TranspositionEntry entry)
+    {
+        transposition_[slot] = entry;
+    }
+
     std::size_t Engine::arena_reserved_bytes() const
     {
         return arena_.capacity() * sizeof(Node);
@@ -971,30 +1033,104 @@ namespace tetris_engine
         return key;
     }
 
+    TranspositionKey Engine::key_from_node(NodeId id) const
+    {
+        TranspositionKey key;
+        Node const &node = arena_[id];
+        Node const &parent_node = arena_[node.parent];
+        key.depth = static_cast<std::uint16_t>(node.depth);
+        key.cursor = static_cast<std::uint16_t>(node.cursor);
+        key.root_child = parent_node.depth == 0
+            ? first_move_fingerprint(node.played, node.incoming, node.source)
+            : parent_node.root_child;
+        key.occupancy = node.board.occupancy();
+        key.state = node.policy;
+        key.state.acc_value = normalize_zero(key.state.acc_value);
+        key.state.like = normalize_zero(key.state.like);
+        key.state.value = normalize_zero(key.state.value);
+        assert(key.state.acc_value == key.state.acc_value
+            && key.state.like == key.state.like && key.state.value == key.state.value);
+        std::size_t const size = queue_.pieces.size();
+        std::size_t const remaining = node.cursor < size ? size - node.cursor : 0;
+        key.boundary_count = static_cast<std::uint16_t>(remaining);
+        for (std::size_t i = 0; i < remaining; ++i)
+        {
+            if (queue_.boundary[node.cursor + i])
+            {
+                key.boundary_bits[i / 64] |= (1ull << (i % 64));
+            }
+        }
+        key.active_piece = node.cursor < size
+            ? static_cast<std::uint8_t>(queue_.pieces[node.cursor])
+            : no_piece_code;
+        key.hold_piece = node.hold.piece.has_value()
+            ? static_cast<std::uint8_t>(*node.hold.piece)
+            : no_piece_code;
+        key.hold_available = !node.hold.locked;
+        return key;
+    }
+
     Engine::TranspositionProbe Engine::transposition_probe(TranspositionKey const &key)
     {
-        std::uint64_t const h = transposition_hash(key);
-        std::size_t slot = static_cast<std::size_t>(h) & (transposition_entries - 1);
+        return transposition_probe_prehashed(transposition_hash(key), key);
+    }
+
+    Engine::TranspositionProbe Engine::transposition_probe_prehashed(
+        std::uint64_t fp, TranspositionKey const &expect)
+    {
+        std::size_t slot = static_cast<std::size_t>(fp) & (transposition_entries - 1);
+        auto count_probe = [this](std::size_t length) {
+            if (telemetry_on())
+            {
+                search_stats_.probe_steps += length;
+                ++search_stats_.probe_histogram[probe_length_bucket(length)];
+            }
+        };
         for (std::size_t i = 0; i < transposition_entries; ++i)
         {
             TranspositionEntry &entry = transposition_[slot];
             if (entry.epoch != transposition_epoch_)
             {
-                return { false, no_node, &entry };
+                count_probe(i + 1);
+                return { false, no_node, &entry, fp };
             }
-            if (entry.key == key)
+            if (entry.fp == fp)
             {
-                return { true, entry.node, nullptr };
+                if (telemetry_on())
+                {
+                    ++search_stats_.probe_rebuilds;
+                }
+                if (key_from_node(entry.node) == expect)
+                {
+                    count_probe(i + 1);
+                    return { true, entry.node, nullptr, fp };
+                }
             }
             slot = (slot + 1) & (transposition_entries - 1);
         }
+        count_probe(transposition_entries);
         search_stopped_ = true;
         transposition_exhausted_ = true;
         if (telemetry_on())
         {
             search_stats_.transposition_exhausted = true;
         }
-        return { false, no_node, nullptr };
+        return { false, no_node, nullptr, fp };
+    }
+
+    bool Engine::transposition_reinsert(
+        std::uint64_t fp, TranspositionKey const &key, NodeId node)
+    {
+        TranspositionProbe probe = transposition_probe_prehashed(fp, key);
+        if (probe.merged || probe.slot == nullptr)
+        {
+            return false;
+        }
+        probe.slot->fp = fp;
+        probe.slot->node = node;
+        probe.slot->epoch = transposition_epoch_;
+        ++transposition_used_;
+        return true;
     }
 
     Engine::MaterializeOutcome Engine::search_materialize(Child const &child)
@@ -1037,7 +1173,7 @@ namespace tetris_engine
             {
                 return {};
             }
-            probe.slot->key = key;
+            probe.slot->fp = probe.fp;
             probe.slot->node = id;
             probe.slot->epoch = transposition_epoch_;
             ++transposition_used_;
@@ -1068,7 +1204,7 @@ namespace tetris_engine
             arena_.pop_back();
             return { true, probe.node };
         }
-        probe.slot->key = key;
+        probe.slot->fp = probe.fp;
         probe.slot->node = id;
         probe.slot->epoch = transposition_epoch_;
         ++transposition_used_;
