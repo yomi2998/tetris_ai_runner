@@ -150,9 +150,27 @@ changes, no cutover work.
 - Both profile artifacts plus the comparator build under GCC and Clang
   self-release.
 - Pre-existing limit documented in the schema: sequentially constructed
-  fresh legacy engines exhibit allocation-history interaction through the
-  custom hash tables that flips selections, verified identical against a
-  flag-off build, so parity is established at process level (separate
+  fresh legacy engines in one process can disagree (exact flag-off repro
+  and build command recorded there; also reproduced with unmodified
+  pre-7.1C sources), so parity is established at process level (separate
   deterministic runs), never by in-process fresh-engine comparison. That
   behavior predates this slice and is outside it; both profile binaries run
   one engine across moves exactly like the frozen loop.
+
+## Slice 7.1C repair round (HOLD verdict)
+
+- Strict numeric parsing in the comparator (unsigned and double syntax,
+  finite non-negative bounded budgets, accepted telemetry values,
+  warmup-plus-moves overflow guard, `maxdepth` bound): invalid input exits
+  nonzero with no `PROFILE_CMP` row, covered by three new rejection CTests
+  mirroring the value-profile cases. The frozen binary keeps its loose
+  parsing; parity on valid inputs re-verified.
+- Human-readable summary prints search-child materialization
+  (`fresh + recycled`) under the materialized label, matching the binding
+  quiet field.
+- Schema field 11 wording aligned to the frozen `transitions` column name.
+- Divergence substantiation: minimal flag-off repro (two sequential fresh
+  engines, empty map, piece T, lookahead `TOJ`, 4 fixed iterations, `-O0`)
+  diverges first-vs-second engine and reproduces identically with
+  unmodified pre-7.1C sources; schema and record amended to the observed
+  facts with exact repro settings instead of the earlier mechanism claim.

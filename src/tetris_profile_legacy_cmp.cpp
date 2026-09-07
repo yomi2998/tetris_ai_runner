@@ -6,11 +6,13 @@
 #include "search_tspin.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <print>
 #include <random>
@@ -140,6 +142,53 @@ namespace
     int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
     int const combo_table_max = 10;
 
+    constexpr std::size_t max_supported_maxdepth = 255;
+    constexpr double max_budget_ms = 1e15;
+
+    bool parse_uint_strict(std::string const &text, std::size_t &out)
+    {
+        if (text.empty())
+        {
+            return false;
+        }
+        for (char c : text)
+        {
+            if (c < '0' || c > '9')
+            {
+                return false;
+            }
+        }
+        errno = 0;
+        unsigned long long value = std::strtoull(text.c_str(), nullptr, 10);
+        if (errno == ERANGE)
+        {
+            return false;
+        }
+        out = static_cast<std::size_t>(value);
+        return static_cast<unsigned long long>(out) == value;
+    }
+
+    bool parse_double_strict(std::string const &text, double &out)
+    {
+        if (text.empty())
+        {
+            return false;
+        }
+        char *end = nullptr;
+        errno = 0;
+        double value = std::strtod(text.c_str(), &end);
+        if (errno == ERANGE || end != text.c_str() + text.size())
+        {
+            return false;
+        }
+        if (!std::isfinite(value))
+        {
+            return false;
+        }
+        out = value;
+        return true;
+    }
+
     double pct(std::vector<double> const &v, double p)
     {
         if (v.empty()) return 0;
@@ -181,6 +230,11 @@ namespace
         Options opt;
         std::string telemetry_text = "on";
         bool telemetry_seen = false;
+        auto fail = [&](std::string const &message) -> Options
+        {
+            std::println(stderr, "tetris_profile_legacy_cmp: invalid option: {}", message);
+            std::exit(1);
+        };
         for (int i = 1; i < argc; ++i)
         {
             std::string a = argv[i];
@@ -193,15 +247,53 @@ namespace
                 }
                 return argv[++i];
             };
-            if (a == "--moves") opt.moves = std::strtoull(next(a).c_str(), nullptr, 10);
-            else if (a == "--level") opt.level = std::strtod(next(a).c_str(), nullptr);
-            else if (a == "--ms") opt.ms = std::strtod(next(a).c_str(), nullptr);
-            else if (a == "--seed") opt.seed = static_cast<uint32_t>(std::strtoul(next(a).c_str(), nullptr, 10));
-            else if (a == "--maxdepth") opt.maxdepth = std::strtoull(next(a).c_str(), nullptr, 10);
+            std::size_t uint_value = 0;
+            double double_value = 0;
+            if (a == "--moves")
+            {
+                if (!parse_uint_strict(next(a), uint_value)) fail(a);
+                opt.moves = uint_value;
+            }
+            else if (a == "--level")
+            {
+                if (!parse_double_strict(next(a), double_value)) fail(a);
+                opt.level = double_value;
+            }
+            else if (a == "--ms")
+            {
+                if (!parse_double_strict(next(a), double_value) || double_value < 0
+                    || double_value > max_budget_ms)
+                {
+                    fail(a);
+                }
+                opt.ms = double_value;
+            }
+            else if (a == "--seed")
+            {
+                if (!parse_uint_strict(next(a), uint_value)
+                    || uint_value > std::numeric_limits<std::uint32_t>::max())
+                {
+                    fail(a);
+                }
+                opt.seed = static_cast<uint32_t>(uint_value);
+            }
+            else if (a == "--maxdepth")
+            {
+                if (!parse_uint_strict(next(a), uint_value)) fail(a);
+                opt.maxdepth = uint_value;
+            }
             else if (a == "--no-hold") opt.hold = false;
             else if (a == "--param-file") opt.param_file = next(a);
-            else if (a == "--iters") opt.iters = std::strtoull(next(a).c_str(), nullptr, 10);
-            else if (a == "--warmup-moves") opt.warmup_moves = std::strtoull(next(a).c_str(), nullptr, 10);
+            else if (a == "--iters")
+            {
+                if (!parse_uint_strict(next(a), uint_value)) fail(a);
+                opt.iters = uint_value;
+            }
+            else if (a == "--warmup-moves")
+            {
+                if (!parse_uint_strict(next(a), uint_value)) fail(a);
+                opt.warmup_moves = uint_value;
+            }
             else if (a == "--telemetry")
             {
                 telemetry_text = next(a);
@@ -215,9 +307,13 @@ namespace
             }
             else
             {
-                std::println(stderr, "unknown option: {}", a);
-                std::exit(1);
+                fail(a);
             }
+        }
+        if (opt.maxdepth > max_supported_maxdepth)
+        {
+            std::println(stderr, "maxdepth out of supported range");
+            std::exit(1);
         }
         if (telemetry_seen)
         {
@@ -234,6 +330,11 @@ namespace
                 std::println(stderr, "telemetry must be on or off");
                 std::exit(1);
             }
+        }
+        if (opt.moves > std::numeric_limits<std::size_t>::max() - opt.warmup_moves)
+        {
+            std::println(stderr, "warmup-moves plus moves overflows");
+            std::exit(1);
         }
         return opt;
     }
@@ -266,7 +367,14 @@ int main(int argc, char **argv)
 {
     using namespace std::chrono;
     Options opt = parse_args(argc, argv);
-    time_t budget_ms = opt.ms > 0 ? static_cast<time_t>(opt.ms) : static_cast<time_t>(std::pow(100.0, opt.level / 8.0));
+    double budget_value = opt.ms > 0 ? opt.ms : std::pow(100.0, opt.level / 8.0);
+    if (!std::isfinite(budget_value) || budget_value < 0
+        || budget_value > max_budget_ms)
+    {
+        std::println(stderr, "tetris_profile_legacy_cmp: time budget is not representable");
+        return 1;
+    }
+    time_t budget_ms = static_cast<time_t>(budget_value);
 
     CmpEngine engine;
     if (!engine.prepare(10, 40))
@@ -529,7 +637,7 @@ int main(int argc, char **argv)
         acc_eval_requests, acc_eval_hits, acc_eval_calls, acc_transitions, acc_searches);
     std::println("widening {} | parents {} | raw {} | unique {} | unmatched {}",
         acc_widening, acc_parents, acc_raw, acc_unique, acc_unmatched);
-    std::println("materialized {} | reused {} | path states {} | path {:.3f} ms",
-        acc_fresh, acc_reused, acc_path_states, acc_path_ms);
+    std::println("materialized {} | recycled {} | reused {} | path states {} | path {:.3f} ms",
+        acc_fresh + acc_recycled, acc_recycled, acc_reused, acc_path_states, acc_path_ms);
     return 0;
 }

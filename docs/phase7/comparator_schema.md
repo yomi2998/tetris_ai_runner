@@ -27,7 +27,7 @@ absent columns never occur.
 | 8 | `eval_requests` | count | `Core::eval` entries per move |
 | 9 | `eval_hits` | count | Depth-table hit branch per move |
 | 10 | `eval_calls` | count | Actual policy evaluator calls per move; reproduces frozen `evals` |
-| 11 | `transitions` | count | Completed `Core::get` calls per move; reproduces frozen `gets` |
+| 11 | `transitions` | count | Completed `Core::get` calls per move; reproduces the frozen `transitions` column (counted by the wrapper named `gets` in the frozen source) |
 | 12 | `searches` | count | `Search::search` invocations per move; reproduces frozen `searches` |
 | 13 | `widening_iters` | count | `run_hold`/`run` outer-loop iterations per move |
 | 14 | `parents` | count | `build_children` executions past the version check per move (accepted expansion transitions happen here; the span intentionally nests evaluation and transition work and is reported as an overlapping aggregate diagnostic) |
@@ -82,11 +82,18 @@ with the comparator implementation before binding use.
   fixed workloads across seeds.
 - Trajectory parity is observed at process level (separate deterministic
   runs), never by comparing sequentially constructed fresh engines inside
-  one process: sequential fresh legacy engines exhibit allocation-history
-  interaction through the custom hash tables that flips selections, verified
-  identical against a flag-off build. That behavior predates this slice and
-  is outside it; the comparator binary itself runs one engine across moves
-  exactly like the frozen loop.
+  one process. Sequential fresh legacy engines in a single process can
+  disagree on selections and retained storage (first engine
+  `memory_usage=8460840` selecting `T(6,2,1)` versus second engine
+  `memory_usage=8491928` selecting `T(7,1,0)` on the empty map with piece T,
+  lookahead `TOJ`, and 4 fixed iterations), reproduced with unmodified
+  pre-7.1C sources built flag-off at `-O0` (`g++ -std=c++23 -O0 -I src`
+  over `tetris_core.cpp`, `rule_toj.cpp`, `search_tspin.cpp`, `ai_zzz.cpp`,
+  `random.cpp`; flaky across runs and rarer at `-O1`). The effect is
+  consistent with heap-reuse-dependent state in the legacy tree storage and
+  predates this slice; both profile binaries construct one engine per
+  process and advance it across moves exactly like the frozen loop, where
+  runs are bit-identical.
 - Timed comparisons never require identical trajectories.
 - Overhead evidence is reported per component where measurable; tiny
   components carry absolute bounds. Measured rates and overhead evidence are

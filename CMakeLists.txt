@@ -127,6 +127,15 @@ add_test(NAME legacy_cmp_determinism
 add_test(NAME legacy_cmp_telemetry_off
     COMMAND bash -c "$<TARGET_FILE:tetris_profile_legacy_cmp> --warmup-moves 1 --moves 3 --iters 10 --seed 3 --maxdepth 6 --telemetry off --quiet | grep -q 'telemetry=off'"
 )
+add_test(NAME legacy_cmp_rejects_garbage_maxdepth
+    COMMAND bash -c "out=$($<TARGET_FILE:tetris_profile_legacy_cmp> --maxdepth garbage --moves 2 --iters 5 --quiet 2>&1); code=$?; test $code -ne 0 && ! echo \"$out\" | grep -q '^PROFILE_CMP'"
+)
+add_test(NAME legacy_cmp_rejects_garbage_moves
+    COMMAND bash -c "out=$($<TARGET_FILE:tetris_profile_legacy_cmp> --moves xyz --quiet 2>&1); code=$?; test $code -ne 0 && ! echo \"$out\" | grep -q '^PROFILE_CMP'"
+)
+add_test(NAME legacy_cmp_rejects_wrapping_totals
+    COMMAND bash -c "out=$($<TARGET_FILE:tetris_profile_legacy_cmp> --warmup-moves 18446744073709551615 --moves 1 --quiet 2>&1); code=$?; test $code -ne 0 && ! echo \"$out\" | grep -q '^PROFILE_CMP'"
+)
 
 add_test(NAME profile_value_determinism
     COMMAND bash -c "a=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 | tr ' ' '\\n' | grep -v -E '(_ms=|_ns=|total_s|_per_s=)'); b=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 | tr ' ' '\\n' | grep -v -E '(_ms=|_ns=|total_s|_per_s=)'); test \"$a\" = \"$b\" && echo \"$a\" | grep -q '^PROFILE_V3$'"
@@ -404,7 +413,8 @@ set_tests_properties(tetris_board_tests rule_differential path_differential fast
     profile_value_telemetry_off profile_value_rejects_garbage_maxdepth
     profile_value_rejects_wrapping_totals profile_value_rejects_bad_telemetry
     legacy_cmp_tests legacy_cmp_parity_frozen legacy_cmp_determinism
-    legacy_cmp_telemetry_off
+    legacy_cmp_telemetry_off legacy_cmp_rejects_garbage_maxdepth
+    legacy_cmp_rejects_garbage_moves legacy_cmp_rejects_wrapping_totals
     raw_bench_warmup_smoke raw_bench_warmup_smoke_frozen raw_bench_warmup_smoke_frozen_plain
     raw_parity_frozen_180fix raw_parity_frozen_180off
     PROPERTIES FAIL_REGULAR_EXPRESSION "runtime error:"
