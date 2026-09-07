@@ -5,6 +5,52 @@ using namespace m_tetris;
 
 namespace search_tspin
 {
+#ifdef TETRIS_LEGACY_CMP
+    namespace
+    {
+        struct PathMarkScope
+        {
+            legacy_cmp::Observer *observer;
+            m_tetris::TetrisMap const *map;
+
+            PathMarkScope(legacy_cmp::Observer *observer, m_tetris::TetrisNodeMark *marks,
+                m_tetris::TetrisMap const *map)
+                : observer(observer)
+                , map(map)
+            {
+                if (observer != nullptr)
+                {
+                    observer->path_mark_target = marks;
+                    observer->path_marks.clear();
+                }
+            }
+
+            ~PathMarkScope()
+            {
+                if (observer == nullptr)
+                {
+                    return;
+                }
+                std::uint64_t valid = 0;
+                for (const void *marked : observer->path_marks)
+                {
+                    auto const *node = static_cast<m_tetris::TetrisNode const *>(marked);
+                    if (node->check(*map))
+                    {
+                        ++valid;
+                    }
+                }
+                observer->counts.path_valid_states = valid;
+                observer->path_mark_target = nullptr;
+                observer->path_marks.clear();
+            }
+
+            PathMarkScope(PathMarkScope const &) = delete;
+            PathMarkScope &operator=(PathMarkScope const &) = delete;
+        };
+    }
+#endif
+
     void Search::init(TetrisContext const *context, Config const *config)
     {
         context_ = context;
@@ -38,6 +84,9 @@ namespace search_tspin
 
     std::vector<char> Search::make_path(TetrisNode const *node, TetrisNodeWithTSpinType const &land_point, TetrisMap const &map)
     {
+#ifdef TETRIS_LEGACY_CMP
+        PathMarkScope cmp_path_scope(legacy_cmp::observer(), &node_mark_, &map);
+#endif
         //if (land_point.type != TSpinType::None)
         //{
         //    printf("T-SPIN %d\n", land_point.type);
@@ -48,6 +97,12 @@ namespace search_tspin
         }
         if (land_point.type == TSpinType::None && node->index_filtered == land_point->index_filtered)
         {
+#ifdef TETRIS_LEGACY_CMP
+            if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+            {
+                cmp_observer->path_marks.push_back(node);
+            }
+#endif
             return std::vector<char>();
         }
         bool allow_180 = config_->allow_180;

@@ -232,6 +232,15 @@ namespace m_tetris
         mark.version = version_;
         mark.data.first = node;
         mark.data.second = op;
+#ifdef TETRIS_LEGACY_CMP
+        if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+        {
+            if (cmp_observer->path_mark_target == this)
+            {
+                cmp_observer->path_marks.push_back(key);
+            }
+        }
+#endif
         return true;
     }
 

@@ -21,6 +21,7 @@
 #include "chash_map.h"
 #include "chash_set.h"
 #include "integer_utils.h"
+#include "legacy_cmp_observer.h"
 
 namespace m_tetris
 {
@@ -832,13 +833,44 @@ namespace m_tetris
             tree_node->clear = node->attach(context->engine, new_map);
             auto table = depth < context->tt.size() ? context->tt[depth].get() : nullptr;
             uint64_t hash = map_hash(new_map);
+#ifdef TETRIS_LEGACY_CMP
+            legacy_cmp::Observer *cmp_observer = legacy_cmp::observer();
+            std::int64_t cmp_start = 0;
+            if (cmp_observer != nullptr)
+            {
+                ++cmp_observer->counts.eval_requests;
+                cmp_start = cmp_observer->now();
+            }
+#endif
             auto [hit, slot] = table->find(hash);
             tree_node->result = slot;
             if (!hit)
             {
+#ifdef TETRIS_LEGACY_CMP
+                std::int64_t cmp_miss_start = 0;
+                if (cmp_observer != nullptr)
+                {
+                    ++cmp_observer->counts.eval_calls;
+                    cmp_miss_start = cmp_observer->now();
+                }
+#endif
                 *slot = TetrisCallAI<TetrisAI, LandPoint>::eval(*context->ai, tree_node->identity, new_map, map);
+#ifdef TETRIS_LEGACY_CMP
+                if (cmp_observer != nullptr)
+                {
+                    cmp_observer->counts.eval_miss_ns +=
+                        cmp_observer->now() - cmp_miss_start;
+                }
+#endif
                 table->set_hash(hash);
             }
+#ifdef TETRIS_LEGACY_CMP
+            else if (cmp_observer != nullptr)
+            {
+                ++cmp_observer->counts.eval_hits;
+                cmp_observer->counts.eval_hit_ns += cmp_observer->now() - cmp_start;
+            }
+#endif
         }
         template<class TreeNode>
         static double get_ratio(TetrisAI &ai)
@@ -976,6 +1008,19 @@ namespace m_tetris
                     node = free_list;
                     free_list = node->children_next;
                     --free_count;
+#ifdef TETRIS_LEGACY_CMP
+                    if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                    {
+                        if (parent == nullptr)
+                        {
+                            ++cmp_observer->counts.root_nodes;
+                        }
+                        else
+                        {
+                            ++cmp_observer->counts.recycled_nodes;
+                        }
+                    }
+#endif
                     TetrisTreeNode *subtree = node->children;
                     if (subtree != nullptr)
                     {
@@ -996,6 +1041,19 @@ namespace m_tetris
                 {
                     node_storage->emplace_back();
                     node = &node_storage->back();
+#ifdef TETRIS_LEGACY_CMP
+                    if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                    {
+                        if (parent == nullptr)
+                        {
+                            ++cmp_observer->counts.root_nodes;
+                        }
+                        else
+                        {
+                            ++cmp_observer->counts.fresh_nodes;
+                        }
+                    }
+#endif
                 }
                 node->parent = parent;
                 return node;
@@ -1349,6 +1407,12 @@ namespace m_tetris
                     {
                         child = find->second;
                         old.erase(find);
+                        #ifdef TETRIS_LEGACY_CMP
+                        if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                        {
+                            ++cmp_observer->counts.reused_nodes;
+                        }
+                        #endif
                     }
                     else
                     {
@@ -1428,6 +1492,12 @@ namespace m_tetris
                             assert(find != old.end());
                             TetrisTreeNode *child = find->second;
                             old.erase(find);
+                            #ifdef TETRIS_LEGACY_CMP
+                            if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                            {
+                                ++cmp_observer->counts.reused_nodes;
+                            }
+                            #endif
                             child->is_hold = false;
                             child->children_next = children;
                             if (children == nullptr) children_tail = child;
@@ -1466,6 +1536,12 @@ namespace m_tetris
                             {
                                 child = find->second;
                                 old.erase(find);
+                                #ifdef TETRIS_LEGACY_CMP
+                                if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                                {
+                                    ++cmp_observer->counts.reused_nodes;
+                                }
+                                #endif
                             }
                             else
                             {
@@ -1493,6 +1569,12 @@ namespace m_tetris
                                 {
                                     child = find->second;
                                     old.erase(find);
+                                    #ifdef TETRIS_LEGACY_CMP
+                                    if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                                    {
+                                        ++cmp_observer->counts.reused_nodes;
+                                    }
+                                    #endif
                                 }
                                 else
                                 {
@@ -1584,6 +1666,12 @@ namespace m_tetris
                             {
                                 child = find->second;
                                 old.erase(find);
+                                #ifdef TETRIS_LEGACY_CMP
+                                if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                                {
+                                    ++cmp_observer->counts.reused_nodes;
+                                }
+                                #endif
                             }
                             else
                             {
@@ -1604,6 +1692,12 @@ namespace m_tetris
                             {
                                 child = find->second;
                                 old.erase(find);
+                                #ifdef TETRIS_LEGACY_CMP
+                                if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                                {
+                                    ++cmp_observer->counts.reused_nodes;
+                                }
+                                #endif
                             }
                             else
                             {
@@ -1666,6 +1760,12 @@ namespace m_tetris
                         {
                             child = find->second;
                             old.erase(find);
+                            #ifdef TETRIS_LEGACY_CMP
+                            if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                            {
+                                ++cmp_observer->counts.reused_nodes;
+                            }
+                            #endif
                         }
                         else
                         {
@@ -1741,10 +1841,25 @@ namespace m_tetris
                 return children;
             }
             version = context->version;
+#ifdef TETRIS_LEGACY_CMP
+            legacy_cmp::Observer *cmp_observer = legacy_cmp::observer();
+            std::int64_t cmp_start = 0;
+            if (cmp_observer != nullptr)
+            {
+                ++cmp_observer->counts.parent_expansions;
+                cmp_start = cmp_observer->now();
+            }
+#endif
             search_children<EnableHold>(context);
             if (children == nullptr)
             {
                 is_dead = true;
+#ifdef TETRIS_LEGACY_CMP
+                if (cmp_observer != nullptr)
+                {
+                    cmp_observer->counts.parent_ns += cmp_observer->now() - cmp_start;
+                }
+#endif
                 return children;
             }
             for (auto it = children; it != nullptr; it = it->children_next)
@@ -1762,6 +1877,12 @@ namespace m_tetris
                     }
                 }
             }
+#ifdef TETRIS_LEGACY_CMP
+            if (cmp_observer != nullptr)
+            {
+                cmp_observer->counts.parent_ns += cmp_observer->now() - cmp_start;
+            }
+#endif
             return children;
         }
         template<bool EnableHold>
@@ -2215,6 +2336,12 @@ namespace m_tetris
                     break;
                 }
                 ++iter;
+                #ifdef TETRIS_LEGACY_CMP
+                if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                {
+                    ++cmp_observer->counts.widening_iters;
+                }
+                #endif
             } while (budget.kind == SearchBudget::Kind::Time ? (now = high_resolution_clock::now()) < end : iter < budget.iterations);
             auto best = root_->get_best(&local_context_);
             return best.first != nullptr ? RunResult(root_->get_best(&local_context_)) : RunResult(false);
@@ -2238,6 +2365,12 @@ namespace m_tetris
                     break;
                 }
                 ++iter;
+                #ifdef TETRIS_LEGACY_CMP
+                if (legacy_cmp::Observer *cmp_observer = legacy_cmp::observer())
+                {
+                    ++cmp_observer->counts.widening_iters;
+                }
+                #endif
             } while (budget.kind == SearchBudget::Kind::Time ? (now = high_resolution_clock::now()) < end : iter < budget.iterations);
             if (root_->hold == ' ' && local_context_.next.size() == 1 && !root_->is_hold_lock)
             {

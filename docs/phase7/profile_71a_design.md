@@ -364,7 +364,7 @@ disabled).
 
 | # | Key | Unit | Source |
 |---|---|---|---|
-| 24-28 | `emove_min_ms` `emove_med_ms` `emove_p95_ms` `emove_p99_ms` `emove_max_ms` | ms | `T_MOVE` end-to-end per-move distribution (diagnostic; scope differs from fields 3-7 by construction); numeric in both modes |
+| 24-28 | `emove_min_ms` `emove_med_ms` `emove_p95_ms` `emove_p99_ms` `emove_max_ms` | ms | `T_MOVE` end-to-end per-move distribution, where the profile end-to-end move span is `T_SETUP + T_ROOTSEARCH + T_PATH + T_APPLY`, including scenario refill and hold/queue bookkeeping (diagnostic; scope differs from fields 3-7 by construction); numeric in both modes |
 | 29 | `setup_ms` | ms | `T_SETUP` total; numeric in both modes |
 | 30 | `setup_eval_ms` | ms | Root `evaluate` subtotal inside setup; numeric in both modes |
 | 31 | `run_ms` | ms | `T_RUN` total (run-only diagnostic); numeric in both modes |

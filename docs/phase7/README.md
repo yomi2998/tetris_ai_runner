@@ -104,3 +104,55 @@ Bounded repairs only; no comparator, campaign, or cutover work.
   self-release.
 - Release smoke runs complete with zero replay failures; natural play
   produced no deaths, so death branches rest on the directed runner tests.
+
+## Slice 7.1C: supplemental legacy comparator (implementation)
+
+Bounded to observational changes and test-only support. No campaign, no
+speed claims, no baseline replacement, no legacy search/order/legality
+changes, no cutover work.
+
+### Approach
+
+- New files only for the build: `src/tetris_profile_legacy_cmp.cpp` (legacy
+  loop replicated from the frozen profile, plus per-move production
+  `make_path` timing), `src/legacy_cmp_observer.h` (attachable counters and
+  timers), `src/legacy_cmp_normalize.h` (land-point identity), and
+  `docs/phase7/comparator_schema.md` (PROFILE_CMP record contract).
+- Shared headers carry strictly additive `#ifdef TETRIS_LEGACY_CMP` hook
+  blocks (`tetris_core.h`: eval request/hit/call split, widening iterations,
+  parent expansions with overlapping aggregate timer, fresh/recycled/root
+  node counts, status-identity reuse counts; `tetris_core.cpp`: path-mark
+  recording; `search_tspin.cpp`: valid-discovered-state scope guard). The
+  flag is set on exactly the comparator and its test target, so frozen
+  builds compile zero hook code. `src/tetris_profile.cpp`, the default
+  target, and frozen artifacts are unchanged.
+- Normalization reuses the existing migration facilities
+  (`ExternalPoseTransform`, sorted-cell occupancy hashing): per-invocation
+  scope so current and hold branches never merge, O rotation collapse, T
+  spin and last-rotation channels, opaque status-bits identity for
+  unconvertible land points, which are classified under
+  `unmatched_candidates` and never silently discarded.
+- Established identities: requests equal hits plus calls; materialized
+  search children equal requests; linked survivors equal raw landings when
+  every land point links exactly one child; comparator `eval_calls`,
+  `transitions`, and `searches` reproduce frozen V2 totals exactly with
+  matching dead, game, and pool-byte columns.
+
+### Evidence
+
+- New unit tests (`tests/legacy_cmp_tests.cpp`): 44 checks, 0 failures
+  (GCC/Clang debug, sanitizer, GCC self-release): normalizer unit cases,
+  empty-board directed fixtures matching classical landing counts per piece,
+  observer count/timer identities, timers-disabled counting, single-run
+  consistency, and path-state cases including start-equals-goal.
+- New CTests: frozen work-total parity, comparator determinism, and
+  telemetry-off rows; full GCC-debug CTest 25 of 25 pass.
+- Both profile artifacts plus the comparator build under GCC and Clang
+  self-release.
+- Pre-existing limit documented in the schema: sequentially constructed
+  fresh legacy engines exhibit allocation-history interaction through the
+  custom hash tables that flips selections, verified identical against a
+  flag-off build, so parity is established at process level (separate
+  deterministic runs), never by in-process fresh-engine comparison. That
+  behavior predates this slice and is outside it; both profile binaries run
+  one engine across moves exactly like the frozen loop.

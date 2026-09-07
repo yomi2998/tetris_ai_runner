@@ -81,6 +81,17 @@ add_executable(tetris_profile_value
 target_link_libraries(tetris_profile_value PRIVATE fast_reachability)
 target_include_directories(tetris_profile_value PRIVATE src)
 
+add_executable(tetris_profile_legacy_cmp
+    src/tetris_profile_legacy_cmp.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_include_directories(tetris_profile_legacy_cmp PRIVATE src)
+target_compile_definitions(tetris_profile_legacy_cmp PRIVATE TETRIS_LEGACY_CMP)
+
 add_executable(profile_value_tests
     tests/profile_value_tests.cpp
     src/tetris_engine.cpp
@@ -94,6 +105,28 @@ add_executable(profile_value_tests
 target_link_libraries(profile_value_tests PRIVATE fast_reachability)
 target_include_directories(profile_value_tests PRIVATE src tests src/fast-reachability)
 add_test(NAME profile_value_tests COMMAND profile_value_tests)
+
+add_executable(legacy_cmp_tests
+    tests/legacy_cmp_tests.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_include_directories(legacy_cmp_tests PRIVATE src tests)
+target_compile_definitions(legacy_cmp_tests PRIVATE TETRIS_LEGACY_CMP)
+add_test(NAME legacy_cmp_tests COMMAND legacy_cmp_tests)
+
+add_test(NAME legacy_cmp_parity_frozen
+    COMMAND bash -c "cmp=$($<TARGET_FILE:tetris_profile_legacy_cmp> --warmup-moves 1 --moves 5 --iters 10 --seed 1 --maxdepth 6 --quiet); frozen=$($<TARGET_FILE:tetris_profile> --warmup-moves 1 --moves 5 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 2); val() { echo \"$1\" | tr ' ' '\\n' | grep \"^$2=\" | cut -d= -f2; }; test \"$(val \"$cmp\" eval_calls)\" = \"$(val \"$frozen\" evals)\" -a \"$(val \"$cmp\" transitions)\" = \"$(val \"$frozen\" transitions)\" -a \"$(val \"$cmp\" searches)\" = \"$(val \"$frozen\" searches)\" -a \"$(val \"$cmp\" dead_moves)\" = \"$(val \"$frozen\" dead_moves)\" -a \"$(val \"$cmp\" games)\" = \"$(val \"$frozen\" games)\" -a \"$(val \"$cmp\" node_pool_bytes)\" = \"$(val \"$frozen\" node_pool_bytes)\" -a \"$(val \"$cmp\" eval_requests)\" = \"$(( $(val \"$cmp\" eval_hits) + $(val \"$cmp\" eval_calls) ))\" -a \"$(val \"$cmp\" materialized_nodes)\" = \"$(val \"$cmp\" eval_requests)\" -a \"$(val \"$cmp\" dedup_survivors)\" = \"$(val \"$cmp\" raw_landings)\""
+)
+add_test(NAME legacy_cmp_determinism
+    COMMAND bash -c "a=$($<TARGET_FILE:tetris_profile_legacy_cmp> --warmup-moves 1 --moves 5 --iters 10 --seed 2 --maxdepth 6 --quiet | tr ' ' '\\n' | grep -v -E '(_ns=|_ms=|total_s)'); b=$($<TARGET_FILE:tetris_profile_legacy_cmp> --warmup-moves 1 --moves 5 --iters 10 --seed 2 --maxdepth 6 --quiet | tr ' ' '\\n' | grep -v -E '(_ns=|_ms=|total_s)'); test \"$a\" = \"$b\" && echo \"$a\" | grep -q '^PROFILE_CMP$'"
+)
+add_test(NAME legacy_cmp_telemetry_off
+    COMMAND bash -c "$<TARGET_FILE:tetris_profile_legacy_cmp> --warmup-moves 1 --moves 3 --iters 10 --seed 3 --maxdepth 6 --telemetry off --quiet | grep -q 'telemetry=off'"
+)
 
 add_test(NAME profile_value_determinism
     COMMAND bash -c "a=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 | tr ' ' '\\n' | grep -v -E '(_ms=|_ns=|total_s|_per_s=)'); b=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 | tr ' ' '\\n' | grep -v -E '(_ms=|_ns=|total_s|_per_s=)'); test \"$a\" = \"$b\" && echo \"$a\" | grep -q '^PROFILE_V3$'"
@@ -370,6 +403,8 @@ set_tests_properties(tetris_board_tests rule_differential path_differential fast
     fast_reachability_perft profile_value_tests profile_value_determinism profile_value_no_hold
     profile_value_telemetry_off profile_value_rejects_garbage_maxdepth
     profile_value_rejects_wrapping_totals profile_value_rejects_bad_telemetry
+    legacy_cmp_tests legacy_cmp_parity_frozen legacy_cmp_determinism
+    legacy_cmp_telemetry_off
     raw_bench_warmup_smoke raw_bench_warmup_smoke_frozen raw_bench_warmup_smoke_frozen_plain
     raw_parity_frozen_180fix raw_parity_frozen_180off
     PROPERTIES FAIL_REGULAR_EXPRESSION "runtime error:"
