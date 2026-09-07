@@ -492,3 +492,34 @@ authoritative F/A instrument, perf is the authoritative within-F instrument.
 Workload is seed 1, iters 1000, maxdepth 6 only. The probe bench is a shelf-
 board micro-workload; its production-scale counterpart is the §4 probe/hash/
 rebuild bucket, not the bench numbers directly.
+
+## Addendum: remediation round negative result (2026-09-08, coordinator)
+
+The three-bounded-task remediation round over this attribution (rule
+split timer; in-parent dedup hash set; eval-cache rebalance to
+set-associative 524,288 x 4 ways / 64 MiB) was implemented, verified
+count-safe where required (0/29 and 0/26 gated fields identical; 31/31
+CTest on four presets; tetris_engine_tests 59,182 checks), and MEASURED:
+
+- Split timer (micro-workload, zero-duplicate): apply 80.8 percent /
+  dedup 19.2 percent of the old rule scope — bounding the dedup-fix
+  upside at ~3 percent of run.
+- Eval cache: hit rate 4.812 -> 17.712 percent (eval_computed -13.55
+  percent), gated work fields identical.
+- Paired off-mode totals (three pairs, tight spreads): post/pre median
+  1.0250 (p95 1.0272) — a consistent ~2.5 percent wall-time REGRESSION.
+
+Adjudication: the round failed its wall-time gate and was REVERTED
+(working tree restored to 65ab235; pre/post binaries preserved read-only
+as tetris_profile_value.g_pre / .g_post in phase7_diag/binaries, post
+hash d21017d6...). Two mechanisms are implicated (single-sample
+hypotheses, not separated): dedup hashing costing more than the linear
+scan on small fan-outs, and the 64 MiB cache footprint polluting L3
+beyond what the hit-rate gain recovers (~1.2 s saved versus
+multi-second pollution). Consequence: these two targets are now BOUNDED
+as small-or-negative levers in this design space; future rounds need
+either structurally different mechanisms (e.g. eval memo scope changes,
+which are decision-adjacent and need partition adjudication) or
+acceptance that the remaining ~2.98x gap is distributed broadly (rule
+geometry 17.7, eval 17.1, enum 14.9, scaffold 23.3 percent) with no
+single dominant lever remaining.
