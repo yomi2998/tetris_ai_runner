@@ -138,14 +138,32 @@ namespace tetris_engine
         return v == 0.0 ? 0.0 : v;
     }
 
+    // Word-wise FNV-1a over the key fields in declaration order. Each field
+    // contributes ceil(sizeof(field)/8) 64-bit words (short fields occupy one
+    // zero-extended word); every word takes one xor/multiply step. The input
+    // set, field order, and signed-zero normalization match the former
+    // byte-wise FNV exactly, so merges (which key on equality, not layout)
+    // and every work-vector count are unchanged — only the slot mapping
+    // differs, and the table fills to capacity regardless of layout.
     inline std::uint64_t transposition_hash(TranspositionKey const &key)
     {
         std::uint64_t h = 1469598103934665603ull;
         auto mix = [&h](void const *data, std::size_t bytes) {
             auto const *p = static_cast<std::uint8_t const *>(data);
-            for (std::size_t i = 0; i < bytes; ++i)
+            while (bytes >= sizeof(std::uint64_t))
             {
-                h ^= p[i];
+                std::uint64_t word = 0;
+                __builtin_memcpy(&word, p, sizeof word);
+                h ^= word;
+                h *= 1099511628211ull;
+                p += sizeof word;
+                bytes -= sizeof word;
+            }
+            if (bytes > 0)
+            {
+                std::uint64_t word = 0;
+                __builtin_memcpy(&word, p, bytes);
+                h ^= word;
                 h *= 1099511628211ull;
             }
         };

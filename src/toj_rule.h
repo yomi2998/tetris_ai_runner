@@ -256,6 +256,22 @@ namespace tetris::toj
         std::size_t raw_landings = 0;
     };
 
+    namespace detail
+    {
+        // Canonical sort entry: the candidate plus its cells computed ONCE at
+        // insertion time. The comparator below observes identical values to
+        // the former per-comparison cells() calls, so the resulting candidate
+        // order (cells, then T-only arrival, then rotation) is unchanged
+        // while sort/dedup never recompute geometry.
+        using CandidateCellSet = std::array<std::pair<int, int>, 4>;
+
+        struct CandidateSortEntry
+        {
+            Candidate candidate{};
+            CandidateCellSet cell_set{};
+        };
+    }
+
     inline std::size_t max_candidates_per_source()
     {
         return 4 * Board::width * Board::height * 2;
@@ -271,27 +287,34 @@ namespace tetris::toj
         cfg.allow_20g = false;
         return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::optional<CandidateBatch> {
             bool const is_t = B.piece_identity == reachability::piece_id("T");
-            auto key_less = [piece, is_t](Candidate const &a, Candidate const &b) {
-                auto const ca = *cells(piece, a.placement);
-                auto const cb = *cells(piece, b.placement);
-                int const aa = is_t ? static_cast<int>(a.arrival) : 0;
-                int const ab = is_t ? static_cast<int>(b.arrival) : 0;
-                if (ca != cb)
-                {
-                    return ca < cb;
-                }
-                if (aa != ab)
-                {
-                    return aa < ab;
-                }
-                return a.placement.rotation() < b.placement.rotation();
-            };
-            auto key_equal = [piece, is_t](Candidate const &a, Candidate const &b) {
-                return *cells(piece, a.placement) == *cells(piece, b.placement)
-                    && (is_t ? static_cast<int>(a.arrival) : 0)
-                        == (is_t ? static_cast<int>(b.arrival) : 0);
-            };
-            std::size_t n = 0;
+            // Reused across calls so the hot loop performs no per-element
+            // allocation after the first fill; cleared on every entry.
+            thread_local std::vector<detail::CandidateSortEntry> scratch;
+            scratch.clear();
+            if (scratch.capacity() < out.size())
+            {
+                scratch.reserve(out.size());
+            }
+            auto key_less =
+                [is_t](detail::CandidateSortEntry const &a, detail::CandidateSortEntry const &b) {
+                    if (a.cell_set != b.cell_set)
+                    {
+                        return a.cell_set < b.cell_set;
+                    }
+                    int const aa = is_t ? static_cast<int>(a.candidate.arrival) : 0;
+                    int const ab = is_t ? static_cast<int>(b.candidate.arrival) : 0;
+                    if (aa != ab)
+                    {
+                        return aa < ab;
+                    }
+                    return a.candidate.placement.rotation() < b.candidate.placement.rotation();
+                };
+            auto key_equal =
+                [is_t](detail::CandidateSortEntry const &a, detail::CandidateSortEntry const &b) {
+                    return a.cell_set == b.cell_set
+                        && (is_t ? static_cast<int>(a.candidate.arrival) : 0)
+                            == (is_t ? static_cast<int>(b.candidate.arrival) : 0);
+                };
             std::size_t raw = 0;
             bool overflow = false;
             auto add = [&](Placement placement, ArrivalClass arrival) {
@@ -301,12 +324,15 @@ namespace tetris::toj
                 {
                     return;
                 }
-                if (n >= out.size())
+                if (scratch.size() >= out.size())
                 {
                     overflow = true;
                     return;
                 }
-                out[n++] = Candidate{placement, is_t ? arrival : ArrivalClass::Normal};
+                detail::CandidateSortEntry entry;
+                entry.candidate = Candidate{placement, is_t ? arrival : ArrivalClass::Normal};
+                entry.cell_set = *maybe_cells;
+                scratch.push_back(entry);
             };
             reachability::search::dispatch_with_height<B, 20>(board.occupancy(), board.roof(),
                 [&]<class Cut, bool Check>(Cut nb, std::integral_constant<bool, Check>) {
@@ -326,13 +352,15 @@ namespace tetris::toj
             {
                 return std::nullopt;
             }
-            std::sort(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(n), key_less);
+            std::sort(scratch.begin(), scratch.end(), key_less);
             std::size_t m = 0;
-            for (std::size_t i = 0; i < n; ++i)
+            std::size_t kept = static_cast<std::size_t>(-1);
+            for (std::size_t i = 0; i < scratch.size(); ++i)
             {
-                if (m == 0 || !key_equal(out[m - 1], out[i]))
+                if (kept == static_cast<std::size_t>(-1) || !key_equal(scratch[kept], scratch[i]))
                 {
-                    out[m++] = out[i];
+                    out[m++] = scratch[i].candidate;
+                    kept = i;
                 }
             }
             return CandidateBatch{m, raw};
