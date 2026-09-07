@@ -281,3 +281,10 @@ changes, no cutover work.
   identical); recorded counters-only bound 1.02528 reproduced to 8e-05.
   Diagnostics only — binding gates require re-frozen artifacts, the full
   campaign protocol, and the gates 8/9 legacy comparators.
+- Gates 8 and 9 measured and PASSING (`results/phase7/gate89/`, bench
+  committed at `ea6bf7f`): legacy corpus comparator on the 33-board
+  subcorpus (ASan-clean identity) gives non-T time-per-parent worst
+  0.2399 against the 1.00 bar and T per normalized semantic candidate
+  0.0422 against the 1.02 bar, plus the earlier Reference A half
+  (0.0928). Plan items 8 and 9 are now proven; both verdict documents
+  updated.

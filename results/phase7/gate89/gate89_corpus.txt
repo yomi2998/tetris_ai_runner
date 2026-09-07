@@ -1,0 +1,72 @@
+=== environment
+host icly-desktop kernel 7.2.3-1-cachyos
+cpu AMD Ryzen 7 7700 8-Core Processor
+logical_cpus 16 pin_core 7
+governor powersave
+current_freq_khz 4336060
+min_max_freq 3021308 5392872
+boost 1
+compiler g++ (GCC) 16.2.1 20260810 cmake version 4.4.3
+build_dir out/build/linux-gcc-self-release build_preset_flags -O3 -march=native -flto=2
+ordering ABBA per repetition plus a trailing A control repetitions 5
+internal_reps_per_run T 300 raw 3000 warmup 10
+binary_sha256 reference_a_frozen aa181ee7f782e9b5e48a11481ef39093a97b14b089b325abc7701ca035d39503
+binary_sha256 arrival_candidates 62b06109a5fb79e7f7c1931e6d1361c453956d7ff592e8cc644100ef3972d751
+binary_sha256 legacy_corpus_bench a513068379a7936c2d65b11cd1d612437cb5dceaeefb424f25f3b2e74ec2b72e
+binary_sha256 raw_bench_current 62a345212e50ec8bc6d30513a2d1041b7f765262b449ac2ca5d22e5d55888900
+binary_sha256 raw_bench_frozen_180fix a0b053b07d8b5f1e9a8c477c7eabfede25986ee99f91b56e61e27d5e4386dae7
+binary_sha256 raw_bench_frozen 48e19c4fc6157a63419b4e0ea550ec8a8b88187918416d4459bd3f837380a6c9
+=== current arrival versus frozen legacy search on the 33-board legacy subcorpus (gates 8/9 inputs)
+=== gates
+| Gate | Requirement | Measured | Verdict |
+|---|---|---|---|
+legacy_subcorpus_cases_current_arrival 231 (expected 231 on both sides) PASS
+legacy_subcorpus_cases_legacy_corpus 231 (expected 231 on both sides) PASS
+legacy_subcorpus_time_ratio_medians_current_over_legacy total T=0.0762 Z=0.2399 S=0.2026 J=0.2248 L=0.2022 O=0.2218 I=0.1796 (lower is better; gate 8 is every non-T piece <= 1.000)
+| Raw non-T enumeration versus frozen legacy search (33-board legacy subcorpus) | at most 1.000 per parent | worst non-T ratio 0.2399 (Z) | PASS |
+legacy_subcorpus_T_per_candidate_ratio_median 0.0422 (raw T time ratio 0.0762, T candidates-per-parent current=40.45 legacy=22.42 from each side's own CASE rows; gate 9 is <= 1.020)
+| T per normalized candidate versus frozen legacy search | at most 1.020 | T per-candidate ratio 0.0422 (raw T time ratio 0.0762, candidates-per-parent current 40.45 over 33 cases, legacy 22.42 over 33 cases) | PASS |
+| T raw time current versus legacy (informational) | none | T time ratio 0.0762 | - |
+| Perft vectors | exact | 8 of 8 in `fast_reachability_perft` | PASS |
+=== detail lines
+PROVENANCE reference_a_frozen PRODUCER reference_a_frozen refa_root=e9a90d8dbc8e2e5f513691c1c83b211097fb21eb refa_worktree=clean refa_kernel=0c35e130abb733caefababe0d08c8faf466740e7 root=510b35668db19a3c94e5adbe7ae9f79a63d1fa1f root_worktree= M CMakeLists.txt, M src/arrival_candidates.cpp, M tests/reach_corpus.h, M tests/run_perf_gate.py,?? tests/legacy_corpus_bench.cpp kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 refa_src_search_reachability_search.cpp=58f6bda895994508836c01d7cea381d478eef379837f253fbda4c841d70ff6cc refa_src_fast-reachability_search.hpp=853d662aea2e0a84b0cbe23fc17a022b41d1d9a3fe319d0a187e9775f3d54488 tests_reference_a_frozen_main.cpp=769ca3cd01d5c851e07403535cd35ad29d1bb84b94aeb8bb3b0ea5ba10650e29 src_candidate_format.h=e83b373879ef8a9d79c704964ce23131ceeb5cc848d6dc8131be516680d069d9
+PROVENANCE current_arrival PRODUCER current_arrival root=ea6bf7f41ad516a24cddbdc605b530b3ad51dae6 root_worktree=clean kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 src_fast-reachability_search.hpp=76b2460769f95ef6cebf20441fe80140a54055ae21587f17fea18994289e092c src_arrival_candidates.cpp=d0819c0d57e50021c9a03d99b292697c5a8fd2306e6ee1a1d7698c3a6baf41fc src_candidate_format.h=e83b373879ef8a9d79c704964ce23131ceeb5cc848d6dc8131be516680d069d9
+PROVENANCE legacy_corpus PRODUCER legacy_corpus root=ea6bf7f41ad516a24cddbdc605b530b3ad51dae6 root_worktree=clean kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 tests_legacy_corpus_bench.cpp=9bdb87ff5a8dc04ff62015b9f20ddcbd8eef95d27a3bbc9f1498ce787243fbea tests_reach_corpus.h=69b6b24d1aba2313e01268dce720e2defc95abc9897f8fa39dd097e781b9f69d src_candidate_format.h=e83b373879ef8a9d79c704964ce23131ceeb5cc848d6dc8131be516680d069d9 src_legacy_cmp_normalize.h=027e735596e941de3b2dfac51d8129ee1f51431a9fd5e159e7bfbf6c83bf02ab src_search_tspin.h=205a87050f700d0ae71abeab3dc54808f462c910483e8988b6191c001e7ee8b6 src_search_tspin.cpp=1356f08dcd925ba2d95ad957f65f91a0d297e4011e6b2e8a89e1716cc6bc735b src_tetris_core.h=522737ac049f3bbf8537b3c4f739ccaae9bd799a87e7539ab9a3e97f0aa82df5 src_tetris_core.cpp=9bbeda680e3aa103fbb28fea6d20e749482f71083d77309a6393c135409512c3
+PROVENANCE current_raw PRODUCER current_raw root=510b35668db19a3c94e5adbe7ae9f79a63d1fa1f root_worktree= M CMakeLists.txt, M src/arrival_candidates.cpp, M tests/reach_corpus.h, M tests/run_perf_gate.py,?? tests/legacy_corpus_bench.cpp kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 src_fast-reachability_search.hpp=76b2460769f95ef6cebf20441fe80140a54055ae21587f17fea18994289e092c tests_raw_bench_main.cpp=98f63ffc5c78bf6b619c4be5bfd6b970f9e12e708f7f536329781c640671312b
+PROVENANCE frozen_180fix_raw PRODUCER frozen_180fix_raw root=510b35668db19a3c94e5adbe7ae9f79a63d1fa1f root_worktree= M CMakeLists.txt, M src/arrival_candidates.cpp, M tests/reach_corpus.h, M tests/run_perf_gate.py,?? tests/legacy_corpus_bench.cpp kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 tests_frozen_0c35e13_180fix_search.hpp=e7d4473b37d766fa7932925f23578058fa1098684fa74fb82cb60a73a0cb3b1b tests_raw_bench_main.cpp=98f63ffc5c78bf6b619c4be5bfd6b970f9e12e708f7f536329781c640671312b
+PROVENANCE frozen_raw PRODUCER frozen_raw root=510b35668db19a3c94e5adbe7ae9f79a63d1fa1f root_worktree= M CMakeLists.txt, M src/arrival_candidates.cpp, M tests/reach_corpus.h, M tests/run_perf_gate.py,?? tests/legacy_corpus_bench.cpp kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 tests_frozen_0c35e13_search.hpp=853d662aea2e0a84b0cbe23fc17a022b41d1d9a3fe319d0a187e9775f3d54488 tests_raw_bench_main.cpp=98f63ffc5c78bf6b619c4be5bfd6b970f9e12e708f7f536329781c640671312b
+current_arrivalvslegacy_corpus seq=00 side=A T=263.9+0.0 Z=301.8+0.0 S=284.1+0.0 J=308.5+0.0 L=271.8+0.0 O=68.5+0.0 I=352.1+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=01 side=B T=3392.0+0.0 Z=1234.6+0.0 S=1404.4+0.0 J=1356.8+0.0 L=1344.7+0.0 O=300.4+0.0 I=1982.1+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=02 side=B T=3406.2+0.0 Z=1237.0+0.0 S=1416.3+0.0 J=1391.0+0.0 L=1342.8+0.0 O=308.0+0.0 I=2018.4+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=03 side=A T=262.6+0.0 Z=300.6+0.0 S=283.4+0.0 J=309.3+0.0 L=273.7+0.0 O=69.7+0.0 I=354.2+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=04 side=A T=275.5+0.0 Z=323.6+0.0 S=306.8+0.0 J=325.7+0.0 L=290.5+0.0 O=69.3+0.0 I=393.2+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=05 side=B T=3463.6+0.0 Z=1271.1+0.0 S=1439.5+0.0 J=1413.8+0.0 L=1385.4+0.0 O=308.9+0.0 I=2057.8+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=06 side=B T=2909.3+0.0 Z=1076.2+0.0 S=1233.2+0.0 J=1199.6+0.0 L=1191.3+0.0 O=262.1+0.0 I=1770.6+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=07 side=A T=217.0+0.0 Z=247.8+0.0 S=234.8+0.0 J=252.6+0.0 L=228.1+0.0 O=56.7+0.0 I=294.5+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=08 side=A T=217.3+0.0 Z=251.7+0.0 S=234.8+0.0 J=301.1+0.0 L=225.1+0.0 O=56.7+0.0 I=293.6+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=09 side=B T=2906.1+0.0 Z=1052.8+0.0 S=1200.6+0.0 J=1161.1+0.0 L=1153.6+0.0 O=258.5+0.0 I=1708.5+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=10 side=B T=2894.8+0.0 Z=1042.9+0.0 S=1202.9+0.0 J=1162.2+0.0 L=1147.7+0.0 O=256.8+0.0 I=1691.0+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=11 side=A T=218.4+0.0 Z=251.0+0.0 S=254.9+0.0 J=274.3+0.0 L=240.3+0.0 O=57.6+0.0 I=321.8+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=12 side=A T=218.5+0.0 Z=252.0+0.0 S=237.1+0.0 J=257.0+0.0 L=225.0+0.0 O=56.7+0.0 I=294.2+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=13 side=B T=2993.3+0.0 Z=1116.9+0.0 S=1252.9+0.0 J=1229.4+0.0 L=1196.2+0.0 O=261.0+0.0 I=1806.0+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=14 side=B T=2907.5+0.0 Z=1059.9+0.0 S=1205.3+0.0 J=1169.9+0.0 L=1138.2+0.0 O=256.5+0.0 I=1703.4+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=15 side=A T=222.5+0.0 Z=255.8+0.0 S=250.4+0.0 J=258.3+0.0 L=227.7+0.0 O=57.9+0.0 I=314.3+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=16 side=A T=218.9+0.0 Z=253.4+0.0 S=281.6+0.0 J=308.1+0.0 L=272.9+0.0 O=56.8+0.0 I=340.5+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=17 side=B T=2924.2+0.0 Z=1071.0+0.0 S=1216.5+0.0 J=1175.6+0.0 L=1155.4+0.0 O=257.7+0.0 I=1723.9+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=18 side=B T=2904.9+0.0 Z=1073.3+0.0 S=1226.1+0.0 J=1192.9+0.0 L=1170.2+0.0 O=256.1+0.0 I=1748.6+0.0 | CORPUS legacy_corpus cases 231 candidates 3700 461f648c2699fe5f
+current_arrivalvslegacy_corpus seq=19 side=A T=225.1+0.0 Z=252.6+0.0 S=239.7+0.0 J=259.0+0.0 L=230.5+0.0 O=60.2+0.0 I=297.0+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+current_arrivalvslegacy_corpus seq=20 side=A T=230.0+0.0 Z=253.5+0.0 S=241.2+0.0 J=260.3+0.0 L=228.9+0.0 O=57.3+0.0 I=298.7+0.0 | CORPUS current_arrival cases 231 candidates 4346 4c3b405583f2b953
+RATIO current_arrival/legacy_corpus T total 0.0775 0.0773 0.0751 0.0747 0.0762 median=0.0762
+RATIO current_arrival/legacy_corpus T search 0.0775 0.0773 0.0751 0.0747 0.0762 median=0.0762
+RATIO current_arrival/legacy_corpus Z total 0.2437 0.2434 0.2399 0.2333 0.2360 median=0.2399
+RATIO current_arrival/legacy_corpus Z search 0.2437 0.2434 0.2399 0.2333 0.2360 median=0.2399
+RATIO current_arrival/legacy_corpus S total 0.2012 0.2026 0.2037 0.1983 0.2134 median=0.2026
+RATIO current_arrival/legacy_corpus S search 0.2012 0.2026 0.2037 0.1983 0.2134 median=0.2026
+RATIO current_arrival/legacy_corpus J total 0.2248 0.2213 0.2477 0.2148 0.2394 median=0.2248
+RATIO current_arrival/legacy_corpus J search 0.2248 0.2213 0.2477 0.2148 0.2394 median=0.2248
+RATIO current_arrival/legacy_corpus L total 0.2030 0.2013 0.2022 0.1939 0.2165 median=0.2022
+RATIO current_arrival/legacy_corpus L search 0.2030 0.2013 0.2022 0.1939 0.2165 median=0.2022
+RATIO current_arrival/legacy_corpus O total 0.2271 0.2207 0.2218 0.2214 0.2278 median=0.2218
+RATIO current_arrival/legacy_corpus O search 0.2271 0.2207 0.2218 0.2214 0.2278 median=0.2218
+RATIO current_arrival/legacy_corpus I total 0.1765 0.1796 0.1810 0.1734 0.1836 median=0.1796
+RATIO current_arrival/legacy_corpus I search 0.1765 0.1796 0.1810 0.1734 0.1836 median=0.1796

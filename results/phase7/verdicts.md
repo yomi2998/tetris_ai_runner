@@ -132,6 +132,11 @@ harness or the CMake target set, so both items are UNPROVEN, not PASS.
   build, and the old executable is absent. Old-binary reproducibility
   cannot be claimed without an immutable copy; the raw rows and manifest
   remain preserved as collected.
+- RESOLVED 2026-09-07: items 8 and 9 have since been measured against a
+  frozen legacy corpus comparator and PASS with large margins
+  (`results/phase7/gate89/`, commit `ea6bf7f`; gate 8 worst 0.2399 vs
+  1.00, gate 9 T per normalized candidate 0.0422 vs 1.02). See
+  `results/phase7/recampaign_verdicts.md`.
 
 ## Gate 7 (seed diagnostics)
 

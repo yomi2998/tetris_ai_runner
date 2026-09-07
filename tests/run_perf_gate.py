@@ -12,6 +12,7 @@ REPS = int(os.environ.get("PERF_GATE_REPS", "5"))
 ITERS_T = os.environ.get("PERF_GATE_ITERS_T", "60")
 ITERS_RAW = os.environ.get("PERF_GATE_ITERS_RAW", "600")
 WARMUP = os.environ.get("PERF_GATE_WARMUP", "10")
+ONLY = [part.strip() for part in os.environ.get("PERF_GATE_ONLY", "").split(",") if part.strip()]
 
 PIECES = "TZSJLOI"
 
@@ -63,6 +64,10 @@ LABELS = {}
 
 def extra_label(binary):
     return LABELS.get(binary, "unknown")
+
+
+def enabled(label_a, label_b):
+    return not ONLY or f"{label_a}vs{label_b}" in ONLY
 
 
 def sequence(label_a, bin_a, label_b, bin_b, extra, iters, raw_lines):
@@ -142,93 +147,112 @@ def main():
             ("raw_bench_frozen", "frozen_raw")):
         provenance(binary, name, raw_lines)
 
-    print("=== T semantic enumeration versus Reference A (production flags)")
-    obs, _ = sequence("current_arrival", "arrival_candidates", "reference_a_frozen",
-        "reference_a_frozen", [], ITERS_T, raw_lines)
-    t_ratios = summarize(obs, "current_arrival", "reference_a_frozen", raw_lines)
+    t_ratios = None
+    if enabled("current_arrival", "reference_a_frozen"):
+        print("=== T semantic enumeration versus Reference A (production flags)")
+        obs, _ = sequence("current_arrival", "arrival_candidates", "reference_a_frozen",
+            "reference_a_frozen", [], ITERS_T, raw_lines)
+        t_ratios = summarize(obs, "current_arrival", "reference_a_frozen", raw_lines)
 
-    print("=== raw BFS versus frozen 0c35e13 with the isolated 180 fix (production flags)")
-    obs, _ = sequence("current_raw", "raw_bench_current", "frozen_180fix_raw",
-        "raw_bench_frozen_180fix", [], ITERS_RAW, raw_lines)
-    raw_ratios = summarize(obs, "current_raw", "frozen_180fix_raw", raw_lines)
+    raw_ratios = None
+    if enabled("current_raw", "frozen_180fix_raw"):
+        print("=== raw BFS versus frozen 0c35e13 with the isolated 180 fix (production flags)")
+        obs, _ = sequence("current_raw", "raw_bench_current", "frozen_180fix_raw",
+            "raw_bench_frozen_180fix", [], ITERS_RAW, raw_lines)
+        raw_ratios = summarize(obs, "current_raw", "frozen_180fix_raw", raw_lines)
 
-    print("=== raw BFS versus plain frozen 0c35e13 with 180 disabled on both sides")
-    obs, _ = sequence("current_raw", "raw_bench_current", "frozen_raw",
-        "raw_bench_frozen", ["--no-180"], ITERS_RAW, raw_lines)
-    no180_ratios = summarize(obs, "current_raw", "frozen_raw", raw_lines)
+    no180_ratios = None
+    if enabled("current_raw", "frozen_raw"):
+        print("=== raw BFS versus plain frozen 0c35e13 with 180 disabled on both sides")
+        obs, _ = sequence("current_raw", "raw_bench_current", "frozen_raw",
+            "raw_bench_frozen", ["--no-180"], ITERS_RAW, raw_lines)
+        no180_ratios = summarize(obs, "current_raw", "frozen_raw", raw_lines)
 
-    print("=== current arrival versus frozen legacy search on the 33-board legacy subcorpus (gates 8/9 inputs)")
-    obs, sub_cases = sequence("current_arrival", "arrival_candidates", "legacy_corpus",
-        "legacy_corpus_bench", ["--legacy-subcorpus"], ITERS_T, raw_lines)
-    sub_ratios = summarize(obs, "current_arrival", "legacy_corpus", raw_lines)
+    sub_ratios = None
+    sub_cases = None
+    if enabled("current_arrival", "legacy_corpus"):
+        print("=== current arrival versus frozen legacy search on the 33-board legacy subcorpus (gates 8/9 inputs)")
+        obs, sub_cases = sequence("current_arrival", "arrival_candidates", "legacy_corpus",
+            "legacy_corpus_bench", ["--legacy-subcorpus"], ITERS_T, raw_lines)
+        sub_ratios = summarize(obs, "current_arrival", "legacy_corpus", raw_lines)
 
     print("=== gates")
-    t_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in t_ratios.items()}
-    print("time_ratio_medians_current_over_reference_a",
-        " ".join(f"{piece}={t_medians[piece][0]:.4f}" for piece in PIECES),
-        "(lower is better; gate is T <= 0.500)",
-        "PASS" if t_medians["T"][0] <= 0.5 else "FAIL")
-    print("speedup_medians_reference_a_over_current",
-        " ".join(f"{piece}={1.0 / t_medians[piece][0]:.3f}" for piece in PIECES),
-        "(times reported include board preparation and candidate normalization on both sides)")
-    raw_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in raw_ratios.items()}
-    for kind, label in ((0, "total"), (1, "search_only")):
-        print("raw_ratio_medians_current_over_frozen_180fix", label,
-            " ".join(f"{piece}={raw_medians[piece][kind]:.4f}" for piece in PIECES),
-            "(lower is better; gate is every non-T piece <= 1.020)",
-            "PASS" if max(raw_medians[p][kind] for p in PIECES if p != "T") <= 1.02 else "FAIL")
+    t_medians = None
+    if t_ratios is not None:
+        t_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in t_ratios.items()}
+        print("time_ratio_medians_current_over_reference_a",
+            " ".join(f"{piece}={t_medians[piece][0]:.4f}" for piece in PIECES),
+            "(lower is better; gate is T <= 0.500)",
+            "PASS" if t_medians["T"][0] <= 0.5 else "FAIL")
+        print("speedup_medians_reference_a_over_current",
+            " ".join(f"{piece}={1.0 / t_medians[piece][0]:.3f}" for piece in PIECES),
+            "(times reported include board preparation and candidate normalization on both sides)")
+    raw_medians = None
+    if raw_ratios is not None:
+        raw_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in raw_ratios.items()}
+        for kind, label in ((0, "total"), (1, "search_only")):
+            print("raw_ratio_medians_current_over_frozen_180fix", label,
+                " ".join(f"{piece}={raw_medians[piece][kind]:.4f}" for piece in PIECES),
+                "(lower is better; gate is every non-T piece <= 1.020)",
+                "PASS" if max(raw_medians[p][kind] for p in PIECES if p != "T") <= 1.02 else "FAIL")
     non_t = [p for p in PIECES if p != "T"]
-    worst_total = max(non_t, key=lambda p: raw_medians[p][0])
-    worst_search = max(non_t, key=lambda p: raw_medians[p][1])
     print("| Gate | Requirement | Measured | Verdict |")
     print("|---|---|---|---|")
-    print(f"| T semantic enumeration versus Reference A | at least 2x faster | T time ratio "
-        f"{t_medians['T'][0]:.4f}, Reference A is {1.0 / t_medians['T'][0]:.2f}x slower | "
-        f"{'PASS' if t_medians['T'][0] <= 0.5 else 'FAIL'} |")
-    print(f"| Raw non-T BFS regression | at most 1.020 versus the equal-semantics frozen comparator | "
-        f"worst total ratio {raw_medians[worst_total][0]:.4f} ({worst_total}), worst search-only "
-        f"{raw_medians[worst_search][1]:.4f} ({worst_search}) | "
-        f"{'PASS' if max(raw_medians[p][0] for p in non_t) <= 1.02 and max(raw_medians[p][1] for p in non_t) <= 1.02 else 'FAIL'} |")
-    no180_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in no180_ratios.items()}
-    worst_no180 = max(non_t, key=lambda p: no180_medians[p][0])
-    worst_no180_search = max(non_t, key=lambda p: no180_medians[p][1])
-    print(f"| Raw non-T at 180 off versus plain frozen | informational | worst total ratio "
-        f"{no180_medians[worst_no180][0]:.4f} ({worst_no180}), worst search-only "
-        f"{no180_medians[worst_no180_search][1]:.4f} ({worst_no180_search}) | "
-        f"{'PASS' if max(no180_medians[p][0] for p in non_t) <= 1.02 else 'FAIL'} |")
-    sub_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in sub_ratios.items()}
-    for side, label in (("A", "current_arrival"), ("B", "legacy_corpus")):
-        sub_n = sum(sub_cases[side][piece][1] for piece in PIECES)
-        print(f"legacy_subcorpus_cases_{label}", sub_n,
-            "(expected 231 on both sides)", "PASS" if sub_n == 231 else "FAIL")
-    print("legacy_subcorpus_time_ratio_medians_current_over_legacy total",
-        " ".join(f"{piece}={sub_medians[piece][0]:.4f}" for piece in PIECES),
-        "(lower is better; gate 8 is every non-T piece <= 1.000)")
-    worst8 = max(non_t, key=lambda p: sub_medians[p][0])
-    print(f"| Raw non-T enumeration versus frozen legacy search (33-board legacy subcorpus) | at most 1.000 per parent | "
-        f"worst non-T ratio {sub_medians[worst8][0]:.4f} ({worst8}) | "
-        f"{'PASS' if max(sub_medians[p][0] for p in non_t) <= 1.00 else 'FAIL'} |")
-    cpp_a = sub_cases["A"]["T"][0] / sub_cases["A"]["T"][1]
-    cpp_b = sub_cases["B"]["T"][0] / sub_cases["B"]["T"][1]
-    t_time_vals, _ = sub_ratios["T"]
-    t_time_median = statistics.median(t_time_vals)
-    t_pc_vals = [value * (cpp_b / cpp_a) for value in t_time_vals]
-    t_pc_median = statistics.median(t_pc_vals)
-    print(f"legacy_subcorpus_T_per_candidate_ratio_median {t_pc_median:.4f}",
-        f"(raw T time ratio {t_time_median:.4f}, T candidates-per-parent "
-        f"current={cpp_a:.2f} legacy={cpp_b:.2f} from each side's own CASE rows; "
-        f"gate 9 is <= 1.020)")
-    print(f"| T per normalized candidate versus frozen legacy search | at most 1.020 | "
-        f"T per-candidate ratio {t_pc_median:.4f} (raw T time ratio {t_time_median:.4f}, "
-        f"candidates-per-parent current {cpp_a:.2f} over {sub_cases['A']['T'][1]} cases, "
-        f"legacy {cpp_b:.2f} over {sub_cases['B']['T'][1]} cases) | "
-        f"{'PASS' if t_pc_median <= 1.02 else 'FAIL'} |")
-    print(f"| T raw time current versus legacy (informational) | none | "
-        f"T time ratio {t_time_median:.4f} | - |")
+    if t_medians is not None:
+        print(f"| T semantic enumeration versus Reference A | at least 2x faster | T time ratio "
+            f"{t_medians['T'][0]:.4f}, Reference A is {1.0 / t_medians['T'][0]:.2f}x slower | "
+            f"{'PASS' if t_medians['T'][0] <= 0.5 else 'FAIL'} |")
+    if raw_medians is not None:
+        worst_total = max(non_t, key=lambda p: raw_medians[p][0])
+        worst_search = max(non_t, key=lambda p: raw_medians[p][1])
+        print(f"| Raw non-T BFS regression | at most 1.020 versus the equal-semantics frozen comparator | "
+            f"worst total ratio {raw_medians[worst_total][0]:.4f} ({worst_total}), worst search-only "
+            f"{raw_medians[worst_search][1]:.4f} ({worst_search}) | "
+            f"{'PASS' if max(raw_medians[p][0] for p in non_t) <= 1.02 and max(raw_medians[p][1] for p in non_t) <= 1.02 else 'FAIL'} |")
+    no180_medians = None
+    if no180_ratios is not None:
+        no180_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in no180_ratios.items()}
+        worst_no180 = max(non_t, key=lambda p: no180_medians[p][0])
+        worst_no180_search = max(non_t, key=lambda p: no180_medians[p][1])
+        print(f"| Raw non-T at 180 off versus plain frozen | informational | worst total ratio "
+            f"{no180_medians[worst_no180][0]:.4f} ({worst_no180}), worst search-only "
+            f"{no180_medians[worst_no180_search][1]:.4f} ({worst_no180_search}) | "
+            f"{'PASS' if max(no180_medians[p][0] for p in non_t) <= 1.02 else 'FAIL'} |")
+    if sub_ratios is not None:
+        sub_medians = {piece: (statistics.median(values), statistics.median(search)) for piece, (values, search) in sub_ratios.items()}
+        for side, label in (("A", "current_arrival"), ("B", "legacy_corpus")):
+            sub_n = sum(sub_cases[side][piece][1] for piece in PIECES)
+            print(f"legacy_subcorpus_cases_{label}", sub_n,
+                "(expected 231 on both sides)", "PASS" if sub_n == 231 else "FAIL")
+        print("legacy_subcorpus_time_ratio_medians_current_over_legacy total",
+            " ".join(f"{piece}={sub_medians[piece][0]:.4f}" for piece in PIECES),
+            "(lower is better; gate 8 is every non-T piece <= 1.000)")
+        worst8 = max(non_t, key=lambda p: sub_medians[p][0])
+        print(f"| Raw non-T enumeration versus frozen legacy search (33-board legacy subcorpus) | at most 1.000 per parent | "
+            f"worst non-T ratio {sub_medians[worst8][0]:.4f} ({worst8}) | "
+            f"{'PASS' if max(sub_medians[p][0] for p in non_t) <= 1.00 else 'FAIL'} |")
+        cpp_a = sub_cases["A"]["T"][0] / sub_cases["A"]["T"][1]
+        cpp_b = sub_cases["B"]["T"][0] / sub_cases["B"]["T"][1]
+        t_time_vals, _ = sub_ratios["T"]
+        t_time_median = statistics.median(t_time_vals)
+        t_pc_vals = [value * (cpp_b / cpp_a) for value in t_time_vals]
+        t_pc_median = statistics.median(t_pc_vals)
+        print(f"legacy_subcorpus_T_per_candidate_ratio_median {t_pc_median:.4f}",
+            f"(raw T time ratio {t_time_median:.4f}, T candidates-per-parent "
+            f"current={cpp_a:.2f} legacy={cpp_b:.2f} from each side's own CASE rows; "
+            f"gate 9 is <= 1.020)")
+        print(f"| T per normalized candidate versus frozen legacy search | at most 1.020 | "
+            f"T per-candidate ratio {t_pc_median:.4f} (raw T time ratio {t_time_median:.4f}, "
+            f"candidates-per-parent current {cpp_a:.2f} over {sub_cases['A']['T'][1]} cases, "
+            f"legacy {cpp_b:.2f} over {sub_cases['B']['T'][1]} cases) | "
+            f"{'PASS' if t_pc_median <= 1.02 else 'FAIL'} |")
+        print(f"| T raw time current versus legacy (informational) | none | "
+            f"T time ratio {t_time_median:.4f} | - |")
     print("| Perft vectors | exact | 8 of 8 in `fast_reachability_perft` | PASS |")
-    for kind, label in ((0, "total"), (1, "search_only")):
-        print("raw_ratio_medians_current_over_plain_frozen_180off", label,
-            " ".join(f"{piece}={no180_medians[piece][kind]:.4f}" for piece in PIECES))
+    if no180_medians is not None:
+        for kind, label in ((0, "total"), (1, "search_only")):
+            print("raw_ratio_medians_current_over_plain_frozen_180off", label,
+                " ".join(f"{piece}={no180_medians[piece][kind]:.4f}" for piece in PIECES))
     print("=== detail lines")
     for line in raw_lines:
         print(line)

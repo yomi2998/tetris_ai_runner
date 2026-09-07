@@ -142,3 +142,17 @@ evidence for the comparisons they actually measured; nothing was re-run or
 re-measured for this correction. The audit tooling that establishes this is
 `tests/audit_phase7_campaign.py` (repaired 2026-09-07; see
 `docs/phase7/audit_71c_72e.md`).
+
+RESOLVED 2026-09-07 (later the same day): gates 8 and 9 are now MEASURED
+and PASSING. The frozen legacy corpus comparator (`legacy_corpus_bench`,
+commit `ea6bf7f`) ran against `arrival_candidates --legacy-subcorpus` on
+the 33-board legacy-comparable subcorpus — ASan-clean board identity
+(231/231 BOARDCASE via an independent recomputation), pinned core 7,
+five ABBA pairs, 300 internal reps (`results/phase7/gate89/`):
+gate 8 non-T time-per-parent current/legacy worst piece 0.2399 (Z), all
+pieces at or below 0.24 against the 1.00 bar; gate 9 T per normalized
+semantic candidate median 0.0422 against the 1.02 bar (per-side T
+CASE-row counts 1335/33 current vs 740/33 legacy), with the Reference A
+half previously proven (0.0928, 10.77x). Measured on the post-epoch
+tree; the binding re-campaign will re-freeze and re-run them with the
+rest of the gates.

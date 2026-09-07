@@ -1,0 +1,100 @@
+# MANIFEST — gates 8/9 corpus measurement (phase 7, `legacy_corpus_bench`)
+
+## Environment
+- host: icly-desktop, kernel 7.2.3-1-cachyos
+- cpu: AMD Ryzen 7 7700 8-Core Processor, logical_cpus 16, pin_core 7
+- governor (core 7): powersave
+- current_freq_khz (core 7, at run start): 4336060
+- min_max_freq: 3021308 5392872; boost 1
+- compiler: g++ (GCC) 16.2.1 20260810; cmake version 4.4.3
+- build preset flags (linux-gcc-self-release): -O3 -march=native -flto=2
+- machine state at launch: idle (loadavg 0.91 0.92 0.97, 16 cpus); nothing else run
+  concurrently with the timed invocation. Timed invocations are taskset-pinned
+  internally via PERF_GATE_CORE.
+
+## Gate-run environment variables
+- PERF_GATE_CORE=7
+- PERF_GATE_REPS=5 (5 ABBA repetitions plus trailing A control = 21 invocations)
+- PERF_GATE_ITERS_T=300, PERF_GATE_ITERS_RAW=3000, PERF_GATE_WARMUP=10 (default)
+- PERF_GATE_ONLY=current_arrivalvslegacy_corpus (the exact `labelAvslabelB` sequence
+  label defined by tests/run_perf_gate.py for the gates 8/9 sequence)
+
+## Git
+- HEAD: ea6bf7f41ad516a24cddbdc605b530b3ad51dae6 (branch fast-reachability-migration)
+- Tracked tree at measurement time: clean except the single authorized harness edit
+  (M tests/run_perf_gate.py). Untracked files present (docs/*.md notes,
+  results/phase7/gate89/, tests/__pycache__ since removed) — none enter the
+  PRODUCER provenance scope (`git status --porcelain -- src tests cmake CMakeLists.txt`).
+
+## Binaries actually exercised (rebuilt from clean ea6bf7f before the run)
+- out/build/linux-gcc-self-release/legacy_corpus_bench
+  sha256 a513068379a7936c2d65b11cd1d612437cb5dceaeefb424f25f3b2e74ec2b72e
+  PRODUCER stamp: root=ea6bf7f41ad516a24cddbdc605b530b3ad51dae6 root_worktree=clean
+  kernel=1670768751a9b0b397c892dd2d6854df8c42bac9 (plus per-source hashes; see output)
+- out/build/linux-gcc-self-release/arrival_candidates
+  sha256 62b06109a5fb79e7f7c1931e6d1361c453956d7ff592e8cc644100ef3972d751
+  PRODUCER stamp: root=ea6bf7f41ad516a24cddbdc605b530b3ad51dae6 root_worktree=clean
+  kernel=1670768751a9b0b397c892dd2d6854df8c42bac9
+- out/build/san/legacy_corpus_bench (ASan+UBSan identity build, TETRIS_SANITIZERS=ON)
+  sha256 9845a783c052254b005ba19563adbb1ae2f7bde222aa2041afb649438c42467b
+
+## Binaries NOT exercised (stale, listed only in the output header / detail lines)
+- reference_a_frozen aa181ee7f782e9b5e48a11481ef39093a97b14b089b325abc7701ca035d39503
+- raw_bench_current 62a345212e50ec8bc6d30513a2d1041b7f765262b449ac2ca5d22e5d55888900
+- raw_bench_frozen_180fix a0b053b07d8b5f1e9a8c477c7eabfede25986ee99f91b56e61e27d5e4386dae7
+- raw_bench_frozen 48e19c4fc6157a63419b4e0ea550ec8a8b88187918416d4459bd3f837380a6c9
+- Their PRODUCER stamps still read root=510b356-dirty (pre-ea6bf7f build). They were
+  not invoked (PERF_GATE_ONLY filter) and do not affect gates 8/9.
+
+## Rebuild note (why exercised binaries differ from the earlier build dir state)
+- The release dir previously held legacy_corpus_bench/arrival_candidates built from a
+  510b356+dirty tree (stamps: root=510b356, M CMakeLists.txt, M
+  src/arrival_candidates.cpp, M tests/reach_corpus.h, M tests/run_perf_gate.py,
+  ?? tests/legacy_corpus_bench.cpp). Those bytes did not correspond to committed ea6bf7f.
+- Procedure: saved the harness diff, `git stash push -- tests/run_perf_gate.py`,
+  removed tests/__pycache__, verified `git status --porcelain -- src tests cmake
+  CMakeLists.txt` empty, re-configured out/build/linux-gcc-self-release (cache flags
+  unchanged), rebuilt targets arrival_candidates + legacy_corpus_bench, verified both
+  stamps read root=ea6bf7f + root_worktree=clean, `git stash pop` (live diff sha256
+  identical to the saved file). Measurement plumbing only; no source content changed.
+
+## Harness edit (authorized, measurement plumbing only)
+- File: tests/run_perf_gate.py (the only tracked modification; uncommitted)
+- Diff record: results/phase7/gate89/harness_filter.diff
+  sha256 321955d44d5014820693e52266dd769019d041ed0c706136c06cd115ea2b1320
+- Content: PERF_GATE_ONLY env parsing + enabled(label_a, label_b) helper; each of the
+  4 sequences and its dependent gate rows guarded; unset (default) preserves the
+  original execution order and print statements (verified by inspection: no string
+  literal altered; the 102+/78- line churn is pure re-indentation under guards).
+  Zero-sequence smoke test (PERF_GATE_ONLY=no_such_sequence) exited 0.
+
+## ASan identity run (TASK 1)
+- Command: ./out/build/san/legacy_corpus_bench --asan-identity --reps 2 --warmup 1
+- Exit code: 0. BOARDCASE lines: 231/231. CORPUS: cases 231 candidates 3700.
+  UNMATCHED legacy_corpus 0. Sanitizer diagnostics: none.
+- BOARDCASE sha256: 250e3c55939bf8d7700dc4fceca4bf9c04b196358a56852208800355e05e27d6
+- Independent recomputation (/tmp/opencode/recompute_boardcase.cpp, corpus grid +
+  FNV-1a over rows 0..39, no legacy engine): IDENTICAL 231/231.
+- Boards 19-21 contingency NOT triggered; 30-board fallback not needed.
+
+## Gate run (TASK 3)
+- Command: PERF_GATE_CORE=7 PERF_GATE_REPS=5 PERF_GATE_ITERS_T=300
+  PERF_GATE_ITERS_RAW=3000 PERF_GATE_ONLY=current_arrivalvslegacy_corpus
+  python3 tests/run_perf_gate.py out/build/linux-gcc-self-release
+- Captured output: results/phase7/gate89/gate89_corpus.txt (72 lines)
+- Start (UTC): 2026-09-07T15:08:45Z. End (UTC): 2026-09-07T15:08:46Z.
+- Exit code: 0.
+- Wall duration ~1 s, NOT 30 min-2 h: both comparators are sub-4us/parent, so
+  21 invocations x 300 internal reps x 231 cases ~= 1.45M parent-drives complete in
+  ~1 s. The estimate in the task brief assumed Reference-A-scale slowness, which
+  does not apply to this sequence (Reference A and the 3000-iter raw benches are
+  filtered out). Statistical structure is intact: 300 internal reps per invocation
+  for resolution, 5 ABBA pair-repetitions + trailing A control for drift robustness.
+
+## Records in results/phase7/gate89/
+- asan_identity.txt (231 BOARDCASE lines + header; board sha256 above)
+- harness_filter.diff (sha256 above)
+- gate89_corpus.txt (full captured gate output; exit 0)
+- MANIFEST.txt (this file)
+- summary.md (ratio tables + verbatim gate rows)
+- start_utc.txt / end_utc.txt
