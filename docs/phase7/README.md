@@ -210,3 +210,17 @@ changes, no cutover work.
   full 1.161 s with `norm_ns` 0.113 s of the delta.
 - Protocol amended per Finding A (timers field, counters-only timed rows,
   unblocked materialized leg, leakage and representativeness statements).
+
+## Slice 7.2C-prep: twin-run amendment and plumbing smoke
+
+- Records authorized option (B): binding totals from `--telemetry off`
+  rows with counts and rates from deterministic twins, replacing the
+  unresolvable 0.5 percent pre-gate by construction; per-gate row-sourcing
+  table and noise rule included. Gates 1 and 2 use off-mode baseline rows
+  (deviation from on-mode recording, stated).
+- Documentation fixes: P1 wording (resolved by amendment, not by passing
+  re-gate), re-frozen hashes in the inputs table, committed re-verification
+  rows, schema field 40 subtree-release precision.
+- Plumbing smoke (`results/phase7/smoke/`): all three modes on both engines
+  flow into rows plus MANIFEST with artifact hashes; all exit 0 with
+  correct tokens and timer labels.

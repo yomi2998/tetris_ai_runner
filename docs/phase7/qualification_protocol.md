@@ -9,9 +9,18 @@ execution slice computes verdicts from this protocol after review.
 | Artifact | SHA-256 |
 |---|---|
 | `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile.baseline` | 84cb7a309f59db98b33709ececc168d330991b2226956cc7b310445870aac376 |
-| `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile_value.candidate` | bf7b9f98e58f0261075c2a0faedd8e51173ea4be9317a3e1751b359cc876fee3 |
-| `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile_legacy_cmp` | 7cadfed6953ea0af6b21b7b77a70de80ad46f0566f1de2bf6394262f64fb2969 |
+| `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile_value.candidate` | c4579a8707efa5ea87a26f974ab142f2fbae4bb7a887bbda94ba9a8ce675455a |
+| `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile_legacy_cmp` | 08e91644054b5bc07da45462378596f3364ae7e58459edd59e5d8a38cf885450 |
 | `artifacts/frozen_29d.bin` (29 doubles, absolute path passed via `--param-file`) | ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037 |
+
+The candidate and comparator rows above are the 7.2B re-freeze, produced
+by a clean `linux-gcc-self-release` preset build; the 7.2A hashes
+(`bf7b9f98`/`7cadfed6`) identified the superseded freeze. The baseline row
+is unchanged since 7.2A. Re-verification rows for the current freeze live
+in `results/phase7/refreeze_verify/`: candidate determinism (two identical
+rows modulo timers), comparator-vs-baseline work parity
+(40546/199806/5521 with matching dead, game, and pool columns), and
+rejection behavior (exit 1, no row).
 
 - The parameter file bytes equal the compiled-in production defaults in all
   three binaries (verified field by field before freezing).
@@ -149,8 +158,12 @@ and `CMP(...)` name fields of the three record versions.
 ## 6. Pre-execution prerequisites (blockers, not waivers)
 
 - P1. Value timer remediation: the original pre-gate failed at a median
-  on/off ratio of 1.165 against the 1.005 bar (Section 7). Resolved by the
-  counters-only mode and its passing re-gate (Section 8).
+  on/off ratio of 1.165 against the 1.005 bar (Section 7), and the
+  counters-only re-gate failed as stated at 1.01412 with a structural
+  +1.4 percent cycle cost under plus-or-minus 2 percent wall noise
+  (Section 8). P1 is resolved by the twin-run methodology amendment
+  (Section 9), not by a passing re-gate: binding totals carry zero
+  instrumentation by construction instead of clearing an unresolvable bar.
 - P2. Comparator allocation-span timer for the item 4 materialized leg:
   resolved by the `alloc_ns` counter (Section 8 evidence).
 - P3. Comparator normalization cost review: resolved by the reused probe
@@ -196,3 +209,48 @@ and `CMP(...)` name fields of the three record versions.
   twin runs (counters-only for counts, full-timer for rates), which carries
   zero instrumentation in the totals by construction. Both need explicit
   approval; baseline capture stays blocked meanwhile.
+
+## 9. Twin-run methodology amendment (authorized option B)
+
+This section records an explicit, justified deviation from plan Section
+17.2: the 0.5 percent pass/fail pre-gate is replaced, not waived, as
+follows.
+
+- Binding latency totals (gates 1 and 2) come from `--telemetry off` rows
+  on both engines and carry zero instrumentation by construction. This
+  deviates from the frozen profile's on-mode recording convention; the
+  baseline side of gates 1 and 2 therefore uses off-mode baseline rows,
+  collected under the same pair order and controls.
+- Binding counts come from deterministic counters-only twins of the same
+  workload (bit-identical work vectors proven across modes); binding rates
+  come from full-timer fixed-work twins.
+- Per-mode measured overhead is still disclosed: the value perf
+  decomposition (+1.4 percent cycles structural, Section 8), the
+  comparator on/off/disarmed evidence, and the paired
+  counters-only-vs-frozen total delta with its 1.02 bound for gate 6 legs.
+- Per-side bias statements accompany the gate 4 and gate 6 verdicts at
+  execution: the candidate totals exclude its ~1 percent counting cost
+  while comparator timed rows include counting plus `make_path`, so both
+  comparisons err conservative against the candidate and the report states
+  the direction explicitly.
+
+### Per-gate row sourcing
+
+| Gate | Rows per seed and mode | Pair order and count |
+|---|---|---|
+| 1, 2 (fixed-work totals) | Off-mode rows, both engines, seeds 1/2/3 | Five ABBA+A pairs per mode per seed |
+| 3 (count partition) | Counters-only rows, both engines, seeds 1/2/3 | Same pairs (counts are deterministic twins of the totals runs) |
+| 4 (component rates) | Full-timer fixed-work rows, both engines, seed 1 (seeds 2/3 diagnostics) | Same pairs |
+| 5 (path overhead) | Value full-timer fixed-work rows, seed 1 (seeds 2/3 diagnostics) | Within-run share, no pairing |
+| 6 (timed throughput) | Counters-only timed rows, both engines, seed 1 (seeds 2/3 diagnostics) | Five ABBA+A pairs |
+| 7 (seed diagnostics) | All row kinds, seeds 2/3 | Correctness and classification only |
+| 8, 9 (corpus rates) | `run_perf_gate.py` REP output, pinned core | Per existing harness pairing |
+| Telemetry disclosure | On/counters-only/off triplets, fixed-work, seed 1 | Adjacent triplets, reported not gated |
+
+### Noise rule
+
+Gate verdicts report all five pair ratios. Measurement uncertainty that can
+flip a 2 percent verdict blocks any pass claim; the execution report
+carries per-gate spreads alongside medians. This is the standing 7.1A close
+rule applied to the recorded plus-or-minus 2 percent unpinned-frequency
+noise reality.

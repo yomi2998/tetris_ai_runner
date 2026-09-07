@@ -58,7 +58,7 @@ fields 16, 17, 28-32, 40, and 41 additionally report `na` under
 | 32 | `transition_ns` | ns | Policy-transition span |
 | 33-38 | `warmup_moves` `seed` `iters` `maxdepth` `budget_ms` `mode` | mixed | Same meanings as frozen V2 |
 | 39 | `telemetry` | token | `on`, or `off` meaning the observer is detached and wrapper counting is skipped; boundary wall-time fields stay numeric |
-| 40 | `alloc_ns` | ns | Search-child node allocation span (fresh plus recycled; roots excluded) |
+| 40 | `alloc_ns` | ns | Search-child node allocation span (fresh plus recycled branches, roots excluded; the recycled branch span includes subtree-release work) |
 | 41 | `norm_ns` | ns | Normalization and dedup phase span, outside every binding span by construction |
 | 42 | `timers` | token | `on`, `off`, or `na` (when telemetry is off) |
 
