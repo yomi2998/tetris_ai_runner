@@ -533,6 +533,11 @@ def audit(root: Path) -> tuple[int, list[Finding], dict[str, str]]:
     gate12_names = discover_gate12_campaigns(root)
     if gate12_names:
         primary = gate12_names[-1]
+        for older in gate12_names[:-1]:
+            findings.append(Finding(
+                "INFO", "gate12-superseded",
+                f"{older}: superseded gate-1/2 campaign; current statuses come from {primary}"
+            ))
         findings.append(Finding(
             "INFO", "campaign-source", f"current gate-1/2 statuses come from {primary}"
         ))

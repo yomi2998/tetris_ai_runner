@@ -1,0 +1,1 @@
+RERUNRESULT gate1=1.04155 gate2=1.02547 spreadtotal=0.03706 spreadp95=0.06492 verdict=NO-ADVANCE
