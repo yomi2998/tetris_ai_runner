@@ -1254,9 +1254,185 @@ void run_landing_validation_tests()
     }
 }
 
+namespace
+{
+    void run_fused_boundary_tests()
+    {
+        auto landing_probe = [](Board const &board, Piece piece, Placement placement) {
+            return reachability::call_with_block<SRS>(piece,
+                [&]<reachability::block B>() {
+                    return detail::landing_data<B>(board, placement);
+                });
+        };
+
+        Piece const o_piece = piece_of('O');
+        for (int rotation = orientation_count(o_piece); rotation < 4; ++rotation)
+        {
+            check(!landing_probe(Board{}, o_piece, Placement::unchecked(4, 1, rotation)).has_value(),
+                std::format("fused boundary rejects O rotation {}", rotation));
+        }
+
+        std::array<std::uint16_t, Board::height> plain_rows{};
+        std::array<std::uint16_t, Board::height> blocked_rows{};
+        blocked_rows[1] = 1u << 4;
+        Board const plain = Board::from_rows(plain_rows);
+        Board const blocked = Board::from_rows(blocked_rows);
+
+        for (char const *p = piece_order; *p; ++p)
+        {
+            Piece const piece = piece_of(*p);
+            int const rotations = orientation_count(piece);
+            for (int rotation = 0; rotation < rotations; ++rotation)
+            {
+                for (Board const *base : {&plain, &blocked})
+                {
+                    for (int y = 0; y <= 2; ++y)
+                    {
+                        for (int x = 0; x < Board::width; ++x)
+                        {
+                            Placement const placement = Placement::unchecked(x, y, rotation);
+                            auto const cell_set = *cells(piece, placement);
+                            if (!in_bounds(piece, placement))
+                            {
+                                check(!landing_probe(*base, piece, placement).has_value(),
+                                    std::format("fused boundary rejects out-of-bounds pose {} r{} {},{}", *p, rotation, x, y));
+                                check(!apply(*base, piece, Candidate{placement}).has_value(),
+                                    std::format("fused apply rejects out-of-bounds pose {} r{} {},{}", *p, rotation, x, y));
+                                continue;
+                            }
+                            bool overlap = false;
+                            for (auto const &cell : cell_set)
+                            {
+                                overlap = overlap || base->full(cell.first, cell.second);
+                            }
+                            auto const data = landing_probe(*base, piece, placement);
+                            if (overlap)
+                            {
+                                check(!data.has_value(),
+                                    std::format("fused boundary rejects overlapping pose {} r{} {},{}", *p, rotation, x, y));
+                                check(!apply(*base, piece, Candidate{placement}).has_value(),
+                                    std::format("fused apply rejects overlapping pose {} r{} {},{}", *p, rotation, x, y));
+                                continue;
+                            }
+                            check(data.has_value(),
+                                std::format("fused boundary accepts valid pose {} r{} {},{}", *p, rotation, x, y));
+                            auto const shifted = Placement::try_make(x, y - 1, rotation);
+                            bool const expected_landing = !shifted || !cells_empty(piece, *shifted, *base);
+                            check(data->landing == expected_landing,
+                                std::format("fused landing flag {} r{} {},{} expected {}", *p, rotation, x, y, expected_landing));
+                            int lowest = Board::height;
+                            for (auto const &cell : cell_set)
+                            {
+                                lowest = std::min(lowest, cell.second);
+                            }
+                            check(data->lowest == lowest,
+                                std::format("fused lowest cell {} r{} {},{} expected {}", *p, rotation, x, y, lowest));
+                            std::array<std::uint16_t, Board::height> expected = base->rows();
+                            for (auto const &cell : cell_set)
+                            {
+                                expected[cell.second] = static_cast<std::uint16_t>(expected[cell.second] | (1u << cell.first));
+                            }
+                            Board copy = *base;
+                            copy.apply_unchecked(data->mask);
+                            check(copy.rows() == expected,
+                                std::format("fused mask pins exactly the pose {} r{} {},{}", *p, rotation, x, y));
+                            auto const applied = apply(*base, piece, Candidate{placement});
+                            if (!expected_landing)
+                            {
+                                check(!applied.has_value(),
+                                    std::format("fused apply rejects floating pose {} r{} {},{}", *p, rotation, x, y));
+                                continue;
+                            }
+                            check(applied.has_value(),
+                                std::format("fused apply accepts landing pose {} r{} {},{}", *p, rotation, x, y));
+                            check(applied->board.rows() == expected,
+                                std::format("fused apply board pins exactly the pose {} r{} {},{}", *p, rotation, x, y));
+                            check(applied->clear_count == 0,
+                                std::format("fused apply clears nothing {} r{} {},{}", *p, rotation, x, y));
+                            check(applied->lockout == (lowest >= 20),
+                                std::format("fused apply lockout {} r{} {},{} expected {}", *p, rotation, x, y, lowest >= 20));
+                            check(!applied->perfect_clear,
+                                std::format("fused apply stays non-perfect {} r{} {},{}", *p, rotation, x, y));
+                        }
+                    }
+                }
+            }
+        }
+
+        Piece const i_piece = piece_of('I');
+        int i_vertical = -1;
+        int i_horizontal = -1;
+        int i_horizontal_left = 0;
+        for (int rotation = 0; rotation < 4; ++rotation)
+        {
+            std::array<std::pair<int, int>, 4> sorted = *cells(i_piece, Placement::unchecked(0, 0, rotation));
+            std::sort(sorted.begin(), sorted.end());
+            bool const vertical = sorted[0].first == sorted[3].first
+                && sorted[3].second - sorted[0].second == 3;
+            bool const horizontal = sorted[0].second == sorted[3].second
+                && sorted[3].first - sorted[0].first == 3;
+            if (vertical)
+            {
+                i_vertical = rotation;
+            }
+            if (horizontal)
+            {
+                i_horizontal = rotation;
+                i_horizontal_left = sorted[0].first;
+            }
+        }
+        check(i_vertical >= 0 && i_horizontal >= 0, "fused boundary finds the I orientations");
+        int const i_horizontal_x = -i_horizontal_left;
+
+        std::array<std::uint16_t, Board::height> support_rows{};
+        support_rows[18] = 1u << 0;
+        Board const supported_low = Board::from_rows(support_rows);
+        Placement const pose_low = Placement::unchecked(0, 19, i_vertical);
+        auto const data_low = landing_probe(supported_low, i_piece, pose_low);
+        check(data_low.has_value() && data_low->landing && data_low->lowest == 19,
+            "fused boundary lands an I with lowest cell 19");
+        auto const applied_low = apply(supported_low, i_piece, Candidate{pose_low});
+        check(applied_low.has_value() && !applied_low->lockout && applied_low->clear_count == 0
+            && !applied_low->perfect_clear,
+            "fused boundary keeps lowest cell 19 live through apply");
+
+        support_rows = {};
+        support_rows[19] = 1u << 0;
+        Board const supported_high = Board::from_rows(support_rows);
+        Placement const pose_high = Placement::unchecked(0, 20, i_vertical);
+        auto const data_high = landing_probe(supported_high, i_piece, pose_high);
+        check(data_high.has_value() && data_high->landing && data_high->lowest == 20,
+            "fused boundary lands an I with lowest cell 20");
+        auto const applied_high = apply(supported_high, i_piece, Candidate{pose_high});
+        check(applied_high.has_value() && applied_high->lockout && applied_high->clear_count == 0
+            && !applied_high->perfect_clear,
+            "fused boundary marks lowest cell 20 as lockout through apply");
+
+        std::array<std::uint16_t, Board::height> near_clear{};
+        near_clear[0] = 0x3ffu;
+        near_clear[1] = 0x3f0u;
+        Board const near_clear_board = Board::from_rows(near_clear);
+        Placement const fill_pose = Placement::unchecked(i_horizontal_x, 1, i_horizontal);
+        auto const fill_landing = landing_probe(near_clear_board, i_piece, fill_pose);
+        check(fill_landing.has_value() && fill_landing->landing,
+            "fused boundary lands the clearing I");
+        auto const filled = apply(near_clear_board, i_piece, Candidate{fill_pose});
+        check(filled.has_value() && filled->clear_count == 2 && filled->perfect_clear
+            && filled->board.empty(),
+            "fused boundary clears to empty and reports perfect_clear");
+
+        auto const plain_landing = apply(Board{}, i_piece,
+            Candidate{Placement::unchecked(i_horizontal_x, 0, i_horizontal)});
+        check(plain_landing.has_value() && plain_landing->clear_count == 0
+            && !plain_landing->perfect_clear,
+            "fused boundary keeps a non-clearing apply non-perfect");
+    }
+}
+
 int main()
 {
     run_landing_validation_tests();
+    run_fused_boundary_tests();
     Engine engine = make_engine();
     search_tspin::Search legacy_search;
     legacy_search.init(engine.context().get(), engine.search_config());

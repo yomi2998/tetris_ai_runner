@@ -4357,6 +4357,36 @@ namespace
         std::println("finalize: selected result with exact replayed path");
     }
 
+    void run_layout_tests()
+    {
+        check(sizeof(tetris::Board) == 64, "board packs into one cache line");
+        check(sizeof(engine_alias::Node) == 192, "node stays within three cache lines");
+        check(offsetof(engine_alias::Node, board) == 0, "node board offset");
+        check(offsetof(engine_alias::Node, policy) == 64, "node policy offset");
+        check(offsetof(engine_alias::Node, evaluation) == 104, "node evaluation offset");
+        check(offsetof(engine_alias::Node, child_count) == 120, "node child_count offset");
+        check(offsetof(engine_alias::Node, cursor) == 128, "node cursor offset");
+        check(offsetof(engine_alias::Node, depth) == 136, "node depth offset");
+        check(offsetof(engine_alias::Node, hold) == 144, "node hold offset");
+        check(offsetof(engine_alias::Node, incoming) == 156, "node incoming offset");
+        check(offsetof(engine_alias::Node, played) == 160, "node played offset");
+        check(offsetof(engine_alias::Node, parent) == 164, "node parent offset");
+        check(offsetof(engine_alias::Node, first_child) == 168, "node first_child offset");
+        check(offsetof(engine_alias::Node, pending_child) == 172,
+            "dead node pending_child stays parked at its historical offset");
+        check(offsetof(engine_alias::Node, pending_sibling) == 176,
+            "dead node pending_sibling stays parked at its historical offset");
+        check(offsetof(engine_alias::Node, root_child) == 180, "node root_child offset");
+        check(offsetof(engine_alias::Node, next_sibling) == 184, "node next_sibling offset");
+        check(sizeof(engine_alias::Child) == 192, "child stays within three cache lines");
+        using PendingEntry = engine_alias::PendingHeap::PendingEntry;
+        check(sizeof(PendingEntry) == 16, "pending entry packs into one quarter cache line");
+        check(offsetof(PendingEntry, value) == 0, "pending entry value offset");
+        check(offsetof(PendingEntry, child) == 8, "pending entry child offset");
+        check(offsetof(PendingEntry, sibling) == 12, "pending entry sibling offset");
+        std::println("layout: board 64, node 192, child 192, pending entry 16");
+    }
+
     void run_budget_tests()
     {
         std::size_t capacity = engine_alias::default_arena_capacity;
@@ -4584,6 +4614,7 @@ int main()
     run_terminal_tests();
     run_time_budget_tests();
     run_budget_tests();
+    run_layout_tests();
     run_marker_tests();
     run_horizon_tests();
     run_key_tests();
