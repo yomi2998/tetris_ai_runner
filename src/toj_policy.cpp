@@ -93,11 +93,10 @@ namespace toj_policy
         constexpr int board_width = Board::width;
         constexpr std::uint32_t edge_mask = 0x3fe;
         constexpr std::uint32_t full_mask = 0x3ff;
+        constexpr std::uint32_t side_mask = 0x387;
         constexpr int scan_height = 20;
         constexpr int count_rows = 23;
-        constexpr int shape_rows = 7;
         constexpr int hole_lookahead = 8;
-        constexpr int side_columns = 3;
         constexpr int danger_limit = 19;
         constexpr int danger_slots = 4;
         constexpr int spawn_probe_first = 18;
@@ -126,24 +125,6 @@ namespace toj_policy
                 }
             }
             return 0;
-        }
-
-        void local_tops(std::uint32_t const *rows, int *tops)
-        {
-            for (int x = 0; x < board_width; ++x)
-            {
-                tops[x] = 0;
-            }
-            for (int y = 0; y < policy_height; ++y)
-            {
-                std::uint32_t bits = rows[y];
-                while (bits != 0)
-                {
-                    int x = std::countr_zero(bits);
-                    bits &= bits - 1;
-                    tops[x] = y + 1;
-                }
-            }
         }
 
         int count_bits(std::uint32_t value)
@@ -278,19 +259,14 @@ namespace toj_policy
             fill_counts(rows, roof, counts);
             for (int y = 0, end = std::min(scan_height, roof - 2); y < end; ++y)
             {
-                std::uint32_t window[shape_rows];
-                for (int k = 0; k < shape_rows; ++k)
-                {
-                    window[k] = rows[y + k];
-                }
                 int qualifying = (counts[y] == 9) + (counts[y + 1] == 8) + (counts[y + 2] == 9);
                 int total3 = counts[y] + counts[y + 1] + counts[y + 2];
                 if (counts[y + 2] == 9 && qualifying >= 2 && total3 > 20)
                 {
-                    int hole = std::countr_zero(~window[2] & 0x3ffu);
-                    std::uint32_t straight = ~window[0] & ~(window[1] | (window[1] >> 1))
-                        & ~(window[3] | (window[3] >> 1) | (window[3] >> 2))
-                        & ~((window[4] >> 1) | (window[4] >> 2)) & 0xfeu;
+                    int hole = std::countr_zero(~rows[y + 2] & 0x3ffu);
+                    std::uint32_t straight = ~rows[y] & ~(rows[y + 1] | (rows[y + 1] >> 1))
+                        & ~(rows[y + 3] | (rows[y + 3] >> 1) | (rows[y + 3] >> 2))
+                        & ~((rows[y + 4] >> 1) | (rows[y + 4] >> 2)) & 0xfeu;
                     if ((straight >> hole) & 1)
                     {
                         int value = t3a_readiness(rows, counts, y, hole, qualifying, total3);
@@ -299,9 +275,9 @@ namespace toj_policy
                         y += 2;
                         continue;
                     }
-                    std::uint32_t mirrored = ~window[0] & ~(window[1] | (window[1] << 1))
-                        & ~(window[3] | (window[3] << 1) | (window[3] << 2))
-                        & ~((window[4] << 1) | (window[4] << 2)) & 0x1fcu;
+                    std::uint32_t mirrored = ~rows[y] & ~(rows[y + 1] | (rows[y + 1] << 1))
+                        & ~(rows[y + 3] | (rows[y + 3] << 1) | (rows[y + 3] << 2))
+                        & ~((rows[y + 4] << 1) | (rows[y + 4] << 2)) & 0x1fcu;
                     if ((mirrored >> hole) & 1)
                     {
                         int value = t3b_readiness(rows, counts, y, hole, qualifying, total3);
@@ -311,8 +287,8 @@ namespace toj_policy
                         continue;
                     }
                 }
-                std::uint32_t candidates = (window[0] & (window[0] >> 2)) & ~(window[0] >> 1)
-                    & ~(window[1] | (window[1] >> 1) | (window[1] >> 2)) & 0xffu;
+                std::uint32_t candidates = (rows[y] & (rows[y] >> 2)) & ~(rows[y] >> 1)
+                    & ~(rows[y + 1] | (rows[y + 1] >> 1) | (rows[y + 1] >> 2)) & 0xffu;
                 if (candidates == 0)
                 {
                     continue;
@@ -325,7 +301,7 @@ namespace toj_policy
                 }
                 int x = std::countr_zero(candidates);
                 int value =
-                    t2_readiness(window[0], window[1], window[2], counts[y], counts[y + 1], x);
+                    t2_readiness(rows[y], rows[y + 1], rows[y + 2], counts[y], counts[y + 1], x);
                 t2 += static_cast<std::int16_t>(value);
                 apply_overlay(true, false, x, y, value, rows);
                 ++y;
@@ -378,8 +354,11 @@ namespace toj_policy
             rows[y] = result.row(y);
         }
         int roof = local_roof(rows);
-        int tops[board_width];
-        local_tops(rows, tops);
+        int side_roof = roof;
+        while (side_roof > 0 && (rows[side_roof - 1] & side_mask) == 0)
+        {
+            --side_roof;
+        }
         Evaluation out;
         init_t_value(rows, roof, out.t2_value, out.t3_value);
         std::size_t col_trans = static_cast<std::size_t>(2 * (policy_height - roof));
@@ -402,7 +381,7 @@ namespace toj_policy
         }
         int hole_count = 0;
         int hole_line = 0;
-        int wide[31] = {};
+        int wide[10] = {};
         std::uint32_t line_cover = 0;
         int clear_width = 0;
         int wide_count = board_width - 1;
@@ -428,11 +407,6 @@ namespace toj_policy
             {
                 ++wide[wide_count];
             }
-        }
-        int side_roof = 0;
-        for (int k = 0; k < side_columns; ++k)
-        {
-            side_roof = std::max({ side_roof, tops[k], tops[board_width - 1 - k] });
         }
         auto const &p = config_->parameters;
         out.value = (0. - side_roof * p.roof - col_trans * p.col_trans - row_trans * p.row_trans
@@ -491,18 +465,36 @@ namespace toj_policy
         return static_cast<int8_t>(scan_safe_rows(rows, next));
     }
 
+    int Policy::expected_t_distance(DecisionContext const &context)
+    {
+        if (context.hold.has_value() && *context.hold == tetris::Piece::T)
+        {
+            return 0;
+        }
+        for (std::size_t k = 0; k < context.next.size(); ++k)
+        {
+            if (context.next[k] == tetris::Piece::T)
+            {
+                return static_cast<int>(k);
+            }
+        }
+        return t_expect_absent;
+    }
+
     State Policy::transition(Piece piece, Candidate candidate, Outcome outcome, Board const &result,
         State const &parent, DecisionContext const &context, Evaluation const &evaluation) const
+    {
+        return transition_known_lockout(piece, candidate, outcome, result, parent, context,
+            evaluation, is_lockout(piece, candidate.placement), expected_t_distance(context));
+    }
+
+    State Policy::transition_known_lockout(Piece piece, Candidate candidate, Outcome outcome,
+        Board const &result, State const &parent, DecisionContext const &context,
+        Evaluation const &evaluation, bool lockout, int t_expect) const
     {
         char piece_char = tetris::to_char(piece);
         tetris::SpinType spin = outcome.spin;
         int clear = outcome.clear_count;
-        std::uint32_t rows[policy_height] = {};
-        for (int y = 0; y < policy_height; ++y)
-        {
-            rows[y] = result.row(y);
-        }
-        int roof = local_roof(rows);
         State next = parent;
         int attack = 0;
         int t_attack = 0;
@@ -519,17 +511,27 @@ namespace toj_policy
             }
         };
         int safe = 0;
-        if (is_lockout(piece, candidate.placement))
+        if (lockout)
         {
             safe = -1;
         }
         else if (!context.next.empty())
         {
+            std::uint32_t rows[spawn_frame_height - 1] = {};
+            for (int y = 0; y < spawn_frame_height - 1; ++y)
+            {
+                rows[y] = result.row(y);
+            }
             safe = scan_safe_rows(rows, context.next[0]);
         }
         else
         {
-            safe = spawn_frame_height - roof;
+            std::uint32_t rows[policy_height] = {};
+            for (int y = 0; y < policy_height; ++y)
+            {
+                rows[y] = result.row(y);
+            }
+            safe = spawn_frame_height - local_roof(rows);
         }
         auto const &p = config_->parameters;
         switch (clear)
@@ -613,22 +615,6 @@ namespace toj_policy
         }
         next.under_attack = std::max(0, next.under_attack - attack);
         int config_safe = std::max(0, config_->safe - next.under_attack - next.map_rise);
-        int t_expect = t_expect_absent;
-        if (context.hold.has_value() && *context.hold == tetris::Piece::T)
-        {
-            t_expect = 0;
-        }
-        else
-        {
-            for (std::size_t k = 0; k < context.next.size(); ++k)
-            {
-                if (context.next[k] == tetris::Piece::T)
-                {
-                    t_expect = static_cast<int>(k);
-                    break;
-                }
-            }
-        }
         if (context.hold.has_value() && *context.hold == tetris::Piece::T)
         {
             if (spin == tetris::SpinType::None)

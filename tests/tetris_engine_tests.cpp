@@ -54,7 +54,9 @@ namespace
         engine_alias::Engine engine;
     };
 
-    Fixture make_fixture(std::size_t arena_capacity = engine_alias::default_arena_capacity)
+    Fixture make_fixture(std::size_t arena_capacity = engine_alias::default_arena_capacity,
+        engine_alias::CacheConfig::Layout cache_layout =
+            engine_alias::CacheConfig::Layout::Disabled)
     {
         Fixture fixture;
         fixture.policy_config.combo_table = combo_table;
@@ -63,6 +65,7 @@ namespace
         fixture.policy_config.parameters = toj_policy::Parameters::production_defaults();
         fixture.engine_config.policy = &fixture.policy_config;
         fixture.engine_config.arena_capacity = arena_capacity;
+        fixture.engine_config.cache.layout = cache_layout;
         check(fixture.engine.init(fixture.engine_config), "fixture engine initializes");
         return fixture;
     }
@@ -83,7 +86,9 @@ namespace
         return fixture.engine.set_root(board, state, std::move(*queue), hold);
     }
 
-    Fixture make_zero_fixture(std::size_t arena_capacity = engine_alias::default_arena_capacity)
+    Fixture make_zero_fixture(std::size_t arena_capacity = engine_alias::default_arena_capacity,
+        engine_alias::CacheConfig::Layout cache_layout =
+            engine_alias::CacheConfig::Layout::Disabled)
     {
         Fixture fixture;
         fixture.policy_config.combo_table = combo_table;
@@ -92,6 +97,7 @@ namespace
         fixture.policy_config.parameters = toj_policy::Parameters{};
         fixture.engine_config.policy = &fixture.policy_config;
         fixture.engine_config.arena_capacity = arena_capacity;
+        fixture.engine_config.cache.layout = cache_layout;
         check(fixture.engine.init(fixture.engine_config), "zeroed fixture engine initializes");
         return fixture;
     }
@@ -836,7 +842,7 @@ namespace
             std::size_t over_bytes = static_cast<std::size_t>(
                 (engine_alias::engine_memory_budget
                     - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, 0, cache_bytes))
-                / (sizeof(engine_alias::Node) + sizeof(engine_alias::NodeId)))
+                / engine_alias::arena_bytes_per_node)
                 + 1;
             Fixture fixture;
             fixture.policy_config.combo_table = combo_table;
@@ -859,7 +865,7 @@ namespace
             std::size_t over_bytes = static_cast<std::size_t>(
                 (engine_alias::engine_memory_budget
                     - engine_alias::engine_buffer_reservation(0, 0, 0, 0, 0, 0, cache_bytes))
-                / (sizeof(engine_alias::Node) + sizeof(engine_alias::NodeId)))
+                / engine_alias::arena_bytes_per_node)
                 + 1;
             Fixture fixture;
             fixture.policy_config.combo_table = combo_table;
@@ -1649,7 +1655,8 @@ namespace
                 "a moved engine attributes through its own arena");
         }
         {
-            Fixture source = make_zero_fixture();
+            Fixture source = make_zero_fixture(engine_alias::default_arena_capacity,
+                engine_alias::CacheConfig::Layout::DirectMapped);
             make_root(source, shelf_board(), "III", std::nullopt, true);
             source.engine.run(3);
             check(!source.engine.search_complete() || source.engine.arena_size() > 1,
@@ -1679,7 +1686,8 @@ namespace
             check(relocated_stats.cache_requests
                 == relocated_stats.cache_hits + relocated_stats.cache_misses,
                 "a moved engine keeps its cache accounting consistent");
-            Fixture baseline = make_zero_fixture();
+            Fixture baseline = make_zero_fixture(engine_alias::default_arena_capacity,
+                engine_alias::CacheConfig::Layout::DirectMapped);
             make_root(baseline, shelf_board(), "III", std::nullopt, true);
             check(baseline.engine.run(500), "the unmoved baseline completes");
             auto moved_selection = relocated.select_best();
@@ -2596,7 +2604,8 @@ namespace
     void run_cache_counter_tests()
     {
         {
-            Fixture fixture = make_fixture();
+            Fixture fixture = make_fixture(engine_alias::default_arena_capacity,
+                engine_alias::CacheConfig::Layout::DirectMapped);
             make_root(fixture, shelf_board(), "III", std::nullopt, true);
             fixture.engine.run(300);
             auto stats = fixture.engine.search_stats();
@@ -2642,7 +2651,8 @@ namespace
                 "reinitialization invalidates without stale hits corrupting counts");
         }
         {
-            Fixture fixture = make_zero_fixture();
+            Fixture fixture = make_zero_fixture(engine_alias::default_arena_capacity,
+                engine_alias::CacheConfig::Layout::DirectMapped);
             make_root(fixture, shelf_board(), "III", std::nullopt, true);
             fixture.engine.run(300);
             engine_alias::Engine moved(std::move(fixture.engine));
@@ -2662,7 +2672,8 @@ namespace
                 "a moved engine keeps its cache accounting consistent");
         }
         {
-            Fixture direct = make_fixture();
+            Fixture direct = make_fixture(engine_alias::default_arena_capacity,
+                engine_alias::CacheConfig::Layout::DirectMapped);
             Fixture assoc = make_fixture();
             assoc.engine_config.cache.layout = engine_alias::CacheConfig::Layout::SetAssociative;
             check(assoc.engine.init(assoc.engine_config),
@@ -2692,7 +2703,8 @@ namespace
                 "both layouts see the same lookup stream");
         }
         {
-            Fixture fixture = make_fixture();
+            Fixture fixture = make_fixture(engine_alias::default_arena_capacity,
+                engine_alias::CacheConfig::Layout::DirectMapped);
             make_root(fixture, shelf_board(), "III", std::nullopt, true);
             fixture.engine.run(300);
             auto const warm_selection = fixture.engine.select_best();
@@ -2714,7 +2726,8 @@ namespace
                 changed_prints.push_back(fingerprint(
                     fixture.engine.node(static_cast<engine_alias::NodeId>(id))));
             }
-            Fixture fresh = make_fixture();
+            Fixture fresh = make_fixture(engine_alias::default_arena_capacity,
+                engine_alias::CacheConfig::Layout::DirectMapped);
             fresh.policy_config.parameters.base = 999.0;
             check(fresh.engine.init(fresh.engine_config),
                 "fresh changed-parameter engine initializes");
@@ -2765,7 +2778,8 @@ namespace
         engine_alias::HoldState no_hold;
         no_hold.locked = true;
         {
-            Fixture fixture = make_fixture();
+            Fixture fixture = make_fixture(engine_alias::default_arena_capacity,
+                engine_alias::CacheConfig::Layout::DirectMapped);
             auto queue = engine_alias::parse_queue("TIS");
             check(queue.has_value(), "reuse first-turn queue parses");
             check(fixture.engine.set_root(shelf_board(), state, std::move(*queue),
@@ -2826,7 +2840,8 @@ namespace
             check(warm_stats.transposition_merges > 0,
                 "the warm search merges retained nodes instead of rematerializing");
 
-            Fixture cold = make_fixture();
+            Fixture cold = make_fixture(engine_alias::default_arena_capacity,
+                engine_alias::CacheConfig::Layout::DirectMapped);
             auto cold_queue = engine_alias::parse_queue(next_text);
             check(cold_queue.has_value(), "cold queue parses");
             check(cold.engine.set_root(next_board, next_policy, std::move(*cold_queue),
@@ -4348,9 +4363,9 @@ namespace
         std::size_t expect =
             static_cast<std::size_t>((engine_alias::engine_memory_budget
                 - engine_alias::engine_fixed_workspace)
-                / (sizeof(engine_alias::Node) + sizeof(engine_alias::NodeId)));
+                / engine_alias::arena_bytes_per_node);
         check(capacity == expect && capacity > 1024, "arena capacity derives from the budget");
-        check(capacity == 705851, "the fingerprint budget funds the design arithmetic");
+        check(capacity == 1087085, "the compact-child budget funds the design arithmetic");
         check(capacity < engine_alias::max_nodes, "capacity stays in NodeId range");
         check(engine_alias::max_queue_length == 256, "queue bound is declared");
         std::println("node storage: {} bytes per node", sizeof(engine_alias::Node));

@@ -103,6 +103,12 @@ namespace toj_policy
             State const &parent, DecisionContext const &context,
             Evaluation const &evaluation) const;
 
+        State transition_known_lockout(Piece piece, Candidate candidate, Outcome outcome,
+            Board const &result, State const &parent, DecisionContext const &context,
+            Evaluation const &evaluation, bool lockout, int t_expect) const;
+
+        static int expected_t_distance(DecisionContext const &context);
+
         static bool is_lockout(Piece piece, Placement placement);
 
         int8_t safe_margin(Board const &board, Piece next) const;

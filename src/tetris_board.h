@@ -29,7 +29,6 @@ namespace tetris
             }
             board.occupancy_.from_row_bitboard<true>(clipped);
             board.canonicalize();
-            board.refresh_roof();
             return board;
         }
 
@@ -78,12 +77,17 @@ namespace tetris
 
         constexpr unsigned roof() const
         {
-            return roof_;
+            return static_cast<unsigned>(occupancy_.highest_y());
         }
 
         constexpr bool empty() const
         {
-            return roof_ == 0;
+            std::uint64_t bits = 0;
+            for (int i = 0; i < occupancy_t::word_count(); ++i)
+            {
+                bits |= occupancy_.logical_word(i);
+            }
+            return bits == 0;
         }
 
         std::array<size_t, width> column_tops() const
@@ -127,7 +131,6 @@ namespace tetris
             {
                 occupancy_.set_logical_word(i, occupancy_.logical_word(i) | mask.logical_word(i));
             }
-            refresh_roof();
             validate();
         }
 
@@ -163,7 +166,6 @@ namespace tetris
             }
             occupancy_.from_row_bitboard<true>(rows);
             canonicalize();
-            refresh_roof();
             validate();
         }
 
@@ -172,8 +174,6 @@ namespace tetris
 #ifdef NDEBUG
             (void)0;
 #else
-            unsigned const exact = static_cast<unsigned>(occupancy_.highest_y());
-            assert(roof_ == exact);
             for (int i = 0; i < occupancy_t::word_count(); ++i)
             {
                 assert(occupancy_.logical_word(i) == occupancy_.raw()[i]);
@@ -193,11 +193,6 @@ namespace tetris
         }
 
     private:
-        constexpr void refresh_roof()
-        {
-            roof_ = static_cast<unsigned>(occupancy_.highest_y());
-        }
-
         constexpr void canonicalize()
         {
             for (int i = 0; i < occupancy_t::word_count(); ++i)
@@ -207,8 +202,9 @@ namespace tetris
         }
 
         occupancy_t occupancy_{};
-        unsigned roof_ = 0;
     };
+
+    static_assert(sizeof(Board) == sizeof(Board::occupancy_t));
 
     struct Board::ClearResult
     {
@@ -228,7 +224,6 @@ namespace tetris
         Board board;
         board.occupancy_ = result.board;
         board.canonicalize();
-        board.refresh_roof();
         board.validate();
         return {board, result.count, result.full_rows};
     }

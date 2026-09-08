@@ -201,6 +201,101 @@ namespace tetris_engine
         return h;
     }
 
+    template <std::size_t N, class Value>
+    inline void transposition_hash_mix(std::array<std::uint64_t, N> &hashes,
+        std::array<TranspositionKey, N> const &keys, Value value)
+    {
+        for (std::size_t i = 0; i < N; ++i)
+        {
+            hashes[i] ^= static_cast<std::uint64_t>(value(keys[i]));
+            hashes[i] *= 1099511628211ull;
+        }
+    }
+
+    inline std::uint64_t transposition_double_word(double value)
+    {
+        return std::bit_cast<std::uint64_t>(normalize_zero(value));
+    }
+
+    template <std::size_t N>
+    inline std::array<std::uint64_t, N> transposition_hash_batch(
+        std::array<TranspositionKey, N> const &keys)
+    {
+        std::array<std::uint64_t, N> hashes;
+        hashes.fill(1469598103934665603ull);
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) { return key.depth; });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) { return key.cursor; });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) { return key.boundary_count; });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) { return key.root_child; });
+        for (int word = 0; word < Board::occupancy_t::word_count(); ++word)
+        {
+            transposition_hash_mix(hashes, keys,
+                [word](TranspositionKey const &key) {
+                    return key.occupancy.logical_word(word);
+                });
+        }
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return static_cast<std::uint8_t>(key.state.death);
+            });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return static_cast<std::uint8_t>(key.state.combo);
+            });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return static_cast<std::uint8_t>(key.state.under_attack);
+            });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return static_cast<std::uint8_t>(key.state.map_rise);
+            });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return static_cast<std::uint8_t>(key.state.b2b);
+            });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return static_cast<std::uint16_t>(key.state.t2_value);
+            });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return static_cast<std::uint16_t>(key.state.t3_value);
+            });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return transposition_double_word(key.state.acc_value);
+            });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return transposition_double_word(key.state.like);
+            });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return transposition_double_word(key.state.value);
+            });
+        for (std::size_t word = 0; word < keys[0].boundary_bits.size(); ++word)
+        {
+            transposition_hash_mix(hashes, keys,
+                [word](TranspositionKey const &key) {
+                    return key.boundary_bits[word];
+                });
+        }
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) { return key.active_piece; });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) { return key.hold_piece; });
+        transposition_hash_mix(hashes, keys,
+            [](TranspositionKey const &key) {
+                return static_cast<std::uint8_t>(key.hold_available);
+            });
+        return hashes;
+    }
+
     // docs/phase7/transposition_capacity_design.md §2: fingerprint-gated slot.
     // Merge soundness comes from exact key verification on fp match, never the
     // fingerprint alone.
@@ -214,35 +309,49 @@ namespace tetris_engine
     static_assert(sizeof(TranspositionEntry) == 16,
         "the fingerprint-gated slot stays compact and naturally aligned");
 
+    struct Child;
+
     struct Node
     {
+        Node() = default;
+        Node(Child const &child, std::size_t depth_value, NodeId root_child_value);
         Board board;
         PolicyState policy;
         Evaluation evaluation;
+        std::size_t child_count = 0;
+        std::size_t cursor = 0;
+        std::size_t depth = 0;
+        HoldState hold;
+        Candidate incoming;
+        Piece played = Piece::T;
         NodeId parent = no_node;
         NodeId first_child = no_node;
         NodeId pending_child = no_node;
         NodeId pending_sibling = no_node;
         NodeId root_child = no_node;
-        std::size_t child_count = 0;
-        Candidate incoming;
-        Piece played = Piece::T;
+        NodeId next_sibling = no_node;
         bool has_incoming = false;
         BranchSource source = BranchSource::Current;
-        HoldState hold;
-        std::size_t cursor = 0;
-        std::size_t depth = 0;
         bool expandable = true;
         bool registered = false;
-        NodeId next_sibling = no_node;
     };
 
-    static_assert(sizeof(Node) == 320,
-        "the child-sibling link fits existing Node padding");
+    static_assert(sizeof(Node) == 192,
+        "the search node stays within three cache lines");
 
     class PendingHeap
     {
     public:
+        struct PendingEntry
+        {
+            double value = 0.0;
+            NodeId child = no_node;
+            NodeId sibling = no_node;
+        };
+
+        static_assert(sizeof(PendingEntry) == 16,
+            "the pending entry stays within one quarter cache line");
+
         explicit PendingHeap(std::vector<Node> &arena)
             : arena_(&arena)
         {
@@ -252,11 +361,29 @@ namespace tetris_engine
             : arena_(&arena)
             , roots_(std::move(other.roots_))
             , counts_(std::move(other.counts_))
+            , entries_(std::move(other.entries_))
         {
         }
 
         PendingHeap(PendingHeap const &) = delete;
         PendingHeap &operator=(PendingHeap const &) = delete;
+
+        void reserve_entries(std::size_t capacity)
+        {
+            entries_ = std::vector<PendingEntry>{};
+            entries_.reserve(capacity);
+            entries_.resize(capacity);
+        }
+
+        void release_entries()
+        {
+            entries_ = std::vector<PendingEntry>{};
+        }
+
+        std::size_t reserved_bytes() const
+        {
+            return entries_.capacity() * sizeof(PendingEntry);
+        }
 
         void reset(std::size_t frontier_count)
         {
@@ -266,9 +393,15 @@ namespace tetris_engine
 
         void push(NodeId id, std::size_t level)
         {
-            Node &node = (*arena_)[id];
-            node.pending_child = no_node;
-            node.pending_sibling = no_node;
+            std::size_t const index = static_cast<std::size_t>(id);
+            if (index >= entries_.size())
+            {
+                entries_.resize(index + 1);
+            }
+            PendingEntry &entry = entries_[index];
+            entry.value = (*arena_)[id].policy.value;
+            entry.child = no_node;
+            entry.sibling = no_node;
             if (roots_[level] == no_node)
             {
                 roots_[level] = id;
@@ -283,24 +416,24 @@ namespace tetris_engine
         NodeId pop_max(std::size_t level)
         {
             NodeId root = roots_[level];
-            NodeId chain = (*arena_)[root].pending_child;
-            (*arena_)[root].pending_child = no_node;
-            (*arena_)[root].pending_sibling = no_node;
+            NodeId chain = entries_[root].child;
+            entries_[root].child = no_node;
+            entries_[root].sibling = no_node;
             NodeId pairs = no_node;
             while (chain != no_node)
             {
                 NodeId first = chain;
-                NodeId second = (*arena_)[first].pending_sibling;
-                NodeId rest = second != no_node ? (*arena_)[second].pending_sibling : no_node;
+                NodeId second = entries_[first].sibling;
+                NodeId rest = second != no_node ? entries_[second].sibling : no_node;
                 NodeId pair = second != no_node ? meld(first, second) : first;
-                (*arena_)[pair].pending_sibling = pairs;
+                entries_[pair].sibling = pairs;
                 pairs = pair;
                 chain = rest;
             }
             NodeId acc = no_node;
             while (pairs != no_node)
             {
-                NodeId next = (*arena_)[pairs].pending_sibling;
+                NodeId next = entries_[pairs].sibling;
                 acc = acc == no_node ? pairs : meld(acc, pairs);
                 pairs = next;
             }
@@ -322,8 +455,8 @@ namespace tetris_engine
     private:
         bool better(NodeId a, NodeId b) const
         {
-            double const va = (*arena_)[a].policy.value;
-            double const vb = (*arena_)[b].policy.value;
+            double const va = entries_[a].value;
+            double const vb = entries_[b].value;
             if (va != vb)
             {
                 return va > vb;
@@ -339,30 +472,54 @@ namespace tetris_engine
                 a = b;
                 b = tmp;
             }
-            (*arena_)[b].pending_sibling = (*arena_)[a].pending_child;
-            (*arena_)[a].pending_child = b;
+            entries_[b].sibling = entries_[a].child;
+            entries_[a].child = b;
             return a;
         }
 
         std::vector<Node> *arena_;
         std::vector<NodeId> roots_;
         std::vector<std::size_t> counts_;
+        std::vector<PendingEntry> entries_;
     };
+
+    inline constexpr std::uint64_t arena_bytes_per_node =
+        sizeof(Node) + sizeof(NodeId) + sizeof(PendingHeap::PendingEntry);
 
     struct Child
     {
+        Board board;
+        PolicyState state;
+        Evaluation evaluation;
+        std::size_t cursor = 0;
+        HoldState hold;
+        Outcome outcome;
         NodeId parent = no_node;
         Candidate candidate;
-        BranchSource source = BranchSource::Current;
         Piece played = Piece::T;
-        Outcome outcome;
-        Board board;
-        Evaluation evaluation;
-        PolicyState state;
-        HoldState hold;
-        std::size_t cursor = 0;
+        BranchSource source = BranchSource::Current;
         bool expandable = true;
     };
+
+    static_assert(sizeof(Child) == 192,
+        "the staged child stays within three cache lines");
+
+    inline Node::Node(Child const &child, std::size_t depth_value, NodeId root_child_value)
+        : board(child.board)
+        , policy(child.state)
+        , evaluation(child.evaluation)
+        , cursor(child.cursor)
+        , depth(depth_value)
+        , hold(child.hold)
+        , incoming(child.candidate)
+        , played(child.played)
+        , parent(child.parent)
+        , root_child(root_child_value)
+        , has_incoming(true)
+        , source(child.source)
+        , expandable(child.expandable)
+    {
+    }
 
     struct ExpansionStats
     {
@@ -465,6 +622,27 @@ namespace tetris_engine
         return h;
     }
 
+    inline std::uint64_t occupancy_fingerprint(Board::occupancy_t const &occupancy)
+    {
+        std::uint64_t fingerprint = 0;
+        for (int i = 0; i < Board::occupancy_t::word_count(); ++i)
+        {
+            fingerprint ^= std::rotl(occupancy.logical_word(i), i * 7);
+        }
+        return fingerprint;
+    }
+
+    inline constexpr std::size_t eval_memo_hash_buckets = 64;
+    inline constexpr std::uint16_t eval_memo_no_entry = 0xFFFFu;
+    inline constexpr std::size_t eval_memo_slot_bytes =
+        sizeof(std::uint64_t) + sizeof(Board) + sizeof(Evaluation)
+        + sizeof(std::uint16_t);
+
+    inline std::size_t eval_memo_bucket(std::uint64_t fingerprint)
+    {
+        return static_cast<std::size_t>((fingerprint * 0x9E3779B97F4A7C15ull) >> 58);
+    }
+
     struct CacheConfig
     {
         enum class Layout : std::uint8_t
@@ -474,7 +652,7 @@ namespace tetris_engine
             SetAssociative,
         };
 
-        Layout layout = Layout::DirectMapped;
+        Layout layout = Layout::Disabled;
         std::size_t entries = 16384;
         std::size_t ways = 4;
     };
@@ -662,20 +840,22 @@ namespace tetris_engine
     {
         return arena_bytes + candidate_bytes + child_bytes + memo_bytes + transposition_bytes
             + rehash_bytes + cache_bytes
-            + engine_queue_reservation + engine_stack_peak_allowance + engine_frontier_metadata;
+            + engine_queue_reservation + engine_stack_peak_allowance
+            + engine_frontier_metadata
+            + eval_memo_hash_buckets * sizeof(std::uint16_t);
     }
 
     inline constexpr std::uint64_t engine_fixed_workspace = engine_buffer_reservation(0,
         max_candidates_per_source * sizeof(Candidate),
         max_children_per_parent * sizeof(Child),
-        max_children_per_parent * sizeof(std::pair<Board, Evaluation>),
+        max_children_per_parent * eval_memo_slot_bytes,
         transposition_entries * sizeof(TranspositionEntry),
         transposition_entries * sizeof(TranspositionEntry),
         16384 * sizeof(EvalCacheEntry));
 
     inline constexpr std::size_t default_arena_capacity =
         static_cast<std::size_t>((engine_memory_budget - engine_fixed_workspace)
-            / (sizeof(Node) + sizeof(NodeId)));
+            / arena_bytes_per_node);
 
     inline std::int64_t steady_clock_nanos()
     {
@@ -773,7 +953,11 @@ namespace tetris_engine
             , queue_(std::move(other.queue_))
             , stats_(other.stats_)
             , exhausted_(other.exhausted_)
-            , eval_memo_(std::move(other.eval_memo_))
+            , eval_memo_fingerprints_(std::move(other.eval_memo_fingerprints_))
+            , eval_memo_boards_(std::move(other.eval_memo_boards_))
+            , eval_memo_evaluations_(std::move(other.eval_memo_evaluations_))
+            , eval_memo_next_(std::move(other.eval_memo_next_))
+            , eval_memo_heads_(other.eval_memo_heads_)
             , candidate_buffer_(std::move(other.candidate_buffer_))
             , child_buffer_(std::move(other.child_buffer_))
             , expanded_count_(other.expanded_count_)
@@ -888,7 +1072,11 @@ namespace tetris_engine
         Queue queue_;
         ExpansionStats stats_{};
         bool exhausted_ = false;
-        std::vector<std::pair<Board, Evaluation>> eval_memo_;
+        std::vector<std::uint64_t> eval_memo_fingerprints_;
+        std::vector<Board> eval_memo_boards_;
+        std::vector<Evaluation> eval_memo_evaluations_;
+        std::vector<std::uint16_t> eval_memo_next_;
+        std::array<std::uint16_t, eval_memo_hash_buckets> eval_memo_heads_{};
         std::vector<Candidate> candidate_buffer_;
         std::vector<Child> child_buffer_;
 
@@ -923,7 +1111,9 @@ namespace tetris_engine
 
         void rebuild_child_links();
 
-        void append_child_link(NodeId parent, NodeId child);
+        NodeId append_child_link(NodeId parent, NodeId child);
+
+        NodeId append_fresh_child_link(NodeId parent, NodeId child, NodeId tail);
 
         std::int64_t now_nanos() const
         {
@@ -949,13 +1139,25 @@ namespace tetris_engine
             BranchSource source, HoldState hold, std::size_t cursor,
             std::span<Piece const> policy_next, std::vector<Child> &out);
 
+        template <auto B>
+            requires reachability::block_spec<decltype(B)>
+        bool expand_source_for_block(NodeId parent_id, Node const &parent, Piece played,
+            BranchSource source, HoldState hold, std::size_t cursor,
+            std::span<Piece const> policy_next, std::vector<Child> &out);
+
         Evaluation evaluate_once(Board const &board);
 
         bool expand_parent(NodeId parent_id);
 
+        void clear_eval_memo();
+
         MaterializeOutcome search_materialize(Child const &child);
 
-        MaterializeOutcome search_materialize_inner(Child const &child);
+        MaterializeOutcome search_materialize_prehashed(Child const &child,
+            TranspositionKey const &key, std::uint64_t fp);
+
+        MaterializeOutcome search_materialize_inner(Child const &child,
+            TranspositionKey const &key, std::uint64_t fp);
 
         void promote(std::size_t level);
 

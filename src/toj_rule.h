@@ -107,6 +107,7 @@ namespace tetris::toj
     namespace detail
     {
         using reachability::operator""_szc;
+        using CellSet = std::array<std::pair<int, int>, 4>;
 
         template <auto B>
             requires reachability::block_spec<decltype(B)>
@@ -125,6 +126,85 @@ namespace tetris::toj
                 return out;
             }();
         };
+
+        template <auto B>
+            requires reachability::block_spec<decltype(B)>
+        inline CellSet block_cells(Placement placement)
+        {
+            auto const &offsets = PieceCells<B>::offsets[placement.rotation()];
+            CellSet out{};
+            for (int k = 0; k < 4; ++k)
+            {
+                out[k] = {placement.x() + offsets[k][0], placement.y() + offsets[k][1]};
+            }
+            return out;
+        }
+
+        inline bool cell_set_in_bounds(CellSet const &cell_set)
+        {
+            for (auto const &cell : cell_set)
+            {
+                if (cell.first < 0 || cell.first >= Board::width
+                    || cell.second < 0 || cell.second >= Board::height)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        inline bool cell_set_empty(Board const &board, CellSet const &cell_set)
+        {
+            for (auto const &cell : cell_set)
+            {
+                if (board.full(cell.first, cell.second))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        struct LandingData
+        {
+            Board::occupancy_t mask{};
+            int lowest = Board::height;
+            bool landing = false;
+        };
+
+        template <auto B>
+            requires reachability::block_spec<decltype(B)>
+        inline std::optional<LandingData> landing_data(
+            Board const &board, Placement placement)
+        {
+            int const rotation = placement.rotation();
+            if (rotation < 0 || rotation >= B.orientations)
+            {
+                return std::nullopt;
+            }
+            CellSet const cell_set = block_cells<B>(placement);
+            bool below_open = Placement::try_make(
+                placement.x(), placement.y() - 1, rotation).has_value();
+            LandingData data;
+            for (auto const &cell : cell_set)
+            {
+                if (cell.first < 0 || cell.first >= Board::width
+                    || cell.second < 0 || cell.second >= Board::height
+                    || board.full(cell.first, cell.second))
+                {
+                    return std::nullopt;
+                }
+                data.mask.set(cell.first, cell.second);
+                data.lowest = std::min(data.lowest, cell.second);
+                if (below_open
+                    && (cell.second == 0 || board.full(cell.first, cell.second - 1)))
+                {
+                    below_open = false;
+                }
+            }
+            data.landing = !below_open;
+            return data;
+        }
     }
 
     inline constexpr int orientation_count(Piece piece)
@@ -139,15 +219,10 @@ namespace tetris::toj
         {
             return std::nullopt;
         }
-        return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::array<std::pair<int, int>, 4> {
-            auto const &offsets = detail::PieceCells<B>::offsets[rotation];
-            std::array<std::pair<int, int>, 4> out{};
-            for (int k = 0; k < 4; ++k)
-            {
-                out[k] = {placement.x() + offsets[k][0], placement.y() + offsets[k][1]};
-            }
-            return out;
-        });
+        return reachability::call_with_block<SRS>(piece,
+            [&]<reachability::block B>() -> detail::CellSet {
+                return detail::block_cells<B>(placement);
+            });
     }
 
     inline bool in_bounds(Piece piece, Placement placement)
@@ -157,14 +232,7 @@ namespace tetris::toj
         {
             return false;
         }
-        for (auto const &cell : *maybe)
-        {
-            if (cell.first < 0 || cell.first >= Board::width || cell.second < 0 || cell.second >= Board::height)
-            {
-                return false;
-            }
-        }
-        return true;
+        return detail::cell_set_in_bounds(*maybe);
     }
 
     inline bool cells_empty(Piece piece, Placement placement, Board const &board)
@@ -174,18 +242,8 @@ namespace tetris::toj
         {
             return false;
         }
-        for (auto const &cell : *maybe)
-        {
-            if (cell.first < 0 || cell.first >= Board::width || cell.second < 0 || cell.second >= Board::height)
-            {
-                return false;
-            }
-            if (board.full(cell.first, cell.second))
-            {
-                return false;
-            }
-        }
-        return true;
+        return detail::cell_set_in_bounds(*maybe)
+            && detail::cell_set_empty(board, *maybe);
     }
 
     inline bool fits(Piece piece, Placement placement, Board const &board)
@@ -197,13 +255,11 @@ namespace tetris::toj
     // bitboards for every candidate in an already enumerated parent.
     inline bool is_landing(Board const &board, Piece piece, Placement placement)
     {
-        if (!cells_empty(piece, placement, board))
-        {
-            return false;
-        }
-        auto below = Placement::try_make(placement.x(), placement.y() - 1,
-            placement.rotation());
-        return !below || !cells_empty(piece, *below, board);
+        return reachability::call_with_block<SRS>(piece,
+            [&]<reachability::block B>() {
+                auto data = detail::landing_data<B>(board, placement);
+                return data.has_value() && data->landing;
+            });
     }
 
     inline bool can_spawn(Board const &board, Piece piece)
@@ -258,18 +314,12 @@ namespace tetris::toj
 
     namespace detail
     {
-        // Canonical sort entry: the candidate plus its cells computed ONCE at
-        // insertion time. The comparator below observes identical values to
-        // the former per-comparison cells() calls, so the resulting candidate
-        // order (cells, then T-only arrival, then rotation) is unchanged
-        // while sort/dedup never recompute geometry.
-        using CandidateCellSet = std::array<std::pair<int, int>, 4>;
-
         struct CandidateSortEntry
         {
             Candidate candidate{};
-            CandidateCellSet cell_set{};
+            std::uint64_t key = 0;
         };
+
     }
 
     inline std::size_t max_candidates_per_source()
@@ -277,53 +327,37 @@ namespace tetris::toj
         return 4 * Board::width * Board::height * 2;
     }
 
-    inline std::optional<CandidateBatch> enumerate_candidates_into(
-        Board const &board, Piece piece, MovementConfig config, std::span<Candidate> out)
+    namespace detail
     {
-        reachability::search::search_config cfg{};
-        cfg.allow_180 = config.allow_180;
-        cfg.allow_softdrop = true;
-        cfg.allow_sonicdrop = true;
-        cfg.allow_20g = false;
-        return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::optional<CandidateBatch> {
+        template <auto B>
+            requires reachability::block_spec<decltype(B)>
+        inline std::optional<CandidateBatch> enumerate_into_for_block(
+            Board const &board, Piece piece, MovementConfig config, std::span<Candidate> out)
+        {
+            reachability::search::search_config cfg{};
+            cfg.allow_180 = config.allow_180;
+            cfg.allow_softdrop = true;
+            cfg.allow_sonicdrop = true;
+            cfg.allow_20g = false;
             bool const is_t = B.piece_identity == reachability::piece_id("T");
-            // Reused across calls so the hot loop performs no per-element
-            // allocation after the first fill; cleared on every entry.
             thread_local std::vector<detail::CandidateSortEntry> scratch;
             scratch.clear();
             if (scratch.capacity() < out.size())
             {
                 scratch.reserve(out.size());
             }
-            auto key_less =
-                [is_t](detail::CandidateSortEntry const &a, detail::CandidateSortEntry const &b) {
-                    if (a.cell_set != b.cell_set)
-                    {
-                        return a.cell_set < b.cell_set;
-                    }
-                    int const aa = is_t ? static_cast<int>(a.candidate.arrival) : 0;
-                    int const ab = is_t ? static_cast<int>(b.candidate.arrival) : 0;
-                    if (aa != ab)
-                    {
-                        return aa < ab;
-                    }
-                    return a.candidate.placement.rotation() < b.candidate.placement.rotation();
-                };
-            auto key_equal =
-                [is_t](detail::CandidateSortEntry const &a, detail::CandidateSortEntry const &b) {
-                    return a.cell_set == b.cell_set
-                        && (is_t ? static_cast<int>(a.candidate.arrival) : 0)
-                            == (is_t ? static_cast<int>(b.candidate.arrival) : 0);
-                };
+            auto key_less = [](detail::CandidateSortEntry const &a,
+                                detail::CandidateSortEntry const &b) {
+                return a.key < b.key;
+            };
+            auto key_equal = [](detail::CandidateSortEntry const &a,
+                                 detail::CandidateSortEntry const &b) {
+                return (a.key >> 2) == (b.key >> 2);
+            };
             std::size_t raw = 0;
             bool overflow = false;
             auto add = [&](Placement placement, ArrivalClass arrival) {
                 ++raw;
-                auto maybe_cells = cells(piece, placement);
-                if (!maybe_cells)
-                {
-                    return;
-                }
                 if (scratch.size() >= out.size())
                 {
                     overflow = true;
@@ -331,7 +365,15 @@ namespace tetris::toj
                 }
                 detail::CandidateSortEntry entry;
                 entry.candidate = Candidate{placement, is_t ? arrival : ArrivalClass::Normal};
-                entry.cell_set = *maybe_cells;
+                std::uint64_t key = 0;
+                for (auto const &cell : detail::block_cells<B>(placement))
+                {
+                    key = key << 4 | static_cast<std::uint64_t>(cell.first);
+                    key = key << 6 | static_cast<std::uint64_t>(cell.second);
+                }
+                key = key << 1 | static_cast<std::uint64_t>(entry.candidate.arrival);
+                entry.key = key << 2
+                    | static_cast<std::uint64_t>(entry.candidate.placement.rotation());
                 scratch.push_back(entry);
             };
             reachability::search::dispatch_with_height<B, 20>(board.occupancy(), board.roof(),
@@ -352,7 +394,40 @@ namespace tetris::toj
             {
                 return std::nullopt;
             }
-            std::sort(scratch.begin(), scratch.end(), key_less);
+            constexpr std::size_t bucket_count = 16;
+            std::array<std::size_t, bucket_count> counts{};
+            auto bucket_of = [](detail::CandidateSortEntry const &entry) {
+                return static_cast<std::size_t>(entry.key >> 39);
+            };
+            for (auto const &entry : scratch)
+            {
+                ++counts[bucket_of(entry)];
+            }
+            std::array<std::size_t, bucket_count + 1> offsets{};
+            for (std::size_t bucket = 0; bucket < bucket_count; ++bucket)
+            {
+                offsets[bucket + 1] = offsets[bucket] + counts[bucket];
+            }
+            std::array<std::size_t, bucket_count> next{};
+            std::copy_n(offsets.begin(), bucket_count, next.begin());
+            for (std::size_t bucket = 0; bucket < bucket_count; ++bucket)
+            {
+                while (next[bucket] < offsets[bucket + 1])
+                {
+                    std::size_t const target = bucket_of(scratch[next[bucket]]);
+                    if (target == bucket)
+                    {
+                        ++next[bucket];
+                    }
+                    else
+                    {
+                        std::swap(scratch[next[bucket]], scratch[next[target]++]);
+                    }
+                }
+                std::sort(scratch.begin() + static_cast<std::ptrdiff_t>(offsets[bucket]),
+                    scratch.begin() + static_cast<std::ptrdiff_t>(offsets[bucket + 1]),
+                    key_less);
+            }
             std::size_t m = 0;
             std::size_t kept = static_cast<std::size_t>(-1);
             for (std::size_t i = 0; i < scratch.size(); ++i)
@@ -364,7 +439,16 @@ namespace tetris::toj
                 }
             }
             return CandidateBatch{m, raw};
-        });
+        }
+    }
+
+    inline std::optional<CandidateBatch> enumerate_candidates_into(
+        Board const &board, Piece piece, MovementConfig config, std::span<Candidate> out)
+    {
+        return reachability::call_with_block<SRS>(piece,
+            [&]<reachability::block B>() -> std::optional<CandidateBatch> {
+                return detail::enumerate_into_for_block<B>(board, piece, config, out);
+            });
     }
 
     inline std::vector<Candidate> enumerate_candidates(Board const &board, Piece piece, MovementConfig config)
@@ -379,21 +463,17 @@ namespace tetris::toj
         return out;
     }
 
-    inline std::optional<SpinType> classify_spin(Board const &board, Piece piece, Candidate candidate, int clear_count)
+    namespace detail
     {
-        if (piece != Piece::T)
+        template <auto B>
+            requires reachability::block_spec<decltype(B)>
+        inline SpinType classify_landable_t_spin(
+            Board const &board, Candidate candidate, int clear_count)
         {
-            return std::nullopt;
-        }
-        return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::optional<SpinType> {
             Placement const placement = candidate.placement;
             int const rotation = placement.rotation();
             int const x = placement.x();
             int const y = placement.y();
-            if (!is_landing(board, piece, placement))
-            {
-                return std::nullopt;
-            }
             if (candidate.arrival != ArrivalClass::TerminalRotation)
             {
                 return SpinType::None;
@@ -403,7 +483,8 @@ namespace tetris::toj
             {
                 for (int cy = y - 1; cy <= y + 1; cy += 2)
                 {
-                    if (cx < 0 || cx >= Board::width || cy < 0 || cy >= Board::height || board.full(cx, cy))
+                    if (cx < 0 || cx >= Board::width || cy < 0
+                        || cy >= Board::height || board.full(cx, cy))
                     {
                         ++corners;
                     }
@@ -436,13 +517,19 @@ namespace tetris::toj
                             return;
                         }
                         constexpr auto kick = table[j];
-                        auto target = Placement::try_make(x + kick[0_szc], y + kick[1_szc], other);
-                        if (!target || !in_bounds(piece, *target))
+                        auto target = Placement::try_make(
+                            x + kick[0_szc], y + kick[1_szc], other);
+                        if (!target)
+                        {
+                            return;
+                        }
+                        CellSet const target_cells = block_cells<B>(*target);
+                        if (!cell_set_in_bounds(target_cells))
                         {
                             return;
                         }
                         decided = true;
-                        rotation_open = cells_empty(piece, *target, board);
+                        rotation_open = cell_set_empty(board, target_cells);
                     });
                 });
                 if (decided && rotation_open)
@@ -455,7 +542,30 @@ namespace tetris::toj
                 return clear_count == 1 ? SpinType::Mini : SpinType::Full;
             }
             return SpinType::Full;
-        });
+        }
+    }
+
+    inline std::optional<SpinType> classify_spin(Board const &board, Piece piece,
+        Candidate candidate, int clear_count)
+    {
+        if (piece != Piece::T)
+        {
+            return std::nullopt;
+        }
+        return reachability::call_with_block<SRS>(piece,
+            [&]<reachability::block B>() -> std::optional<SpinType> {
+                if constexpr (B.piece_identity != reachability::piece_id("T"))
+                {
+                    return std::nullopt;
+                }
+                auto data = detail::landing_data<B>(board, candidate.placement);
+                if (!data.has_value() || !data->landing)
+                {
+                    return std::nullopt;
+                }
+                return detail::classify_landable_t_spin<B>(
+                    board, candidate, clear_count);
+            });
     }
 
     struct RuleResult
@@ -467,39 +577,43 @@ namespace tetris::toj
         bool perfect_clear = false;
     };
 
-    inline std::optional<RuleResult> apply(Board const &board, Piece piece, Candidate candidate)
+    namespace detail
     {
-        return reachability::call_with_block<SRS>(piece, [&]<reachability::block B>() -> std::optional<RuleResult> {
-            if (!is_landing(board, piece, candidate.placement))
-            {
-                return std::nullopt;
-            }
-            auto mask = occupancy_mask(piece, candidate.placement);
-            auto lowest = lowest_occupied_row(piece, candidate.placement);
-            if (!mask || !lowest)
+        template <auto B>
+            requires reachability::block_spec<decltype(B)>
+        inline std::optional<RuleResult> apply_for_block(
+            Board const &board, Candidate candidate)
+        {
+            auto data = landing_data<B>(board, candidate.placement);
+            if (!data.has_value() || !data->landing)
             {
                 return std::nullopt;
             }
             Board next = board;
-            next.apply_unchecked(*mask);
+            next.apply_unchecked(data->mask);
             Board::ClearResult cleared = next.cleared();
             SpinType spin = SpinType::None;
-            if (piece == Piece::T)
+            if constexpr (B.piece_identity == reachability::piece_id("T"))
             {
-                auto classified = classify_spin(board, piece, candidate, cleared.count);
-                if (!classified)
-                {
-                    return std::nullopt;
-                }
-                spin = *classified;
+                spin = classify_landable_t_spin<B>(
+                    board, candidate, cleared.count);
             }
             RuleResult result;
             result.board = cleared.board;
             result.clear_count = cleared.count;
             result.perfect_clear = cleared.board.empty();
-            result.lockout = *lowest >= death_row;
+            result.lockout = data->lowest >= death_row;
             result.spin = spin;
             return result;
-        });
+        }
+    }
+
+    inline std::optional<RuleResult> apply(Board const &board, Piece piece,
+        Candidate candidate)
+    {
+        return reachability::call_with_block<SRS>(piece,
+            [&]<reachability::block B>() -> std::optional<RuleResult> {
+                return detail::apply_for_block<B>(board, candidate);
+            });
     }
 }
