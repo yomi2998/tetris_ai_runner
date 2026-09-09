@@ -1,0 +1,7 @@
+PRIMARY_0.90=NO-ADVANCE
+FALLBACK_0.95_MEASURED_TRIAL=OWNER-DECISION
+reason: this offline screen characterizes reuse opportunity only and supplies
+ no measured medians; counts alone cannot qualify either target, and the
+ labeled extrapolations do not establish net wall speed.
+evidence: report.md and summary.json in this directory; manifest.txt records
+ commands, hashes, and resource bounds.

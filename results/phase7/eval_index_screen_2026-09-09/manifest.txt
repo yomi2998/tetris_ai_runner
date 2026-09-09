@@ -1,0 +1,91 @@
+eval-index screen manifest, 2026-09-09 (repair revision)
+=========================================================
+
+Scope: DIAGNOSTIC SCREEN only. No production engine or build behavior modified.
+No commits, no staging. Raw trace read in place from /tmp, never copied to git.
+
+Environment
+-----------
+branch: fast-reachability-migration
+HEAD: 7b9f8c5
+git diff (tracked): empty (verified, no tracked modifications)
+deleted as superseded invalid evidence: tests/eval_index_screen.py and its
+  generated tests/__pycache__ directory (accepted analyzer source untouched)
+diagnostic tooling: tests/eval_index_screen_core.cpp (untracked)
+results in: results/phase7/eval_index_screen_2026-09-09/ (this directory)
+core binary: /tmp/eval_index_screen_core (hand-compiled, outside the repo)
+binary sha256: 24359fa40f2b3af6da494c79adda1a3ed1336c213ed489b63d236ea1340c936b
+core source sha256: ee5e8fec878e7a204b1be281bf47cbbf422619ba33b524a550f41444c15271a5
+raw trace: /tmp/eval_reuse_2026-09-09-seed1.evtrc
+trace size: 5160073024 bytes
+trace sha256: 5956cfc5015360cd159ce023f7f05f8ca81119bb872c68dd9a7b675c16bb684f
+  (matches the accepted eval-reuse diagnostic hash)
+summary sha256: f7afce68b4e6e40d6c04f66a0f4845382fd05b723fba9f6db174cea0d61574da
+report sha256: f8521b79fd0e4de69ab93e646ace80e5c355b94285421cef3e935ff1b8436374
+status sha256: 49802d6d4ad5cd9b754dd6317067187925e4f047ed90ec4530da936dc58a2a60
+compiler: g++ 16.2.1, flags -O2 -std=c++20 -Wall (zero warnings)
+CPU15 after runs: online (1)
+
+Rejected infrastructure execution (not evidence)
+------------------------------------------------
+Original Python full-matrix workflow: exceeded the tool time cap with no
+full-trace output. Its script is deleted above. No number in report.md or
+summary.json derives from it.
+
+Repair changes versus the first recovery run
+--------------------------------------------
+- Reserved byte (offset 3), reserved bytes (offsets 6, 7), and reserved word
+  (offset 12) validation added to the core, matching
+  tests/eval_reuse_analyze.py; trace passes all checks.
+- Per-design practically_eligible_without_arena_change added with explicit
+  practical_eligibility_margin_bytes 65536; raw arithmetic fit kept
+  separately as fits_256mib_without_arena_change.
+- Full summary regenerated deterministically from the repaired binary.
+
+Commands (cwd /home/icly/Documents/tetris_ai_runner)
+----------------------------------------------------
+build (exit 0, zero warnings):
+g++ -O2 -std=c++20 -Wall -o /tmp/eval_index_screen_core tests/eval_index_screen_core.cpp
+selftest (exit 0, SELFTEST OK checks=21):
+/usr/bin/time -v /tmp/eval_index_screen_core --selftest
+prefix proof (exit 0, BOUNDS OK peak_rss_kib=198096 cap_mib=512, wall 0.50 s):
+/usr/bin/time -v /tmp/eval_index_screen_core /tmp/eval_reuse_2026-09-09-seed1.evtrc
+ --summary /tmp/idx_prefix3.json --max-events 2000000 --caps 65536
+ --verify-bounds --as-limit-mib 1024 --rss-cap-mib 512
+determinism check (two full-matrix 2M-event prefixes byte-identical):
+/tmp/eval_index_screen_core /tmp/eval_reuse_2026-09-09-seed1.evtrc
+ --summary /tmp/idx_det_X.json --max-events 2000000 (twice)
+superseded probe (full-matrix prefix, 600144 KiB over the 512 MiB ceiling, not evidence):
+/usr/bin/time -v /tmp/eval_index_screen_core /tmp/eval_reuse_2026-09-09-seed1.evtrc
+ --summary /tmp/idx_prefix.json --max-events 2000000
+full screen (exit 0, wall 1:42.05, peak RSS 1479308 KiB / 1.41 GiB,
+ hard 4 GiB address-space cap, no surviving process):
+/usr/bin/time -v bash -c 'ulimit -v 4194304; /tmp/eval_index_screen_core
+ /tmp/eval_reuse_2026-09-09-seed1.evtrc
+ --summary results/phase7/eval_index_screen_2026-09-09/summary.json'
+rerun: rebuild the core with the build command above, then run the prefix
+ proof and full screen commands above; /tmp needs about 100 MB free for
+ prefix summaries only (no spool files are written).
+
+Accepted full-screen result
+---------------------------
+summary.json in this directory:
+eval 26632382, distinct 9031593, bypass 684163, queries 25948219,
+nodes 25757237, resets 80, peak live nodes 432781, final live 281352.
+120 logical designs (60 physical LRU indexes x 4B/8B slots).
+Raw arithmetic fit 42/120; practical eligibility (65536 B margin) 36/120.
+The six 2097152-byte designs satisfy raw arithmetic with 28 bytes to spare
+ and are practically ineligible.
+Best: splitmix64 2097152-entry 8-way, 13106967 hits (50.512 percent).
+Best practical: splitmix64 262144-entry 8-way 4-byte, 13071432 hits
+ (50.375 percent), index 1310720 B.
+Raw 8-way/1048576 hits 5858030 sit below the accepted analyzer
+ board-cache value 5993345, as invalidation semantics require.
+Accepted findings: report.md in this directory.
+Verdict: PRIMARY_0.90=NO-ADVANCE, FALLBACK_0.95_MEASURED_TRIAL=OWNER-DECISION
+ (status.txt; counts alone qualify nothing).
+
+Artifact sizes
+--------------
+Use ls -la in this directory; summary.json is about 80 KB.
+No per-request output was written anywhere.
