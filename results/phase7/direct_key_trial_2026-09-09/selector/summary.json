@@ -1,0 +1,89 @@
+{
+ "ancestry": {
+  "368a332": "present"
+ },
+ "artifacts": {
+  "all_four_match_runbook": true,
+  "direct_key_selector_copy": "420002a847f6fea6cb9e87b868f82ad1497bc0b12b7e817ebbe612c9dce6ee89",
+  "direct_key_selector_mode": "555",
+  "normal_selector_copy": "1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765",
+  "normal_selector_mode": "555",
+  "params": "ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037",
+  "prerequisite_verdict": "7b2e2dc7ecfb576afee3710b93465b8f914f591e5a685269be26fb6a14dc142e"
+ },
+ "collector": {
+  "exit": 0,
+  "hash": "7a436c3a3d8d474d83c2957943727b5842c4cbeef0109c559f012ebf2ac901f5",
+  "invocations": 1,
+  "terminal": "COLLECTED"
+ },
+ "commands": {
+  "count": 10,
+  "full_spelling": true,
+  "order": "prewarm normal, prewarm direct-key, normal/dk, dk/normal, dk/normal, normal/dk",
+  "prewarm": 2,
+  "timed": 8
+ },
+ "controls": {
+  "boost": "1 unchanged",
+  "cpu15_window": "2026-09-09T17:40:49Z to 2026-09-09T17:43:44Z continuous, state 0 at every check, restored online",
+  "epp": "performance",
+  "governor": "performance",
+  "load_abort_gate": "no command-level load5 reached 2.0",
+  "pair_gate_load5": {
+   "before_pair1": "0.73",
+   "before_pair2": "0.93",
+   "before_pair3": "1.01",
+   "before_pair4": "1.07"
+  },
+  "per_run_load1_max": "1.72",
+  "per_run_load5_max": "1.07",
+  "precheck_5min": "0.73 below 1.5"
+ },
+ "eligibility": {
+  "all_rows_single_profile_v3": true,
+  "all_stderr_empty": true,
+  "budget_ms": "0.000",
+  "dead_moves": "0",
+  "games": "0",
+  "iters": "1000",
+  "maxdepth": "6",
+  "mode": "iters",
+  "moves": "200",
+  "seed": "1",
+  "telemetry": "off",
+  "warmup_moves": "20"
+ },
+ "head": "7b67fc910859ea6af8c34b48e94b2c95ee657102",
+ "label_mapping": "soa labels denote direct-key variant, raw files unrenamed",
+ "no_extra_rows": true,
+ "no_stray_process": true,
+ "provisional": true,
+ "ratios": {
+  "p95_ms": {
+   "pair1": "1.133854680109018912627471772",
+   "pair2": "1.079393427200102052206081674",
+   "pair3": "1.083889364589560075609480266",
+   "pair4": "1.070650745680310097891071546"
+  },
+  "total_s": {
+   "pair1": "1.127338206837239303375618147",
+   "pair2": "1.084047221061429168407856247",
+   "pair3": "1.077215390299255818863144561",
+   "pair4": "1.077219045583284347779618447"
+  }
+ },
+ "reruns": 0,
+ "rows": {
+  "count": 8,
+  "note": "rows.txt is the exact concatenation of run1 through run8 stdout in execution order"
+ },
+ "selector": {
+  "p95_exact_median": "1.081641395894831063907780970",
+  "p95_exact_spread": "0.063203934428708814736400226",
+  "total_exact_median": "1.080633133322356758093737347",
+  "total_exact_spread": "0.050122816537983484512473586"
+ },
+ "tracked_clean": true,
+ "verdict": "NO-ADVANCE"
+}
