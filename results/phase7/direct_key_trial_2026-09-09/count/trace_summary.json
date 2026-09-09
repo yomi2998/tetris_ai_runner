@@ -1,0 +1,84 @@
+{
+  "directory": "/home/icly/Documents/tetris_ai_runner_results/phase7/direct_key_trial_2026-09-09/trace/",
+  "status": "PASS",
+  "fresh_directory": true,
+  "label_mapping": "collector template label soa maps to variant direct-key; trace_soa files are produced by candidate_partition_direct_key",
+  "byte_identity": {
+    "inputs_bin": true,
+    "moves_tsv": true,
+    "run_totals_tsv": true,
+    "stderr_empty_both": true
+  },
+  "files": [
+    {
+      "name": "trace_normal.inputs.bin",
+      "hash": "c6b5ecf6c2b7e956b7770ea957820d77fefc4fcaad0a9e1be22a55d1d1473da5",
+      "size": 64365916,
+      "mode": "0o444"
+    },
+    {
+      "name": "trace_normal.moves.tsv",
+      "hash": "723c2c83ef6de336ef8750d76fec7198cdea2b94545f8d10ad4badfc4d7c674b",
+      "size": 1744,
+      "mode": "0o444"
+    },
+    {
+      "name": "trace_normal.run_totals.tsv",
+      "hash": "46934e5f13682b02e1df729c26c86d0f2c74f599f4e6136b3610ce5b3c374785",
+      "size": 435,
+      "mode": "0o444"
+    },
+    {
+      "name": "trace_normal.stderr.txt",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "mode": "0o444"
+    },
+    {
+      "name": "trace_normal.stdout.txt",
+      "hash": "41dab57b7358147a8035a2ee30433934505898441fdc892b8340f82b77b753da",
+      "size": 1267,
+      "mode": "0o444"
+    },
+    {
+      "name": "trace_soa.inputs.bin",
+      "hash": "c6b5ecf6c2b7e956b7770ea957820d77fefc4fcaad0a9e1be22a55d1d1473da5",
+      "size": 64365916,
+      "mode": "0o444"
+    },
+    {
+      "name": "trace_soa.moves.tsv",
+      "hash": "723c2c83ef6de336ef8750d76fec7198cdea2b94545f8d10ad4badfc4d7c674b",
+      "size": 1744,
+      "mode": "0o444"
+    },
+    {
+      "name": "trace_soa.run_totals.tsv",
+      "hash": "46934e5f13682b02e1df729c26c86d0f2c74f599f4e6136b3610ce5b3c374785",
+      "size": 435,
+      "mode": "0o444"
+    },
+    {
+      "name": "trace_soa.stderr.txt",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "mode": "0o444"
+    },
+    {
+      "name": "trace_soa.stdout.txt",
+      "hash": "985b7dd0513ea66c8f1217d20c32fb5dfbdc8be0b077b0f206275f12a0865317",
+      "size": 1267,
+      "mode": "0o444"
+    }
+  ],
+  "stdout_mapping": {
+    "compared": 67,
+    "timing_differing_keys": 28,
+    "non_timing_differences": [],
+    "mem_retained_bytes": {
+      "normal": "266338276",
+      "direct_key": "266338276"
+    },
+    "rule": "all non-timing fields including mem_retained_bytes must be equal"
+  }
+}
