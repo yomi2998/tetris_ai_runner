@@ -1,0 +1,128 @@
+{
+ "ancestry": {
+  "abf870d": "present"
+ },
+ "artifacts": {
+  "all_six_match_runbook": true,
+  "normal_profile": "1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765",
+  "params": "ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037",
+  "partition_normal": "5986bdeebf9ff34fe4c3de0845881991fe463f6dc84dcbfb8d1b4bd7944642a1",
+  "partition_trial": "71cdadc5981465e602df066b7dfdaf73117bbe107d2aece42844f4ddeee61dd2",
+  "prerequisite_transcript": "5e7a7328b500b330a7b291bb6e1ea74c495dc9c3859a52e2148d0b16c7727361",
+  "trial_profile": "ce2bd5a65967772bdbb89ac25b94a009c4d189cb1396a16a38ce96c27594ee7c"
+ },
+ "collector": {
+  "exit": 0,
+  "hash": "a1a79cc8dfd014323d0437919c2a05312f5f66308ba6c33f7740889bc335ceff",
+  "invocations": 1,
+  "terminal": "COLLECTED"
+ },
+ "commands": {
+  "count": 10,
+  "full_spelling": true,
+  "order": "trace normal, trace row-fusion, then normal row-fusion row-fusion normal normal row-fusion row-fusion normal",
+  "runs": 8,
+  "trace": 2
+ },
+ "controls": {
+  "boost": "1 unchanged",
+  "cpu15_window": "2026-09-09T19:24:07Z to 2026-09-09T19:25:35Z continuous, state 0 at every check, restored online",
+  "epp": "performance",
+  "governor": "performance",
+  "half_gate_load5": {
+   "before_run1": "1.17",
+   "before_run5": "1.23"
+  },
+  "load_abort_gate": "no per-run load5 reached 2.0 (max 1.30)",
+  "precheck_5min": "1.16 below 1.5"
+ },
+ "cross_engine_identity": {
+  "mapped_field": "mem_retained_bytes",
+  "pass": true,
+  "rule": "all non-timing fields identical across all eight rows including mem_retained_bytes"
+ },
+ "determinism": {
+  "normal_repeats": "run1 run4 run5 run8 identical on all non-timing fields",
+  "pass": true,
+  "trial_repeats": "run2 run3 run6 run7 identical on all non-timing fields"
+ },
+ "expected_values": {
+  "all_37_match": true,
+  "arena_reserved_bytes": "208720320",
+  "budget_ms": "0.000",
+  "cache_hits": "0",
+  "cache_misses": "0",
+  "cache_replacements": "0",
+  "cache_requests": "0",
+  "dead_moves": "0",
+  "eval_computed": "25948219",
+  "eval_memo_hits": "684163",
+  "evals": "26632382",
+  "games": "0",
+  "idmap_reserved_bytes": "4348340",
+  "iters": "1000",
+  "materialized_nodes": "25757157",
+  "maxdepth": "6",
+  "mem_retained_bytes": "266338276",
+  "mode": "iters",
+  "moves": "80",
+  "node_live_delta_bytes": "-2314176",
+  "parents": "599166",
+  "path_calls": "80",
+  "path_states": "76513",
+  "pending_end_max": "425068",
+  "promotions_refused": "27680",
+  "raw_landings": "65566529",
+  "raw_unique_ratio_x1000": "2020",
+  "replay_failures": "0",
+  "rule_transitions": "32446394",
+  "searches": "1142252",
+  "seed": "1",
+  "telemetry": "on",
+  "timers": "off",
+  "transitions": "26632382",
+  "transposition_merges": "875225",
+  "unique_candidates": "32446394",
+  "warmup_moves": "20",
+  "widening_iters": "80000"
+ },
+ "head": "9a5a163477635832b037311cb1a4dc36c1e6763e",
+ "label_mapping": "template soa labels denote the row-fusion trial variant; all soa-labeled commands invoked tetris_profile_row_fusion or candidate_partition_row_fusion, verified by artifact sha256 in MANIFEST.txt; raw filenames not renamed",
+ "memory": {
+  "both_below_cap": true,
+  "cap": 268435456,
+  "difference": "0",
+  "normal": "266338276",
+  "residual_margin": 2097180,
+  "row-fusion": "266338276"
+ },
+ "no_extra_rows": true,
+ "no_stray_process": true,
+ "prerequisite_tests": {
+  "equivalence_and_exclusion_ctests": "pass, 8 of 8 in each of three build trees",
+  "evidence": "transcript hash verified before and during collection; binaries unchanged by hash",
+  "normal_symbol_isolation": "pass, 0 row_fusion symbols in normal binary",
+  "partition_selftests": "pass, 4 of 4 including candidate_partition_row_fusion",
+  "row_fusion_trial_tests": "pass, 396598 checks 0 failures under GCC debug, GCC self-release, Clang self-release, and sanitizer builds"
+ },
+ "provisional": true,
+ "reruns": 0,
+ "rows": {
+  "all_single_profile_v3": true,
+  "all_stderr_empty": true,
+  "count": 8
+ },
+ "timer_attribution": "on fused children the safe-margin computation moves from the policy_ns scope into the eval-miss scope; count rows use timers off so verdict evidence is unaffected",
+ "trace_identity": {
+  "byte_identical": [
+   "inputs.bin",
+   "moves.tsv",
+   "run_totals.tsv"
+  ],
+  "pass": true,
+  "stderr_empty_both": true,
+  "stdout_mapping": "only timing fields differ; mem_retained_bytes equal on both"
+ },
+ "tracked_clean": true,
+ "verdict": "PASS"
+}

@@ -1,0 +1,100 @@
+{
+ "byte_identity": {
+  "inputs_bin": true,
+  "moves_tsv": true,
+  "run_totals_tsv": true,
+  "stderr_empty_both": true
+ },
+ "directory": "/home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/trace/",
+ "files": [
+  {
+   "hash": "c6b5ecf6c2b7e956b7770ea957820d77fefc4fcaad0a9e1be22a55d1d1473da5",
+   "mode": "read-only",
+   "name": "trace_normal.inputs.bin",
+   "size": 64365916
+  },
+  {
+   "hash": "723c2c83ef6de336ef8750d76fec7198cdea2b94545f8d10ad4badfc4d7c674b",
+   "mode": "read-only",
+   "name": "trace_normal.moves.tsv",
+   "size": 1744
+  },
+  {
+   "hash": "46934e5f13682b02e1df729c26c86d0f2c74f599f4e6136b3610ce5b3c374785",
+   "mode": "read-only",
+   "name": "trace_normal.run_totals.tsv",
+   "size": 435
+  },
+  {
+   "hash": "ab2c6606d64c97fb20074c93605469e39ca610db86543447cf54beaba7c43e4c",
+   "mode": "read-only",
+   "name": "trace_normal.stdout.txt",
+   "size": 1267
+  },
+  {
+   "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "mode": "read-only",
+   "name": "trace_normal.stderr.txt",
+   "size": 0
+  },
+  {
+   "hash": "c6b5ecf6c2b7e956b7770ea957820d77fefc4fcaad0a9e1be22a55d1d1473da5",
+   "mode": "read-only",
+   "name": "trace_soa.inputs.bin",
+   "size": 64365916
+  },
+  {
+   "hash": "723c2c83ef6de336ef8750d76fec7198cdea2b94545f8d10ad4badfc4d7c674b",
+   "mode": "read-only",
+   "name": "trace_soa.moves.tsv",
+   "size": 1744
+  },
+  {
+   "hash": "46934e5f13682b02e1df729c26c86d0f2c74f599f4e6136b3610ce5b3c374785",
+   "mode": "read-only",
+   "name": "trace_soa.run_totals.tsv",
+   "size": 435
+  },
+  {
+   "hash": "7877d5fbe1c58b1c9366b7e8b6e6094a988b598d04d55924428693e888f4740f",
+   "mode": "read-only",
+   "name": "trace_soa.stdout.txt",
+   "size": 1267
+  },
+  {
+   "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "mode": "read-only",
+   "name": "trace_soa.stderr.txt",
+   "size": 0
+  }
+ ],
+ "fresh_directory": true,
+ "label_mapping": "template soa labels denote the row-fusion trial variant; raw files retain template spelling and were never renamed",
+ "status": "PASS",
+ "stdout_mapping": {
+  "compared": 67,
+  "mem_retained_bytes": {
+   "normal": "266338276",
+   "row-fusion": "266338276"
+  },
+  "non_timing_differences": [],
+  "rule": "only timing keys may differ; mem_retained_bytes must be equal",
+  "timing_difference_count": 27
+ },
+ "trace_work_counts": {
+  "eval_computed": "6025939",
+  "eval_memo_hits": "106363",
+  "evals": "6132302",
+  "materialized_nodes": "5978871",
+  "moves": "20",
+  "parents": "145544",
+  "path_calls": "20",
+  "path_states": "20655",
+  "raw_landings": "15283285",
+  "rule_transitions": "7266627",
+  "searches": "276768",
+  "transitions": "6132302",
+  "transposition_merges": "153431",
+  "unique_candidates": "7266627"
+ }
+}
