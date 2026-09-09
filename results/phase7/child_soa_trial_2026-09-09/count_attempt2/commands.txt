@@ -1,0 +1,10 @@
+trace-normal: env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/candidate_partition record --seed 1 --warmup-moves 0 --moves 20 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --record-out /home/icly/Documents/tetris_ai_runner_results/phase7/child_soa_trial_2026-09-09/trace_attempt2/trace_normal
+trace-soa: env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/candidate_partition_child_soa record --seed 1 --warmup-moves 0 --moves 20 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --record-out /home/icly/Documents/tetris_ai_runner_results/phase7/child_soa_trial_2026-09-09/trace_attempt2/trace_soa
+run1: env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_value --seed 1 --warmup-moves 20 --moves 80 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry on --timers off
+run2: env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_child_soa --seed 1 --warmup-moves 20 --moves 80 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry on --timers off
+run3: same as run2
+run4: same as run1
+run5: same as run1
+run6: same as run2
+run7: same as run2
+run8: same as run1

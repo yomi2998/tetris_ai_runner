@@ -1,0 +1,213 @@
+HEAD da42c5e7e434bd2770a36590e9f6788cd2587986
+TRACKED_STATUS_BEGIN
+TRACKED_STATUS_END
+FROZEN_HASHES_BEGIN
+1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765  out/build/linux-gcc-self-release/tetris_profile_value
+721394d9bec61fce9654266fa0fdc9b41d921d4bba1673b8b931fbc1fb0c9c91  out/build/linux-gcc-self-release/tetris_profile_child_soa
+5986bdeebf9ff34fe4c3de0845881991fe463f6dc84dcbfb8d1b4bd7944642a1  out/build/linux-gcc-self-release/candidate_partition
+6b5b520fdf253def718b3743f8fd53d54eb7636329c83f9c39b2510a65fa582a  out/build/linux-gcc-self-release/candidate_partition_child_soa
+ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037  artifacts/frozen_29d.bin
+FROZEN_HASHES_END
+NORMAL_CHILD_SOA_SYMBOL_COUNT 0
+CTEST_BEGIN out/build/linux-gcc-self-release
+UpdateCTestConfiguration  from :/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/DartConfiguration.tcl
+Test project /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 4
+    Start 4: child_soa_trial_tests
+
+4: Test command: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/child_soa_trial_tests
+4: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release
+4: Test timeout computed to be: 10000000
+4: child_soa_trial_tests: 267 checks, 0 failures
+1/3 Test #4: child_soa_trial_tests ................   Passed    0.08 sec
+test 5
+    Start 5: child_soa_absent_from_normal_build
+
+5: Test command: /usr/bin/bash "-c" "! /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_value --help | grep -q -- --child-soa && ! nm /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_value | grep -qi child_soa"
+5: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release
+5: Test timeout computed to be: 10000000
+2/3 Test #5: child_soa_absent_from_normal_build ...   Passed    0.02 sec
+test 6
+    Start 6: child_soa_profile_equivalence
+
+6: Test command: /usr/bin/bash "-c" "a=$(/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_value --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); b=$(/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_child_soa --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); s() { echo "$1" | tr ' ' '\n' | grep -v -E '(_ms=|_ns=|total_s=|_per_s=|mem_retained_bytes=)'; }; f() { echo "$1" | tr ' ' '\n' | grep "^$2=" | cut -d= -f2; }; test "$(s "$a")" = "$(s "$b")" -a "$(f "$b" mem_retained_bytes)" -lt "$(f "$a" mem_retained_bytes)" -a "$(f "$b" mem_retained_bytes)" -lt 268435456"
+6: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release
+6: Test timeout computed to be: 10000000
+3/3 Test #6: child_soa_profile_equivalence ........   Passed    0.03 sec
+
+The following tests passed:
+	child_soa_trial_tests
+	child_soa_absent_from_normal_build
+	child_soa_profile_equivalence
+
+100% tests passed out of 3
+
+Total Test time (real) =   0.14 sec
+CTEST_END out/build/linux-gcc-self-release
+CTEST_BEGIN out/build/linux-gcc-debug
+UpdateCTestConfiguration  from :/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug/DartConfiguration.tcl
+Test project /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 4
+    Start 4: child_soa_trial_tests
+
+4: Test command: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug/child_soa_trial_tests
+4: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug
+4: Test timeout computed to be: 10000000
+4: child_soa_trial_tests: 267 checks, 0 failures
+1/3 Test #4: child_soa_trial_tests ................   Passed    1.01 sec
+test 5
+    Start 5: child_soa_absent_from_normal_build
+
+5: Test command: /usr/bin/bash "-c" "! /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug/tetris_profile_value --help | grep -q -- --child-soa && ! nm /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug/tetris_profile_value | grep -qi child_soa"
+5: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug
+5: Test timeout computed to be: 10000000
+2/3 Test #5: child_soa_absent_from_normal_build ...   Passed    0.21 sec
+test 6
+    Start 6: child_soa_profile_equivalence
+
+6: Test command: /usr/bin/bash "-c" "a=$(/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug/tetris_profile_value --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); b=$(/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug/tetris_profile_child_soa --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); s() { echo "$1" | tr ' ' '\n' | grep -v -E '(_ms=|_ns=|total_s=|_per_s=|mem_retained_bytes=)'; }; f() { echo "$1" | tr ' ' '\n' | grep "^$2=" | cut -d= -f2; }; test "$(s "$a")" = "$(s "$b")" -a "$(f "$b" mem_retained_bytes)" -lt "$(f "$a" mem_retained_bytes)" -a "$(f "$b" mem_retained_bytes)" -lt 268435456"
+6: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-debug
+6: Test timeout computed to be: 10000000
+3/3 Test #6: child_soa_profile_equivalence ........   Passed    0.26 sec
+
+The following tests passed:
+	child_soa_trial_tests
+	child_soa_absent_from_normal_build
+	child_soa_profile_equivalence
+
+100% tests passed out of 3
+
+Total Test time (real) =   1.48 sec
+CTEST_END out/build/linux-gcc-debug
+CTEST_BEGIN out/build/linux-clang-self-release
+UpdateCTestConfiguration  from :/home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release/DartConfiguration.tcl
+Test project /home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 4
+    Start 4: child_soa_trial_tests
+
+4: Test command: /home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release/child_soa_trial_tests
+4: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release
+4: Test timeout computed to be: 10000000
+4: child_soa_trial_tests: 267 checks, 0 failures
+1/3 Test #4: child_soa_trial_tests ................   Passed    0.08 sec
+test 5
+    Start 5: child_soa_absent_from_normal_build
+
+5: Test command: /usr/bin/bash "-c" "! /home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release/tetris_profile_value --help | grep -q -- --child-soa && ! nm /home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release/tetris_profile_value | grep -qi child_soa"
+5: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release
+5: Test timeout computed to be: 10000000
+2/3 Test #5: child_soa_absent_from_normal_build ...   Passed    0.01 sec
+test 6
+    Start 6: child_soa_profile_equivalence
+
+6: Test command: /usr/bin/bash "-c" "a=$(/home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release/tetris_profile_value --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); b=$(/home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release/tetris_profile_child_soa --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); s() { echo "$1" | tr ' ' '\n' | grep -v -E '(_ms=|_ns=|total_s=|_per_s=|mem_retained_bytes=)'; }; f() { echo "$1" | tr ' ' '\n' | grep "^$2=" | cut -d= -f2; }; test "$(s "$a")" = "$(s "$b")" -a "$(f "$b" mem_retained_bytes)" -lt "$(f "$a" mem_retained_bytes)" -a "$(f "$b" mem_retained_bytes)" -lt 268435456"
+6: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-clang-self-release
+6: Test timeout computed to be: 10000000
+3/3 Test #6: child_soa_profile_equivalence ........   Passed    0.03 sec
+
+The following tests passed:
+	child_soa_trial_tests
+	child_soa_absent_from_normal_build
+	child_soa_profile_equivalence
+
+100% tests passed out of 3
+
+Total Test time (real) =   0.12 sec
+CTEST_END out/build/linux-clang-self-release
+PARTITION_CTEST_BEGIN
+UpdateCTestConfiguration  from :/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/DartConfiguration.tcl
+Test project /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 31
+    Start 31: candidate_partition_selftest
+
+31: Test command: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/candidate_partition "selftest"
+31: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release
+31: Environment variables: 
+31:  UBSAN_OPTIONS=halt_on_error=1
+31: Test timeout computed to be: 10000000
+31: SELFTEST pass: b_collapsed I-r0/r2 dual landing
+31: SELFTEST pass: b_counted spin-split pair
+31: SELFTEST pass: O-r1 normalizes matched (not opaque)
+31: SELFTEST pass: b_counted opaque point
+31: SELFTEST pass: c1 anchor-vs-mino disagreement
+31: SELFTEST pass: c2 blocked-spawn legacy side
+31: SELFTEST pass: c2 blocked-spawn value side
+31: SELFTEST pass: c3 empty rows in-domain
+31: SELFTEST pass: c3 high row out-of-domain
+31: SELFTEST pass: c3 board-hash40 stable and sensitive
+31: SELFTEST pass: dV replay-failure counted
+31: SELFTEST pass: dV replay-failure exits nonzero
+31: SELFTEST pass: dV clear-mismatch counted
+31: SELFTEST pass: dV clear-mismatch exits nonzero
+31: SELFTEST pass: mixed exact-accounting fixture
+31: SELFTEST pass: mixed trans fixture
+31: SELFTEST pass: trans defects exit nonzero
+31: SELFTEST pass: clean verdict exits 0
+31: SELFTEST pass: failed accounting exits nonzero
+31: SELFTEST pass: missing legacy exits nonzero
+31: SELFTEST pass: overflow exits nonzero
+31: SELFTEST 21 checks, 0 failures
+1/2 Test #31: candidate_partition_selftest .............   Passed    0.00 sec
+test 32
+    Start 32: candidate_partition_child_soa_selftest
+
+32: Test command: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/candidate_partition_child_soa "selftest"
+32: Working Directory: /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release
+32: Test timeout computed to be: 10000000
+32: SELFTEST pass: b_collapsed I-r0/r2 dual landing
+32: SELFTEST pass: b_counted spin-split pair
+32: SELFTEST pass: O-r1 normalizes matched (not opaque)
+32: SELFTEST pass: b_counted opaque point
+32: SELFTEST pass: c1 anchor-vs-mino disagreement
+32: SELFTEST pass: c2 blocked-spawn legacy side
+32: SELFTEST pass: c2 blocked-spawn value side
+32: SELFTEST pass: c3 empty rows in-domain
+32: SELFTEST pass: c3 high row out-of-domain
+32: SELFTEST pass: c3 board-hash40 stable and sensitive
+32: SELFTEST pass: dV replay-failure counted
+32: SELFTEST pass: dV replay-failure exits nonzero
+32: SELFTEST pass: dV clear-mismatch counted
+32: SELFTEST pass: dV clear-mismatch exits nonzero
+32: SELFTEST pass: mixed exact-accounting fixture
+32: SELFTEST pass: mixed trans fixture
+32: SELFTEST pass: trans defects exit nonzero
+32: SELFTEST pass: clean verdict exits 0
+32: SELFTEST pass: failed accounting exits nonzero
+32: SELFTEST pass: missing legacy exits nonzero
+32: SELFTEST pass: overflow exits nonzero
+32: SELFTEST 21 checks, 0 failures
+2/2 Test #32: candidate_partition_child_soa_selftest ...   Passed    0.00 sec
+
+The following tests passed:
+	candidate_partition_selftest
+	candidate_partition_child_soa_selftest
+
+100% tests passed out of 2
+
+Total Test time (real) =   0.00 sec
+PARTITION_CTEST_END
+CPU15_AFTER_TESTS 1
