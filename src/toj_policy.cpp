@@ -346,13 +346,21 @@ namespace toj_policy
         }
     }
 
-    Evaluation Policy::evaluate(Board const &result) const
+    Evaluation Policy::evaluate(Board const &result
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        , RowFusionSafeInputs const *safe_in, int *safe_out
+#endif
+    ) const
     {
         std::uint32_t rows[policy_height] = {};
         for (int y = 0; y < policy_height; ++y)
         {
             rows[y] = result.row(y);
         }
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        ++rf_eval_exports;
+        rf_row_reads += policy_height;
+#endif
         int roof = local_roof(rows);
         int side_roof = roof;
         while (side_roof > 0 && (rows[side_roof - 1] & side_mask) == 0)
@@ -360,6 +368,23 @@ namespace toj_policy
             --side_roof;
         }
         Evaluation out;
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        if (safe_out != nullptr)
+        {
+            if (safe_in->lockout)
+            {
+                *safe_out = -1;
+            }
+            else if (safe_in->has_next)
+            {
+                *safe_out = scan_safe_rows(rows, safe_in->next);
+            }
+            else
+            {
+                *safe_out = spawn_frame_height - roof;
+            }
+        }
+#endif
         init_t_value(rows, roof, out.t2_value, out.t3_value);
         std::size_t col_trans = static_cast<std::size_t>(2 * (policy_height - roof));
         std::size_t row_trans = roof == policy_height ? 0 : static_cast<std::size_t>(board_width);
@@ -455,6 +480,26 @@ namespace toj_policy
         return safe;
     }
 
+#ifdef TETRIS_ROW_FUSION_TRIAL
+    int Policy::row_fusion_overlay_witness_for_test(Board const &result, Piece next,
+        int *clean_out, int *post_out) const
+    {
+        std::uint32_t rows[policy_height] = {};
+        for (int y = 0; y < policy_height; ++y)
+        {
+            rows[y] = result.row(y);
+        }
+        int roof = local_roof(rows);
+        int clean = scan_safe_rows(rows, next);
+        Evaluation out;
+        init_t_value(rows, roof, out.t2_value, out.t3_value);
+        int post = scan_safe_rows(rows, next);
+        *clean_out = clean;
+        *post_out = post;
+        return roof;
+    }
+#endif
+
     int8_t Policy::safe_margin(Board const &board, Piece next) const
     {
         std::uint32_t rows[policy_height] = {};
@@ -490,7 +535,11 @@ namespace toj_policy
 
     State Policy::transition_known_lockout(Piece piece, Candidate candidate, Outcome outcome,
         Board const &result, State const &parent, DecisionContext const &context,
-        Evaluation const &evaluation, bool lockout, int t_expect) const
+        Evaluation const &evaluation, bool lockout, int t_expect
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        , int const *supplied_safe
+#endif
+    ) const
     {
         char piece_char = tetris::to_char(piece);
         tetris::SpinType spin = outcome.spin;
@@ -511,9 +560,21 @@ namespace toj_policy
             }
         };
         int safe = 0;
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        if (supplied_safe != nullptr)
+        {
+            safe = *supplied_safe;
+            ++rf_fused_children;
+        }
+        else
+#endif
         if (lockout)
         {
             safe = -1;
+#ifdef TETRIS_ROW_FUSION_TRIAL
+            ++rf_legacy_children;
+            ++rf_lockout_skips;
+#endif
         }
         else if (!context.next.empty())
         {
@@ -523,6 +584,11 @@ namespace toj_policy
                 rows[y] = result.row(y);
             }
             safe = scan_safe_rows(rows, context.next[0]);
+#ifdef TETRIS_ROW_FUSION_TRIAL
+            ++rf_legacy_children;
+            ++rf_legacy_exports;
+            rf_row_reads += spawn_frame_height - 1;
+#endif
         }
         else
         {
@@ -532,6 +598,11 @@ namespace toj_policy
                 rows[y] = result.row(y);
             }
             safe = spawn_frame_height - local_roof(rows);
+#ifdef TETRIS_ROW_FUSION_TRIAL
+            ++rf_legacy_children;
+            ++rf_legacy_exports;
+            rf_row_reads += policy_height;
+#endif
         }
         auto const &p = config_->parameters;
         switch (clear)

@@ -3,6 +3,10 @@
 #include "tetris_board.h"
 #include "tetris_types.h"
 
+#ifdef TETRIS_ROW_FUSION_TRIAL
+#include "row_fusion_trial.h"
+#endif
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -97,7 +101,11 @@ namespace toj_policy
     public:
         void init(Config const *config);
 
-        Evaluation evaluate(Board const &result) const;
+        Evaluation evaluate(Board const &result
+#ifdef TETRIS_ROW_FUSION_TRIAL
+            , RowFusionSafeInputs const *safe_in = nullptr, int *safe_out = nullptr
+#endif
+        ) const;
 
         State transition(Piece piece, Candidate candidate, Outcome outcome, Board const &result,
             State const &parent, DecisionContext const &context,
@@ -105,13 +113,22 @@ namespace toj_policy
 
         State transition_known_lockout(Piece piece, Candidate candidate, Outcome outcome,
             Board const &result, State const &parent, DecisionContext const &context,
-            Evaluation const &evaluation, bool lockout, int t_expect) const;
+            Evaluation const &evaluation, bool lockout, int t_expect
+#ifdef TETRIS_ROW_FUSION_TRIAL
+            , int const *supplied_safe = nullptr
+#endif
+        ) const;
 
         static int expected_t_distance(DecisionContext const &context);
 
         static bool is_lockout(Piece piece, Placement placement);
 
         int8_t safe_margin(Board const &board, Piece next) const;
+
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        int row_fusion_overlay_witness_for_test(Board const &result, Piece next,
+            int *clean_out, int *post_out) const;
+#endif
 
         std::uint32_t danger_bits(Piece piece, int slot) const;
 

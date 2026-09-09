@@ -874,7 +874,12 @@ namespace tetris_engine
     Evaluation Engine::evaluate_once_for_parent(Board const &board, NodeId parent,
         std::size_t depth, BranchSource source)
 #else
-    Evaluation Engine::evaluate_once(Board const &board)
+    Evaluation Engine::evaluate_once(Board const &board
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        , bool safe_lockout, bool safe_has_next, Piece safe_next, int *safe_out,
+        bool *safe_supplied
+#endif
+    )
 #endif
     {
         bool const count = telemetry_on();
@@ -980,7 +985,20 @@ namespace tetris_engine
                 ++search_stats_.cache_misses;
             }
         }
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        RowFusionSafeInputs safe_inputs;
+        safe_inputs.lockout = safe_lockout;
+        safe_inputs.has_next = safe_has_next;
+        safe_inputs.next = safe_next;
+        Evaluation evaluation = policy_.evaluate(board,
+            safe_out != nullptr ? &safe_inputs : nullptr, safe_out);
+        if (safe_out != nullptr)
+        {
+            *safe_supplied = true;
+        }
+#else
         Evaluation evaluation = policy_.evaluate(board);
+#endif
         if (eval_memo_fingerprints_.size() < eval_memo_fingerprints_.capacity())
         {
             std::uint16_t const slot =
@@ -1106,6 +1124,14 @@ namespace tetris_engine
         context.hold = hold.piece;
         context.used_hold = source == BranchSource::Hold;
         context.depth = parent.depth;
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        bool const row_fusion_has_next = !policy_next.empty();
+        Piece const row_fusion_next_piece = row_fusion_has_next ? policy_next[0] : Piece::I;
+        if (context.next.data() != policy_next.data())
+        {
+            ++rf_source_mismatches;
+        }
+#endif
         std::int64_t const context_start = time ? timer_now() : 0;
         int const t_expect = toj_policy::Policy::expected_t_distance(context);
         if (time)
@@ -1158,12 +1184,23 @@ namespace tetris_engine
             Evaluation evaluation = evaluate_once_for_parent(applied->board,
                 parent_id, parent.depth, source);
 #else
+#ifdef TETRIS_ROW_FUSION_TRIAL
+            int fused_safe = 0;
+            bool fused_supplied = false;
+            Evaluation evaluation = evaluate_once(applied->board, outcome.lockout,
+                row_fusion_has_next, row_fusion_next_piece, &fused_safe, &fused_supplied);
+#else
             Evaluation evaluation = evaluate_once(applied->board);
+#endif
 #endif
             std::int64_t const policy_start = time ? timer_now() : 0;
             PolicyState state =
                 policy_.transition_known_lockout(played, candidate, outcome, applied->board,
-                    parent.policy, context, evaluation, outcome.lockout, t_expect);
+                    parent.policy, context, evaluation, outcome.lockout, t_expect
+#ifdef TETRIS_ROW_FUSION_TRIAL
+                    , fused_supplied ? &fused_safe : nullptr
+#endif
+                );
             if (time)
             {
                 timers_.policy_ns += timer_now() - policy_start;
@@ -1344,6 +1381,14 @@ namespace tetris_engine
         context.hold = hold.piece;
         context.used_hold = source == BranchSource::Hold;
         context.depth = parent.depth;
+#ifdef TETRIS_ROW_FUSION_TRIAL
+        bool const row_fusion_has_next = !policy_next.empty();
+        Piece const row_fusion_next_piece = row_fusion_has_next ? policy_next[0] : Piece::I;
+        if (context.next.data() != policy_next.data())
+        {
+            ++rf_source_mismatches;
+        }
+#endif
         std::int64_t const context_start = time ? timer_now() : 0;
         int const t_expect = toj_policy::Policy::expected_t_distance(context);
         if (time)

@@ -625,6 +625,13 @@ namespace tetris_engine
 #include "direct_key_trial.h"
 #endif
 
+#ifdef TETRIS_ROW_FUSION_TRIAL
+    static_assert(sizeof(Node) == 192, "row fusion keeps node storage unchanged");
+    static_assert(sizeof(Child) == 192, "row fusion keeps child storage unchanged");
+    static_assert(sizeof(toj_policy::Evaluation) == 16,
+        "row fusion keeps evaluation storage unchanged");
+#endif
+
     struct PathTelemetry
     {
         std::size_t calls = 0;
@@ -1308,7 +1315,12 @@ namespace tetris_engine
             std::size_t child_level, NodeId &tail);
 #endif
 
-        Evaluation evaluate_once(Board const &board);
+        Evaluation evaluate_once(Board const &board
+#ifdef TETRIS_ROW_FUSION_TRIAL
+            , bool safe_lockout, bool safe_has_next, Piece safe_next, int *safe_out,
+            bool *safe_supplied
+#endif
+        );
 
 #ifdef TETRIS_EVAL_REUSE_TRACE
         Evaluation evaluate_once_for_parent(Board const &board, NodeId parent,
