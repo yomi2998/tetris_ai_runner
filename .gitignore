@@ -46,5 +46,6 @@ Icon
 /tools
 
 *.bin
+*.evtrc
 *.bak
 results/phase7/partition/*.bin

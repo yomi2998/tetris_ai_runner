@@ -418,6 +418,23 @@ namespace tetris_engine
             expanded_count_[i] = 0;
             expanded_max_[i] = no_node;
         }
+#ifdef TETRIS_EVAL_REUSE_TRACE
+        if (config_.eval_trace_record)
+        {
+            EvalTraceRecord reset;
+            reset.kind = EvalTraceRecord::Kind::ArenaReset;
+            reset.id = static_cast<NodeId>(new_count);
+            config_.eval_trace_record(reset);
+            for (std::size_t n = 0; n < new_count; ++n)
+            {
+                EvalTraceRecord node;
+                node.kind = EvalTraceRecord::Kind::NodeLive;
+                node.id = static_cast<NodeId>(n);
+                node.board = &arena_[n].board;
+                config_.eval_trace_record(node);
+            }
+        }
+#endif
         return 0;
     }
 
@@ -564,6 +581,20 @@ namespace tetris_engine
         root.evaluation = policy_.evaluate(board);
         root.hold = hold;
         arena_.push_back(root);
+#ifdef TETRIS_EVAL_REUSE_TRACE
+        if (config_.eval_trace_record)
+        {
+            EvalTraceRecord reset;
+            reset.kind = EvalTraceRecord::Kind::ArenaReset;
+            reset.id = 0;
+            config_.eval_trace_record(reset);
+            EvalTraceRecord node;
+            node.kind = EvalTraceRecord::Kind::NodeLive;
+            node.id = 0;
+            node.board = &arena_[0].board;
+            config_.eval_trace_record(node);
+        }
+#endif
         return 0;
     }
 
@@ -576,7 +607,17 @@ namespace tetris_engine
         eval_memo_heads_.fill(eval_memo_no_entry);
     }
 
+#ifdef TETRIS_EVAL_REUSE_TRACE
     Evaluation Engine::evaluate_once(Board const &board)
+    {
+        return evaluate_once_for_parent(board, no_node, 0, BranchSource::Current);
+    }
+
+    Evaluation Engine::evaluate_once_for_parent(Board const &board, NodeId parent,
+        std::size_t depth, BranchSource source)
+#else
+    Evaluation Engine::evaluate_once(Board const &board)
+#endif
     {
         bool const count = telemetry_on();
         bool const time = timers_on();
@@ -584,6 +625,20 @@ namespace tetris_engine
         if (count)
         {
             ++search_stats_.eval_requests;
+#ifdef TETRIS_EVAL_REUSE_TRACE
+            if (config_.eval_trace_record)
+            {
+                EvalTraceRecord record;
+                record.kind = EvalTraceRecord::Kind::EvalRequest;
+                record.source = source;
+                record.depth = depth > 0xFFFFFFFFu
+                    ? 0xFFFFFFFFu
+                    : static_cast<std::uint32_t>(depth);
+                record.id = parent;
+                record.board = &board;
+                config_.eval_trace_record(record);
+            }
+#endif
         }
         std::uint64_t const fingerprint = occupancy_fingerprint(board.occupancy());
         std::size_t const bucket = eval_memo_bucket(fingerprint);
@@ -797,7 +852,12 @@ namespace tetris_engine
                 record_push(candidate, true, outcome, &applied->board, false);
                 continue;
             }
+#ifdef TETRIS_EVAL_REUSE_TRACE
+            Evaluation evaluation = evaluate_once_for_parent(applied->board,
+                parent_id, parent.depth, source);
+#else
             Evaluation evaluation = evaluate_once(applied->board);
+#endif
             std::int64_t const policy_start = time ? timer_now() : 0;
             PolicyState state =
                 policy_.transition_known_lockout(played, candidate, outcome, applied->board,
@@ -1294,6 +1354,16 @@ namespace tetris_engine
             {
                 ++search_stats_.materialized_nodes;
             }
+#ifdef TETRIS_EVAL_REUSE_TRACE
+            if (config_.eval_trace_record)
+            {
+                EvalTraceRecord record;
+                record.kind = EvalTraceRecord::Kind::NodeLive;
+                record.id = id;
+                record.board = &child.board;
+                config_.eval_trace_record(record);
+            }
+#endif
             return { false, id };
         }
         NodeId id = materialize(child);
@@ -1323,6 +1393,16 @@ namespace tetris_engine
         {
             ++search_stats_.materialized_nodes;
         }
+#ifdef TETRIS_EVAL_REUSE_TRACE
+        if (config_.eval_trace_record)
+        {
+            EvalTraceRecord record;
+            record.kind = EvalTraceRecord::Kind::NodeLive;
+            record.id = id;
+            record.board = &child.board;
+            config_.eval_trace_record(record);
+        }
+#endif
         return { false, id };
     }
 

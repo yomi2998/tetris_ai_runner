@@ -81,6 +81,15 @@ add_executable(tetris_profile_value
 target_link_libraries(tetris_profile_value PRIVATE fast_reachability)
 target_include_directories(tetris_profile_value PRIVATE src)
 
+add_executable(eval_reuse_trace
+    src/eval_reuse_trace.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(eval_reuse_trace PRIVATE fast_reachability)
+target_include_directories(eval_reuse_trace PRIVATE src)
+target_compile_definitions(eval_reuse_trace PRIVATE TETRIS_EVAL_REUSE_TRACE)
+
 add_executable(tetris_profile_legacy_cmp
     src/tetris_profile_legacy_cmp.cpp
     src/tetris_core.cpp
@@ -148,6 +157,24 @@ add_test(NAME profile_value_telemetry_off
 )
 add_test(NAME profile_value_timers_off
     COMMAND bash -c "$<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 3 --iters 10 --seed 3 --maxdepth 6 --timers off --quiet --quiet-version 3 | grep -q 'timers=off'"
+)
+add_test(NAME eval_reuse_analyze_selftest
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval_reuse_analyze.py --selftest
+)
+add_test(NAME eval_trace_noninterference
+    COMMAND bash -c "t=/tmp/eval_trace_ctest.evtrc; a=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3); b=$($<TARGET_FILE:eval_reuse_trace> --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --eval-trace \"$t\"); test -s \"$t\"; f() { echo \"$1\" | tr ' ' '\\n' | grep \"^$2=\" | cut -d= -f2; }; test \"$(f \"$a\" evals)\" = \"$(f \"$b\" evals)\" -a \"$(f \"$a\" transitions)\" = \"$(f \"$b\" transitions)\" -a \"$(f \"$a\" searches)\" = \"$(f \"$b\" searches)\" -a \"$(f \"$a\" parents)\" = \"$(f \"$b\" parents)\" -a \"$(f \"$a\" unique_candidates)\" = \"$(f \"$b\" unique_candidates)\" -a \"$(f \"$a\" materialized_nodes)\" = \"$(f \"$b\" materialized_nodes)\" -a \"$(f \"$a\" eval_computed)\" = \"$(f \"$b\" eval_computed)\" -a \"$(f \"$a\" eval_memo_hits)\" = \"$(f \"$b\" eval_memo_hits)\"; rm -f \"$t\""
+)
+add_test(NAME eval_trace_absent_from_normal_build
+    COMMAND bash -c "! $<TARGET_FILE:tetris_profile_value> --help | grep -q -- --eval-trace && $<TARGET_FILE:tetris_profile_value> --eval-trace /tmp/eval_trace_absent_probe.evtrc --warmup-moves 1 --moves 1 --iters 1 --quiet --quiet-version 3 >/dev/null 2>&1; code=$?; test $code -ne 0 -a ! -e /tmp/eval_trace_absent_probe.evtrc"
+)
+add_test(NAME eval_trace_rejects_telemetry_off
+    COMMAND bash -c "p=/tmp/eval_trace_telemetry_off_probe.evtrc; rm -f \"$p\"; $<TARGET_FILE:eval_reuse_trace> --telemetry off --eval-trace \"$p\" --warmup-moves 1 --moves 1 --iters 1 --quiet --quiet-version 3 >/dev/null 2>&1; code=$?; test $code -ne 0 -a ! -e \"$p\""
+)
+add_test(NAME eval_reuse_trace_warmup_exclusion
+    COMMAND bash -c "t=/tmp/eval_trace_warmup_excl.evtrc; row=$($<TARGET_FILE:eval_reuse_trace> --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --eval-trace \"$t\"); python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval_reuse_analyze.py \"$t\" --fa 4 --ways 1 --assoc-caps 4 --check-profile-row \"$row\" | grep -q '^ROWCHECK OK'; rm -f \"$t\""
+)
+add_test(NAME eval_reuse_analyze_bounds
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval_reuse_bounds_check.py ${CMAKE_CURRENT_SOURCE_DIR}/tests/eval_reuse_analyze.py
 )
 add_test(NAME profile_value_rejects_garbage_maxdepth
     COMMAND bash -c "out=$($<TARGET_FILE:tetris_profile_value> --moves 0 --quiet --maxdepth garbage 2>&1); code=$?; test $code -ne 0 && ! echo \"$out\" | grep -q '^PROFILE_V3'"
@@ -452,7 +479,11 @@ add_test(NAME raw_parity_frozen_180off
 
 set_tests_properties(tetris_board_tests rule_differential path_differential candidate_partition_selftest fast_reachability_tests
     fast_reachability_perft profile_value_tests profile_value_determinism profile_value_no_hold
-    profile_value_telemetry_off profile_value_timers_off profile_value_rejects_garbage_maxdepth
+    profile_value_telemetry_off profile_value_timers_off eval_reuse_analyze_selftest
+    eval_trace_noninterference eval_trace_absent_from_normal_build
+    eval_trace_rejects_telemetry_off
+    eval_reuse_trace_warmup_exclusion eval_reuse_analyze_bounds
+    profile_value_rejects_garbage_maxdepth
     profile_value_rejects_wrapping_totals profile_value_rejects_bad_telemetry
     legacy_cmp_tests legacy_cmp_parity_frozen legacy_cmp_determinism
     legacy_cmp_telemetry_off legacy_cmp_rejects_garbage_maxdepth

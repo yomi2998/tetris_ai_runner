@@ -906,6 +906,9 @@ namespace tetris_engine
         // Test-only hook: docs/phase7/count_partition_instrument_design.md §5. default-null; one branch when null.
         // Set only by the test-only candidate_partition target.
         std::function<void(struct ExpandSourceRecord const &)> expand_source_record;
+#ifdef TETRIS_EVAL_REUSE_TRACE
+        std::function<void(struct EvalTraceRecord const &)> eval_trace_record;
+#endif
     };
 
     // Test-only count-partition record for one Engine::expand_source call.
@@ -928,6 +931,24 @@ namespace tetris_engine
         std::size_t raw_landings = 0;
         bool overflow = false; // child-buffer fail-stop path taken
     };
+
+#ifdef TETRIS_EVAL_REUSE_TRACE
+    struct EvalTraceRecord
+    {
+        enum class Kind : std::uint8_t
+        {
+            EvalRequest = 0,
+            NodeLive = 1,
+            ArenaReset = 2,
+        };
+        Kind kind = Kind::EvalRequest;
+        BranchSource source = BranchSource::Current;
+        std::uint32_t depth = 0;
+        std::uint16_t move = 0;
+        NodeId id = no_node;
+        Board const *board = nullptr;
+    };
+#endif
 
     // FNV-1a over result rows 0..39; the driver computes identically.
     inline std::uint64_t result_rows_hash40(Board const &board)
@@ -1146,6 +1167,11 @@ namespace tetris_engine
             std::span<Piece const> policy_next, std::vector<Child> &out);
 
         Evaluation evaluate_once(Board const &board);
+
+#ifdef TETRIS_EVAL_REUSE_TRACE
+        Evaluation evaluate_once_for_parent(Board const &board, NodeId parent,
+            std::size_t depth, BranchSource source);
+#endif
 
         bool expand_parent(NodeId parent_id);
 

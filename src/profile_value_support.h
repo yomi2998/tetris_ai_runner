@@ -46,6 +46,9 @@ namespace profile_value
         int quiet_version = 3;
         bool telemetry = true;
         bool timers = true;
+#ifdef TETRIS_EVAL_REUSE_TRACE
+        std::string eval_trace;
+#endif
     };
 
     inline bool parse_uint_strict(std::string const &text, std::size_t &out)
@@ -125,6 +128,10 @@ namespace profile_value
         std::println("                    branches still participate in search valuation.");
         std::println("                    Hold-disabled runs are excluded from legacy comparison.");
         std::println("  --param-file F    29-double parameter file");
+#ifdef TETRIS_EVAL_REUSE_TRACE
+        std::println("  --eval-trace PATH write test-only exact eval-reuse trace;");
+        std::println("                    requires telemetry on");
+#endif
         std::println("  --telemetry on|off");
         std::println("                    off disables instrumentation counters and timers;");
         std::println("                    boundary wall-time fields stay numeric");
@@ -197,6 +204,9 @@ namespace profile_value
             }
             else if (a == "--no-hold") opt.hold = false;
             else if (a == "--param-file") opt.param_file = next(a);
+#ifdef TETRIS_EVAL_REUSE_TRACE
+            else if (a == "--eval-trace") opt.eval_trace = next(a);
+#endif
             else if (a == "--iters")
             {
                 if (!parse_uint_strict(next(a), uint_value)) fail(a);

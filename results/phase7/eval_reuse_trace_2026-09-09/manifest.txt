@@ -1,0 +1,121 @@
+eval-reuse fixed-work diagnostic manifest, 2026-09-09 (final, parent-identity fix)
+================================================================================
+
+Scope: ARCHIVE plus DIAGNOSTIC TRACE only. No production cache, no
+optimization, no commits, no staging. Trace retained in /tmp, not in git.
+
+Environment
+-----------
+HEAD: b3edf56ed03104b26c1b1a3dc907e1e1ec50dd82
+git diff --cached: empty (verified)
+worktree diff (repair plus parent-identity fix, uncommitted, unstaged):
+ .gitignore, CMakeLists.txt, src/profile_value_support.h,
+ src/tetris_engine.cpp, src/tetris_engine.h (149 insertions, 1 deletion)
+new untracked: src/eval_reuse_trace.cpp, tests/eval_reuse_analyze.py,
+ tests/eval_reuse_bounds_check.py,
+ results/phase7/eval_reuse_trace_2026-09-09/ (this directory)
+normal src/tetris_profile_value.cpp restored to HEAD verbatim
+binary: out/build/linux-gcc-self-release/eval_reuse_trace (dedicated,
+ defines TETRIS_EVAL_REUSE_TRACE)
+binary sha256: 14eb2df244b9fa8d70e7a64826f0498b5a9275f07a309646e7d61c40cf6b850b
+normal binary: out/build/linux-gcc-self-release/tetris_profile_value
+normal sha256: 1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765
+param: artifacts/frozen_29d.bin
+param sha256: ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037
+source sha256:
+ 83b0f90b900c42a6b3f5d1cb410931f06363340a66c10584a7514304a45f682b  src/tetris_engine.h
+ be31beef3daf2c8e86e8542e7114d33b3326b1a93ddb9dac6f9b8a06a5cdce45  src/tetris_engine.cpp
+ f0ffd1da7c395e0858e7336edd64bcbb98f137d0e444fe8709033e5c98e189f5  src/tetris_profile_value.cpp
+ 72d23e5d339eeb8b3fda5fcca96bd73b31b08f3544c009e2d868338ee198ee3c  src/profile_value_support.h
+ b4490b9388580f26a04dc688acd2b1e9e99f21f944ed7278364386a57a776b33  src/eval_reuse_trace.cpp
+ 61029958143d39001877909d7a0e49a26fbc22341e8534e84e1a021c18e3f608  CMakeLists.txt
+ daf8fadbaf9d59154b705752c1e0b38371722c72c4967a2356f5d6940be36e5f  .gitignore
+ 02b3f967612e673008cd4ba32527c84ca1903803e338dd17975dc2560414e916  tests/eval_reuse_analyze.py
+ 7d7a679655d88adb88bef00ee6f26e8f74d9d07115b7028e11c10f643d7471e3  tests/eval_reuse_bounds_check.py
+policy7 governor: performance
+policy7 EPP: performance
+other policies (0-6,8-15) governor: powersave
+other policies EPP: balance_performance
+cpufreq boost: 1
+load before window: 0.72 0.63 0.90 (2/4235)
+load after window: 0.94 0.69 0.92 (1/4218)
+CPU15 window: offline 2026-09-09T04:52:39Z, restored 2026-09-09T04:53:02Z
+ via trap-on-EXIT/INT/TERM wrapper (/tmp/run_eval_trace_diag3.sh,
+ log /tmp/eval_trace_diag_window3.log)
+CPU15 after window: online (cpu online 0-15, cpu15/online 1)
+CPU15 after analyzer: online (cpu online 0-15, cpu15/online 1)
+
+Commands (cwd /home/icly/Documents/tetris_ai_runner)
+----------------------------------------------------
+selftest (exit 0, SELFTEST OK checks=118):
+/usr/bin/time -v python3 tests/eval_reuse_analyze.py --selftest
+prefix proof (exit 0, peak RSS 147900 KiB, hard 2 GiB cap):
+/usr/bin/time -v bash -c 'ulimit -v 2097152; python3
+ tests/eval_reuse_analyze.py /tmp/eval_reuse_2026-09-09-seed1.evtrc
+ --max-records 13000000 --summary /tmp/prefix_parentfix.json
+ --sort-run-records 100000 --work-dir /tmp'
+trace-ON (exit 0, final dedicated binary, recollected after the driver fix):
+env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 out/build/linux-gcc-self-release/eval_reuse_trace --seed 1 --warmup-moves 20 --moves 80 --maxdepth 6 --param-file artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry on --timers off --eval-trace /tmp/eval_reuse_2026-09-09-seed1.evtrc
+trace-OFF (exit 0, normal binary):
+env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 out/build/linux-gcc-self-release/tetris_profile_value --seed 1 --warmup-moves 20 --moves 80 --maxdepth 6 --param-file artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry on --timers off
+analyzer (exit 0, ROWCHECK OK scope=all-expansions, peak RSS 3011796 KiB /
+ 2.87 GiB, wall 30:44.61, hard 4 GiB address-space cap, no surviving
+ process):
+/usr/bin/time -v bash -c 'ulimit -v 4194304; python3
+ tests/eval_reuse_analyze.py /tmp/eval_reuse_2026-09-09-seed1.evtrc
+ --summary results/phase7/eval_reuse_trace_2026-09-09/summary.json
+ --check-profile-row "$(cat /tmp/profile_trace_on_new3.txt)" --work-dir /tmp'
+determinism rerun (byte-identical summaries, sha256
+ d548089be3fc366cb326d887ee13bd638e4d7c418fd75436bca9df07b26d824b):
+python3 tests/eval_reuse_analyze.py /tmp/eval_reuse_2026-09-09-seed1.evtrc
+ --max-records 20000000 --summary /tmp/det_c.json
+ --sort-run-records 100000 --work-dir /tmp
+python3 tests/eval_reuse_analyze.py /tmp/eval_reuse_2026-09-09-seed1.evtrc
+ --max-records 20000000 --summary /tmp/det_d.json
+ --sort-run-records 100000 --work-dir /tmp --chunk-records 8192
+rerun: rebuild eval_reuse_trace plus tetris_profile_value, then run the
+ trace-ON, trace-OFF, and analyzer commands above; trace output path must
+ be on a volume with at least 6 GB free.
+
+Raw trace (NOT in git, retained in /tmp)
+----------------------------------------
+path: /tmp/eval_reuse_2026-09-09-seed1.evtrc
+size: 5160073024 bytes (64,500,912 records x 80 + 64 header; exact match)
+sha256: 5956cfc5015360cd159ce023f7f05f8ca81119bb872c68dd9a7b675c16bb684f
+byte-identical across three collections (repair run, prior execution run,
+and this run with the final dedicated binary)
+
+Noninterference (trace-on vs trace-off PROFILE_V3)
+--------------------------------------------------
+67 fields compared. All work/result counters bit-identical
+(evals 26632382, transitions 26632382, searches 1142252, parents 599166,
+raw_landings 65566529, unique_candidates 32446394,
+rule_transitions 32446394, eval_memo_hits 684163,
+eval_computed 25948219, materialized_nodes 25757157,
+transposition_merges 875225, promotions_refused 27680,
+path_states 76513, mem_retained 266338276, arena 208720320,
+idmap 4348340, dead_moves 0, games 0, texhaust 0, replay_failures 0).
+Only 19 timing/throughput fields differ (total_s, min/median/p95/p99/max_ms,
+emove_*_ms, evals/transitions/searches_per_s, setup_ms, run_ms, path_ms,
+apply_ms, init_ms). Zero non-timing diffs.
+Full rows: profile_trace_on.txt, profile_trace_off.txt in this directory.
+
+Accepted analyzer result
+------------------------
+summary.json in this directory (measured only, ROWCHECK OK
+scope=all-expansions):
+eval 26632382, distinct 9031593, repeats 17600789
+(same 684163 = eval_memo_hits, cross 16916626), attainable 13357692,
+attainable_cross 13106967, collisions 164123, requesting 599166 = parents,
+calibration 17600789 at capacity 16777216, plus per-config
+cold/capacity/conflict miss partitions and distance definitions.
+Accepted findings: report.md in this directory.
+Prior attempts remain rejected: rejected_attempt_2026-09-09.md
+(warmup-contaminated) and rejected_attempt_parent_identity_2026-09-09.md
+(NodeId-only parent identity, same 684196).
+
+Limitations
+-----------
+Single-threaded analyzer, about 31 min wall for the full 64.5M-record run.
+Figures are specific to seed 1, frozen_29d.bin, iters 1000, maxdepth 6,
+80 measured plus 20 warmup moves. Bulky trace kept in /tmp only.
