@@ -16,6 +16,9 @@
 #include <span>
 #include <string_view>
 #include <vector>
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+#include "eval_index_trial.h"
+#endif
 
 namespace tetris_engine
 {
@@ -988,6 +991,11 @@ namespace tetris_engine
             , transposition_rehash_(std::move(other.transposition_rehash_))
             , idmap_(std::move(other.idmap_))
             , cache_(std::move(other.cache_))
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+            , eval_index_(std::move(other.eval_index_))
+            , eval_index_digest_(other.eval_index_digest_)
+            , eval_index_enabled_(other.eval_index_enabled_)
+#endif
             , transposition_used_(other.transposition_used_)
             , transposition_epoch_(other.transposition_epoch_)
             , max_length_(other.max_length_)
@@ -1070,6 +1078,23 @@ namespace tetris_engine
         FinalResult finalize(Placement active_start);
 
         PathTelemetry path_telemetry() const;
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        std::uint64_t eval_index_digest_for_test() const;
+        std::size_t eval_index_requests_for_test() const;
+        std::size_t eval_index_hits_for_test() const;
+        std::size_t eval_index_misses_for_test() const;
+        std::size_t eval_index_replacements_for_test() const;
+        std::size_t eval_index_insertions_for_test() const;
+        std::size_t eval_index_clears_for_test() const;
+        std::size_t eval_index_tag_mismatches_for_test() const;
+        std::size_t eval_index_occupied_for_test() const;
+        std::size_t eval_index_reserved_for_test() const;
+        std::uint32_t eval_index_slot_for_test(std::size_t slot) const;
+        void eval_index_search_materialize_for_test(
+            Child const &child, NodeId &id, bool &merged);
+        void eval_index_overwrite_for_test(std::size_t slot, std::uint32_t tag, NodeId id);
+        void set_eval_index_enabled_for_test(bool enabled);
+#endif
 
     private:
         struct TranspositionProbe
@@ -1108,6 +1133,11 @@ namespace tetris_engine
         std::vector<TranspositionEntry> transposition_rehash_;
         std::vector<NodeId> idmap_;
         EvalCache cache_;
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        EvalIndexTrial eval_index_;
+        std::uint64_t eval_index_digest_ = 1469598103934665603ull;
+        bool eval_index_enabled_ = true;
+#endif
         std::size_t transposition_used_ = 0;
         std::uint32_t transposition_epoch_ = 0;
         std::size_t max_length_ = 0;
@@ -1176,6 +1206,14 @@ namespace tetris_engine
         bool expand_parent(NodeId parent_id);
 
         void clear_eval_memo();
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        void eval_index_reset_for_new_move();
+        void eval_index_insert_live(NodeId id);
+        std::optional<Evaluation> eval_index_find(
+            Board const &board, std::uint64_t fingerprint);
+        std::size_t eval_index_reserved_bytes() const;
+        void eval_index_mix_digest(Board const &board, Evaluation const &evaluation);
+#endif
 
         MaterializeOutcome search_materialize(Child const &child);
 

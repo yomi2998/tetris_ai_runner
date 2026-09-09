@@ -90,6 +90,47 @@ target_link_libraries(eval_reuse_trace PRIVATE fast_reachability)
 target_include_directories(eval_reuse_trace PRIVATE src)
 target_compile_definitions(eval_reuse_trace PRIVATE TETRIS_EVAL_REUSE_TRACE)
 
+add_executable(tetris_profile_index_a
+    src/tetris_profile_value.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(tetris_profile_index_a PRIVATE fast_reachability)
+target_include_directories(tetris_profile_index_a PRIVATE src)
+target_compile_definitions(tetris_profile_index_a PRIVATE TETRIS_EVAL_INDEX_TRIAL TETRIS_EVAL_INDEX_SLOTS=262144 TETRIS_EVAL_INDEX_TAGGED=0)
+
+add_executable(tetris_profile_index_b
+    src/tetris_profile_value.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(tetris_profile_index_b PRIVATE fast_reachability)
+target_include_directories(tetris_profile_index_b PRIVATE src)
+target_compile_definitions(tetris_profile_index_b PRIVATE TETRIS_EVAL_INDEX_TRIAL TETRIS_EVAL_INDEX_SLOTS=65536 TETRIS_EVAL_INDEX_TAGGED=1)
+
+add_executable(eval_index_trial_a_tests
+    tests/eval_index_trial_tests.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(eval_index_trial_a_tests PRIVATE fast_reachability)
+target_include_directories(eval_index_trial_a_tests PRIVATE src tests src/fast-reachability)
+target_compile_definitions(eval_index_trial_a_tests PRIVATE TETRIS_EVAL_INDEX_TRIAL TETRIS_EVAL_INDEX_SLOTS=262144 TETRIS_EVAL_INDEX_TAGGED=0)
+add_test(NAME eval_index_trial_a_tests COMMAND eval_index_trial_a_tests)
+
+add_executable(eval_index_trial_b_tests
+    tests/eval_index_trial_tests.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(eval_index_trial_b_tests PRIVATE fast_reachability)
+target_include_directories(eval_index_trial_b_tests PRIVATE src tests src/fast-reachability)
+target_compile_definitions(eval_index_trial_b_tests PRIVATE TETRIS_EVAL_INDEX_TRIAL TETRIS_EVAL_INDEX_SLOTS=65536 TETRIS_EVAL_INDEX_TAGGED=1)
+add_test(NAME eval_index_trial_b_tests COMMAND eval_index_trial_b_tests)
+add_test(NAME eval_index_absent_from_normal_build
+    COMMAND bash -c "! $<TARGET_FILE:tetris_profile_value> --help | grep -q -- --index && ! nm $<TARGET_FILE:tetris_profile_value> | grep -qi eval_index"
+)
+
 add_executable(tetris_profile_legacy_cmp
     src/tetris_profile_legacy_cmp.cpp
     src/tetris_core.cpp

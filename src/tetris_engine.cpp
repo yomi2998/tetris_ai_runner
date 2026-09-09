@@ -135,7 +135,23 @@ namespace tetris_engine
             config_.arena_capacity = 0;
             return false;
         }
-        std::uint64_t const allowance = engine_memory_budget - fixed_non_cache - cache_bytes;
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        if (config_.cache.layout != CacheConfig::Layout::Disabled)
+        {
+            config_.arena_capacity = 0;
+            return false;
+        }
+        if (EvalIndexTrial::kIndexBytes > engine_memory_budget - fixed_non_cache - cache_bytes)
+        {
+            config_.arena_capacity = 0;
+            return false;
+        }
+#endif
+        std::uint64_t const allowance = engine_memory_budget - fixed_non_cache - cache_bytes
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+            - EvalIndexTrial::kIndexBytes
+#endif
+            ;
         if (config_.arena_capacity > max_nodes
             || config_.arena_capacity > allowance / arena_bytes_per_node)
         {
@@ -171,6 +187,12 @@ namespace tetris_engine
             cache_.init(config_.cache.layout, config_.cache.entries, config_.cache.ways);
         }
         cache_.set_telemetry_enabled(config_.telemetry_enabled);
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        eval_index_.allocate();
+        eval_index_.telemetry = config_.telemetry_enabled;
+        eval_index_enabled_ = true;
+        eval_index_digest_ = 1469598103934665603ull;
+#endif
         std::uint64_t const used = engine_buffer_reservation(
             static_cast<std::uint64_t>(arena_.capacity()) * sizeof(Node)
                 + static_cast<std::uint64_t>(idmap_.capacity()) * sizeof(NodeId)
@@ -188,7 +210,11 @@ namespace tetris_engine
                 * sizeof(TranspositionEntry),
             static_cast<std::uint64_t>(transposition_rehash_.capacity())
                 * sizeof(TranspositionEntry),
-            static_cast<std::uint64_t>(cache_.reserved_bytes()));
+            static_cast<std::uint64_t>(cache_.reserved_bytes())
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+                + static_cast<std::uint64_t>(eval_index_reserved_bytes())
+#endif
+            );
         if (used > engine_memory_budget)
         {
             std::vector<Node>().swap(arena_);
@@ -203,6 +229,9 @@ namespace tetris_engine
             std::vector<NodeId>().swap(idmap_);
             heap_.release_entries();
             cache_ = EvalCache{};
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+            eval_index_ = EvalIndexTrial{};
+#endif
             queue_ = Queue{};
             config_.arena_capacity = 0;
             return false;
@@ -238,6 +267,9 @@ namespace tetris_engine
         stats_ = ExpansionStats{};
         exhausted_ = false;
         cache_.reset_counters();
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        eval_index_reset_for_new_move();
+#endif
         heap_.reset(max_frontiers);
         for (std::size_t i = 0; i < max_frontiers; ++i)
         {
@@ -411,6 +443,13 @@ namespace tetris_engine
         exhausted_ = false;
         cache_.reset_counters();
         clear_eval_memo();
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        eval_index_reset_for_new_move();
+        for (std::size_t n = 0; n < new_count; ++n)
+        {
+            eval_index_insert_live(static_cast<NodeId>(n));
+        }
+#endif
         child_buffer_.clear();
         heap_.reset(max_frontiers);
         for (std::size_t i = 0; i < max_frontiers; ++i)
@@ -581,6 +620,9 @@ namespace tetris_engine
         root.evaluation = policy_.evaluate(board);
         root.hold = hold;
         arena_.push_back(root);
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        eval_index_insert_live(0);
+#endif
 #ifdef TETRIS_EVAL_REUSE_TRACE
         if (config_.eval_trace_record)
         {
@@ -606,6 +648,189 @@ namespace tetris_engine
         eval_memo_next_.clear();
         eval_memo_heads_.fill(eval_memo_no_entry);
     }
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+    void Engine::eval_index_reset_for_new_move()
+    {
+        eval_index_.clear_slots();
+        eval_index_.reset_counters();
+    }
+    void Engine::eval_index_insert_live(NodeId id)
+    {
+        if (!eval_index_enabled_ || id >= arena_.size())
+        {
+            return;
+        }
+        Board const &board = arena_[id].board;
+        std::uint64_t const finalized =
+            eval_index_finalize(occupancy_fingerprint(board.occupancy()));
+        std::size_t const slot =
+            static_cast<std::size_t>(finalized & (EvalIndexTrial::kSlots - 1));
+        std::uint32_t const tag = static_cast<std::uint32_t>(finalized >> 32);
+        std::uint32_t const stored = eval_index_.slots[slot];
+        if (stored != EvalIndexTrial::kEmpty
+            && (!EvalIndexTrial::kTagged || eval_index_.tags[slot] == tag)
+            && stored < arena_.size() && arena_[stored].board == board)
+        {
+            eval_index_.slots[slot] = id;
+            if (eval_index_.telemetry)
+            {
+                ++eval_index_.insertions;
+            }
+            return;
+        }
+        if (stored != EvalIndexTrial::kEmpty && eval_index_.telemetry)
+        {
+            ++eval_index_.replacements;
+        }
+        eval_index_.slots[slot] = id;
+        if (EvalIndexTrial::kTagged)
+        {
+            eval_index_.tags[slot] = tag;
+        }
+        if (eval_index_.telemetry)
+        {
+            ++eval_index_.insertions;
+        }
+    }
+    std::optional<Evaluation> Engine::eval_index_find(
+        Board const &board, std::uint64_t fingerprint)
+    {
+        if (!eval_index_enabled_)
+        {
+            return std::nullopt;
+        }
+        if (eval_index_.telemetry)
+        {
+            ++eval_index_.requests;
+        }
+        std::uint64_t const finalized = eval_index_finalize(fingerprint);
+        std::size_t const slot =
+            static_cast<std::size_t>(finalized & (EvalIndexTrial::kSlots - 1));
+        std::uint32_t const tag = static_cast<std::uint32_t>(finalized >> 32);
+        std::uint32_t const stored = eval_index_.slots[slot];
+        bool const tag_ok = !EvalIndexTrial::kTagged || eval_index_.tags[slot] == tag;
+        bool const live = stored != EvalIndexTrial::kEmpty && stored < arena_.size();
+        bool const board_eq = tag_ok && live && (arena_[stored].board == board);
+        if (!board_eq)
+        {
+            if (eval_index_.telemetry)
+            {
+                ++eval_index_.misses;
+                if (tag_ok && live)
+                {
+                    ++eval_index_.tag_mismatches;
+                }
+            }
+            return std::nullopt;
+        }
+        if (eval_index_.telemetry)
+        {
+            ++eval_index_.hits;
+        }
+        return arena_[stored].evaluation;
+    }
+    std::size_t Engine::eval_index_reserved_bytes() const
+    {
+        return eval_index_.reserved_bytes();
+    }
+    void Engine::eval_index_mix_digest(Board const &board, Evaluation const &evaluation)
+    {
+        std::uint64_t mixed = eval_index_digest_;
+        for (int i = 0; i < Board::occupancy_t::word_count(); ++i)
+        {
+            mixed ^= board.occupancy().logical_word(i);
+            mixed *= 1099511628211ull;
+        }
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &evaluation.value, sizeof(double));
+        mixed ^= bits;
+        mixed *= 1099511628211ull;
+        mixed ^= static_cast<std::uint64_t>(static_cast<std::uint16_t>(evaluation.t2_value));
+        mixed *= 1099511628211ull;
+        mixed ^= static_cast<std::uint64_t>(static_cast<std::uint16_t>(evaluation.t3_value));
+        mixed *= 1099511628211ull;
+        eval_index_digest_ = mixed;
+    }
+    std::uint64_t Engine::eval_index_digest_for_test() const
+    {
+        return eval_index_digest_;
+    }
+    std::size_t Engine::eval_index_requests_for_test() const
+    {
+        return static_cast<std::size_t>(eval_index_.requests);
+    }
+    std::size_t Engine::eval_index_hits_for_test() const
+    {
+        return static_cast<std::size_t>(eval_index_.hits);
+    }
+    std::size_t Engine::eval_index_misses_for_test() const
+    {
+        return static_cast<std::size_t>(eval_index_.misses);
+    }
+    std::size_t Engine::eval_index_replacements_for_test() const
+    {
+        return static_cast<std::size_t>(eval_index_.replacements);
+    }
+    std::size_t Engine::eval_index_insertions_for_test() const
+    {
+        return static_cast<std::size_t>(eval_index_.insertions);
+    }
+    std::size_t Engine::eval_index_clears_for_test() const
+    {
+        return static_cast<std::size_t>(eval_index_.clears);
+    }
+    std::size_t Engine::eval_index_tag_mismatches_for_test() const
+    {
+        return static_cast<std::size_t>(eval_index_.tag_mismatches);
+    }
+    std::size_t Engine::eval_index_occupied_for_test() const
+    {
+        std::size_t occupied = 0;
+        for (std::uint32_t stored : eval_index_.slots)
+        {
+            if (stored != EvalIndexTrial::kEmpty)
+            {
+                ++occupied;
+            }
+        }
+        return occupied;
+    }
+    std::size_t Engine::eval_index_reserved_for_test() const
+    {
+        return eval_index_reserved_bytes();
+    }
+    std::uint32_t Engine::eval_index_slot_for_test(std::size_t slot) const
+    {
+        if (slot >= eval_index_.slots.size())
+        {
+            return EvalIndexTrial::kEmpty;
+        }
+        return eval_index_.slots[slot];
+    }
+    void Engine::eval_index_overwrite_for_test(std::size_t slot, std::uint32_t tag, NodeId id)
+    {
+        if (slot >= eval_index_.slots.size())
+        {
+            return;
+        }
+        eval_index_.slots[slot] = id;
+        if (EvalIndexTrial::kTagged)
+        {
+            eval_index_.tags[slot] = tag;
+        }
+    }
+    void Engine::set_eval_index_enabled_for_test(bool enabled)
+    {
+        eval_index_enabled_ = enabled;
+    }
+    void Engine::eval_index_search_materialize_for_test(
+        Child const &child, NodeId &id, bool &merged)
+    {
+        MaterializeOutcome outcome = search_materialize(child);
+        id = outcome.id;
+        merged = outcome.merged;
+    }
+#endif
 
 #ifdef TETRIS_EVAL_REUSE_TRACE
     Evaluation Engine::evaluate_once(Board const &board)
@@ -656,9 +881,39 @@ namespace tetris_engine
                 {
                     timers_.eval_hit_ns += timer_now() - start;
                 }
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+                if (count)
+                {
+                    eval_index_mix_digest(board, eval_memo_evaluations_[index]);
+                }
+#endif
                 return eval_memo_evaluations_[index];
             }
         }
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        if (auto indexed = eval_index_find(board, fingerprint))
+        {
+            if (eval_memo_fingerprints_.size() < eval_memo_fingerprints_.capacity())
+            {
+                std::uint16_t const slot =
+                    static_cast<std::uint16_t>(eval_memo_fingerprints_.size());
+                eval_memo_fingerprints_.push_back(fingerprint);
+                eval_memo_boards_.push_back(board);
+                eval_memo_evaluations_.push_back(*indexed);
+                eval_memo_next_.push_back(eval_memo_heads_[bucket]);
+                eval_memo_heads_[bucket] = slot;
+            }
+            if (time)
+            {
+                timers_.eval_hit_ns += timer_now() - start;
+            }
+            if (count)
+            {
+                eval_index_mix_digest(board, *indexed);
+            }
+            return *indexed;
+        }
+#endif
         if (config_.cache.layout != CacheConfig::Layout::Disabled)
         {
             if (count)
@@ -716,6 +971,12 @@ namespace tetris_engine
         {
             timers_.eval_miss_ns += timer_now() - start;
         }
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        if (count)
+        {
+            eval_index_mix_digest(board, evaluation);
+        }
+#endif
         return evaluation;
     }
 
@@ -1117,7 +1378,11 @@ namespace tetris_engine
                 * sizeof(TranspositionEntry),
             static_cast<std::uint64_t>(transposition_rehash_.capacity())
                 * sizeof(TranspositionEntry),
-            static_cast<std::uint64_t>(cache_.reserved_bytes()));
+            static_cast<std::uint64_t>(cache_.reserved_bytes())
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+                + static_cast<std::uint64_t>(eval_index_reserved_bytes())
+#endif
+            );
     }
 
     std::size_t Engine::idmap_reserved_bytes() const
@@ -1147,6 +1412,12 @@ namespace tetris_engine
         stats.cache_hits = cache_.hits();
         stats.cache_misses = cache_.misses();
         stats.cache_replacements = cache_.replacements();
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        stats.cache_requests = static_cast<std::size_t>(eval_index_.requests);
+        stats.cache_hits = static_cast<std::size_t>(eval_index_.hits);
+        stats.cache_misses = static_cast<std::size_t>(eval_index_.misses);
+        stats.cache_replacements = static_cast<std::size_t>(eval_index_.replacements);
+#endif
         return stats;
     }
 
@@ -1350,6 +1621,9 @@ namespace tetris_engine
             probe.slot->epoch = transposition_epoch_;
             ++transposition_used_;
             arena_[id].registered = true;
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+            eval_index_insert_live(id);
+#endif
             if (telemetry_on())
             {
                 ++search_stats_.materialized_nodes;
@@ -1389,6 +1663,9 @@ namespace tetris_engine
         probe.slot->node = id;
         probe.slot->epoch = transposition_epoch_;
         ++transposition_used_;
+#ifdef TETRIS_EVAL_INDEX_TRIAL
+        eval_index_insert_live(id);
+#endif
         if (telemetry_on())
         {
             ++search_stats_.materialized_nodes;

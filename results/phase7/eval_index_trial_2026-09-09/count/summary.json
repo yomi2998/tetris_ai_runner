@@ -1,0 +1,197 @@
+{
+  "A_diffs": {
+    "cache_hits": {
+      "normal": "0",
+      "variant": "12220062"
+    },
+    "cache_misses": {
+      "normal": "0",
+      "variant": "13728157"
+    },
+    "cache_replacements": {
+      "normal": "0",
+      "variant": "4508590"
+    },
+    "cache_requests": {
+      "normal": "0",
+      "variant": "25948219"
+    },
+    "eval_computed": {
+      "normal": "25948219",
+      "variant": "13728157"
+    },
+    "mem_retained_bytes": {
+      "normal": "266338276",
+      "variant": "267386852"
+    }
+  },
+  "B_diffs": {
+    "cache_hits": {
+      "normal": "0",
+      "variant": "10695122"
+    },
+    "cache_misses": {
+      "normal": "0",
+      "variant": "15253097"
+    },
+    "cache_replacements": {
+      "normal": "0",
+      "variant": "10612425"
+    },
+    "cache_requests": {
+      "normal": "0",
+      "variant": "25948219"
+    },
+    "eval_computed": {
+      "normal": "25948219",
+      "variant": "15253097"
+    },
+    "mem_retained_bytes": {
+      "normal": "266338276",
+      "variant": "266862564"
+    }
+  },
+  "checks": [
+    {
+      "detail": "",
+      "name": "A repeat deterministic",
+      "pass": true
+    },
+    {
+      "detail": "",
+      "name": "B repeat deterministic",
+      "pass": true
+    },
+    {
+      "detail": "",
+      "name": "normal repeats deterministic",
+      "pass": true
+    },
+    {
+      "detail": "only mapped fields differ",
+      "name": "normal-vs-A identity",
+      "pass": true
+    },
+    {
+      "detail": "only mapped fields differ",
+      "name": "normal-vs-B identity",
+      "pass": true
+    },
+    {
+      "detail": "got 0",
+      "name": "run1_normal.txt cache_requests==0",
+      "pass": true
+    },
+    {
+      "detail": "got 25948219",
+      "name": "run2_A.txt cache_requests==25948219",
+      "pass": true
+    },
+    {
+      "detail": "got 25948219",
+      "name": "run3_A.txt cache_requests==25948219",
+      "pass": true
+    },
+    {
+      "detail": "got 0",
+      "name": "run4_normal.txt cache_requests==0",
+      "pass": true
+    },
+    {
+      "detail": "got 0",
+      "name": "run5_normal.txt cache_requests==0",
+      "pass": true
+    },
+    {
+      "detail": "got 25948219",
+      "name": "run6_B.txt cache_requests==25948219",
+      "pass": true
+    },
+    {
+      "detail": "got 25948219",
+      "name": "run7_B.txt cache_requests==25948219",
+      "pass": true
+    },
+    {
+      "detail": "got 0",
+      "name": "run8_normal.txt cache_requests==0",
+      "pass": true
+    },
+    {
+      "detail": "got 12220062",
+      "name": "A cache_hits==12220062",
+      "pass": true
+    },
+    {
+      "detail": "got 13728157",
+      "name": "A cache_misses==13728157",
+      "pass": true
+    },
+    {
+      "detail": "got 13728157",
+      "name": "A eval_computed==13728157",
+      "pass": true
+    },
+    {
+      "detail": "got 4508590",
+      "name": "A cache_replacements==4508590",
+      "pass": true
+    },
+    {
+      "detail": "got 267386852",
+      "name": "A mem_retained_bytes==267386852",
+      "pass": true
+    },
+    {
+      "detail": "",
+      "name": "A computed==requests-hits",
+      "pass": true
+    },
+    {
+      "detail": "got 10695122",
+      "name": "B cache_hits==10695122",
+      "pass": true
+    },
+    {
+      "detail": "got 15253097",
+      "name": "B cache_misses==15253097",
+      "pass": true
+    },
+    {
+      "detail": "got 15253097",
+      "name": "B eval_computed==15253097",
+      "pass": true
+    },
+    {
+      "detail": "got 10612425",
+      "name": "B cache_replacements==10612425",
+      "pass": true
+    },
+    {
+      "detail": "got 266862564",
+      "name": "B mem_retained_bytes==266862564",
+      "pass": true
+    },
+    {
+      "detail": "",
+      "name": "B computed==requests-hits",
+      "pass": true
+    },
+    {
+      "detail": "",
+      "name": "normal cache fields zero",
+      "pass": true
+    },
+    {
+      "detail": "",
+      "name": "normal retained baseline",
+      "pass": true
+    },
+    {
+      "detail": "",
+      "name": "retained fit both",
+      "pass": true
+    }
+  ],
+  "verdict": "PASS"
+}
