@@ -1,0 +1,3 @@
+BLOCKED: load precheck never passed; zero runs executed, zero rows collected.
+HEAD b6a66dd751a80bc847bc7fdc8b6ad504336cb3eb.
+No trace record, no ABBA run, no replacement run.
