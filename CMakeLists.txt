@@ -131,6 +131,31 @@ add_test(NAME eval_index_absent_from_normal_build
     COMMAND bash -c "! $<TARGET_FILE:tetris_profile_value> --help | grep -q -- --index && ! nm $<TARGET_FILE:tetris_profile_value> | grep -qi eval_index"
 )
 
+add_executable(tetris_profile_child_soa
+    src/tetris_profile_value.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(tetris_profile_child_soa PRIVATE fast_reachability)
+target_include_directories(tetris_profile_child_soa PRIVATE src)
+target_compile_definitions(tetris_profile_child_soa PRIVATE TETRIS_CHILD_SOA_TRIAL)
+
+add_executable(child_soa_trial_tests
+    tests/child_soa_trial_tests.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(child_soa_trial_tests PRIVATE fast_reachability)
+target_include_directories(child_soa_trial_tests PRIVATE src tests src/fast-reachability)
+target_compile_definitions(child_soa_trial_tests PRIVATE TETRIS_CHILD_SOA_TRIAL)
+add_test(NAME child_soa_trial_tests COMMAND child_soa_trial_tests)
+add_test(NAME child_soa_absent_from_normal_build
+    COMMAND bash -c "! $<TARGET_FILE:tetris_profile_value> --help | grep -q -- --child-soa && ! nm $<TARGET_FILE:tetris_profile_value> | grep -qi child_soa"
+)
+add_test(NAME child_soa_profile_equivalence
+    COMMAND bash -c "a=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); b=$($<TARGET_FILE:tetris_profile_child_soa> --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); s() { echo \"$1\" | tr ' ' '\\n' | grep -v -E '(_ms=|_ns=|total_s=|_per_s=|mem_retained_bytes=)'; }; f() { echo \"$1\" | tr ' ' '\\n' | grep \"^$2=\" | cut -d= -f2; }; test \"$(s \"$a\")\" = \"$(s \"$b\")\" -a \"$(f \"$b\" mem_retained_bytes)\" -lt \"$(f \"$a\" mem_retained_bytes)\" -a \"$(f \"$b\" mem_retained_bytes)\" -lt 268435456"
+)
+
 add_executable(tetris_profile_legacy_cmp
     src/tetris_profile_legacy_cmp.cpp
     src/tetris_core.cpp

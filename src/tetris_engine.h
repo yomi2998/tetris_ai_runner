@@ -313,11 +313,17 @@ namespace tetris_engine
         "the fingerprint-gated slot stays compact and naturally aligned");
 
     struct Child;
+#ifdef TETRIS_CHILD_SOA_TRIAL
+    struct ChildSoaConstView;
+#endif
 
     struct Node
     {
         Node() = default;
         Node(Child const &child, std::size_t depth_value, NodeId root_child_value);
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        Node(ChildSoaConstView staged, std::size_t depth_value, NodeId root_child_value);
+#endif
         Board board;
         PolicyState policy;
         Evaluation evaluation;
@@ -489,6 +495,9 @@ namespace tetris_engine
     inline constexpr std::uint64_t arena_bytes_per_node =
         sizeof(Node) + sizeof(NodeId) + sizeof(PendingHeap::PendingEntry);
 
+#ifdef TETRIS_CHILD_SOA_TRIAL
+#include "child_soa_trial.h"
+#endif
     struct Child
     {
         Board board;
@@ -523,6 +532,25 @@ namespace tetris_engine
         , expandable(child.expandable)
     {
     }
+#ifdef TETRIS_CHILD_SOA_TRIAL
+    inline Node::Node(ChildSoaConstView staged, std::size_t depth_value,
+        NodeId root_child_value)
+        : board(staged.board)
+        , policy(staged.meta.state)
+        , evaluation(staged.meta.evaluation)
+        , cursor(staged.meta.cursor)
+        , depth(depth_value)
+        , hold(staged.meta.hold)
+        , incoming(staged.meta.candidate)
+        , played(staged.meta.played)
+        , parent(staged.meta.parent)
+        , root_child(root_child_value)
+        , has_incoming(true)
+        , source(staged.meta.source)
+        , expandable(staged.meta.expandable)
+    {
+    }
+#endif
 
     struct ExpansionStats
     {
@@ -983,7 +1011,12 @@ namespace tetris_engine
             , eval_memo_next_(std::move(other.eval_memo_next_))
             , eval_memo_heads_(other.eval_memo_heads_)
             , candidate_buffer_(std::move(other.candidate_buffer_))
+#ifdef TETRIS_CHILD_SOA_TRIAL
+            , child_board_buffer_(std::move(other.child_board_buffer_))
+            , child_meta_buffer_(std::move(other.child_meta_buffer_))
+#else
             , child_buffer_(std::move(other.child_buffer_))
+#endif
             , expanded_count_(other.expanded_count_)
             , expanded_max_(other.expanded_max_)
             , width_cache_(other.width_cache_)
@@ -1040,6 +1073,21 @@ namespace tetris_engine
         std::size_t transposition_physical_entries_for_test() const;
 
         TranspositionKey build_key_for_test(Child const &child) const;
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        std::size_t child_soa_size_for_test() const;
+        std::size_t child_soa_capacity_for_test() const;
+        std::size_t child_soa_board_capacity_for_test() const;
+        std::size_t child_soa_meta_capacity_for_test() const;
+        bool child_soa_lockstep_for_test() const;
+        bool child_soa_board_alignment_for_test() const;
+        std::uint64_t child_soa_reserved_for_test() const;
+        Child child_soa_gather_for_test(std::size_t index) const;
+        TranspositionKey child_soa_key_for_test(std::size_t index) const;
+        NodeId child_soa_materialize_for_test(std::size_t index);
+        bool child_soa_try_push_for_test(Child const &child);
+        bool child_soa_search_materialize_for_test(std::size_t index, NodeId &id,
+            bool &merged);
+#endif
 
         TranspositionKey key_from_node_for_test(NodeId id) const;
 
@@ -1124,7 +1172,12 @@ namespace tetris_engine
         std::vector<std::uint16_t> eval_memo_next_;
         std::array<std::uint16_t, eval_memo_hash_buckets> eval_memo_heads_{};
         std::vector<Candidate> candidate_buffer_;
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        std::vector<Board> child_board_buffer_;
+        std::vector<ChildSoaMeta> child_meta_buffer_;
+#else
         std::vector<Child> child_buffer_;
+#endif
 
         std::array<std::size_t, max_frontiers> expanded_count_{};
         std::array<NodeId, max_frontiers> expanded_max_{};
@@ -1186,6 +1239,7 @@ namespace tetris_engine
             return config_.telemetry_enabled && config_.timers_enabled;
         }
 
+#ifndef TETRIS_CHILD_SOA_TRIAL
         bool expand_source(NodeId parent_id, Node const &parent, Piece played,
             BranchSource source, HoldState hold, std::size_t cursor,
             std::span<Piece const> policy_next, std::vector<Child> &out);
@@ -1195,6 +1249,36 @@ namespace tetris_engine
         bool expand_source_for_block(NodeId parent_id, Node const &parent, Piece played,
             BranchSource source, HoldState hold, std::size_t cursor,
             std::span<Piece const> policy_next, std::vector<Child> &out);
+#else
+        bool expand_source(NodeId parent_id, Node const &parent, Piece played,
+            BranchSource source, HoldState hold, std::size_t cursor,
+            std::span<Piece const> policy_next);
+
+        template <auto B>
+            requires reachability::block_spec<decltype(B)>
+        bool expand_source_for_block(NodeId parent_id, Node const &parent, Piece played,
+            BranchSource source, HoldState hold, std::size_t cursor,
+            std::span<Piece const> policy_next);
+
+        std::size_t child_soa_size() const;
+        std::size_t child_soa_capacity() const;
+        void child_soa_clear();
+        void child_soa_reserve(std::size_t count);
+        void child_soa_swap_empty();
+        ChildSoaConstView child_soa_view(std::size_t index) const;
+        Child child_soa_gather(std::size_t index) const;
+        bool child_soa_try_push(Board const &board, ChildSoaMeta const &meta);
+        std::uint64_t child_soa_reserved_bytes() const;
+        TranspositionKey build_key_soa(std::size_t index, NodeId id) const;
+        NodeId materialize_soa(std::size_t index);
+        MaterializeOutcome search_materialize_soa(std::size_t index);
+        MaterializeOutcome search_materialize_prehashed_soa(std::size_t index,
+            TranspositionKey const &key, std::uint64_t fp);
+        MaterializeOutcome search_materialize_inner_soa(std::size_t index,
+            TranspositionKey const &key, std::uint64_t fp);
+        bool accept_child_soa(MaterializeOutcome outcome, NodeId parent,
+            std::size_t child_level, NodeId &tail);
+#endif
 
         Evaluation evaluate_once(Board const &board);
 

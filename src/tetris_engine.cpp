@@ -91,7 +91,11 @@ namespace tetris_engine
         policy_.init(config_.policy);
         std::vector<Node>().swap(arena_);
         std::vector<Candidate>().swap(candidate_buffer_);
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        child_soa_swap_empty();
+#else
         std::vector<Child>().swap(child_buffer_);
+#endif
         std::vector<std::uint64_t>().swap(eval_memo_fingerprints_);
         std::vector<Board>().swap(eval_memo_boards_);
         std::vector<Evaluation>().swap(eval_memo_evaluations_);
@@ -123,7 +127,11 @@ namespace tetris_engine
         }
         std::uint64_t const fixed_non_cache = engine_buffer_reservation(0,
             max_candidates_per_source * sizeof(Candidate),
+#ifdef TETRIS_CHILD_SOA_TRIAL
+            max_children_per_parent * (sizeof(Board) + sizeof(ChildSoaMeta)),
+#else
             max_children_per_parent * sizeof(Child),
+#endif
             max_children_per_parent * eval_memo_slot_bytes,
             transposition_entries * sizeof(TranspositionEntry),
             transposition_entries * sizeof(TranspositionEntry),
@@ -173,7 +181,11 @@ namespace tetris_engine
             return false;
         }
         candidate_buffer_.resize(max_candidates_per_source);
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        child_soa_reserve(max_children_per_parent);
+#else
         child_buffer_.reserve(max_children_per_parent);
+#endif
         eval_memo_fingerprints_.reserve(max_children_per_parent);
         eval_memo_boards_.reserve(max_children_per_parent);
         eval_memo_evaluations_.reserve(max_children_per_parent);
@@ -198,7 +210,13 @@ namespace tetris_engine
                 + static_cast<std::uint64_t>(idmap_.capacity()) * sizeof(NodeId)
                 + heap_.reserved_bytes(),
             static_cast<std::uint64_t>(candidate_buffer_.capacity()) * sizeof(Candidate),
+#ifdef TETRIS_CHILD_SOA_TRIAL
+            static_cast<std::uint64_t>(child_board_buffer_.capacity()) * sizeof(Board)
+                + static_cast<std::uint64_t>(child_meta_buffer_.capacity())
+                    * sizeof(ChildSoaMeta),
+#else
             static_cast<std::uint64_t>(child_buffer_.capacity()) * sizeof(Child),
+#endif
             static_cast<std::uint64_t>(eval_memo_fingerprints_.capacity())
                     * sizeof(std::uint64_t)
                 + static_cast<std::uint64_t>(eval_memo_boards_.capacity()) * sizeof(Board)
@@ -219,7 +237,11 @@ namespace tetris_engine
         {
             std::vector<Node>().swap(arena_);
             std::vector<Candidate>().swap(candidate_buffer_);
+#ifdef TETRIS_CHILD_SOA_TRIAL
+            child_soa_swap_empty();
+#else
             std::vector<Child>().swap(child_buffer_);
+#endif
             std::vector<std::uint64_t>().swap(eval_memo_fingerprints_);
             std::vector<Board>().swap(eval_memo_boards_);
             std::vector<Evaluation>().swap(eval_memo_evaluations_);
@@ -450,7 +472,11 @@ namespace tetris_engine
             eval_index_insert_live(static_cast<NodeId>(n));
         }
 #endif
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        child_soa_clear();
+#else
         child_buffer_.clear();
+#endif
         heap_.reset(max_frontiers);
         for (std::size_t i = 0; i < max_frontiers; ++i)
         {
@@ -607,7 +633,11 @@ namespace tetris_engine
         arena_.clear();
         exhausted_ = false;
         clear_eval_memo();
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        child_soa_clear();
+#else
         child_buffer_.clear();
+#endif
         max_length_ = new_max;
         if (config_.arena_capacity == 0)
         {
@@ -980,6 +1010,7 @@ namespace tetris_engine
         return evaluation;
     }
 
+#ifndef TETRIS_CHILD_SOA_TRIAL
     bool Engine::expand_source(NodeId parent_id, Node const &parent, Piece played,
         BranchSource source, HoldState hold, std::size_t cursor,
         std::span<Piece const> policy_next, std::vector<Child> &out)
@@ -1155,11 +1186,498 @@ namespace tetris_engine
         record_emit(false);
         return true;
     }
+#endif
+
+#ifdef TETRIS_CHILD_SOA_TRIAL
+    std::size_t Engine::child_soa_size() const
+    {
+        return child_board_buffer_.size();
+    }
+    std::size_t Engine::child_soa_capacity() const
+    {
+        return child_board_buffer_.capacity() < child_meta_buffer_.capacity()
+            ? child_board_buffer_.capacity()
+            : child_meta_buffer_.capacity();
+    }
+    void Engine::child_soa_clear()
+    {
+        child_board_buffer_.clear();
+        child_meta_buffer_.clear();
+    }
+    void Engine::child_soa_reserve(std::size_t count)
+    {
+        child_board_buffer_.reserve(count);
+        child_meta_buffer_.reserve(count);
+    }
+    void Engine::child_soa_swap_empty()
+    {
+        std::vector<Board>().swap(child_board_buffer_);
+        std::vector<ChildSoaMeta>().swap(child_meta_buffer_);
+    }
+    bool Engine::child_soa_try_push(Board const &board, ChildSoaMeta const &meta)
+    {
+        if (child_soa_size() >= child_soa_capacity())
+        {
+            return false;
+        }
+        child_board_buffer_.push_back(board);
+        child_meta_buffer_.push_back(meta);
+        return true;
+    }
+    ChildSoaConstView Engine::child_soa_view(std::size_t index) const
+    {
+        return ChildSoaConstView{ child_board_buffer_[index], child_meta_buffer_[index] };
+    }
+    Child Engine::child_soa_gather(std::size_t index) const
+    {
+        ChildSoaConstView view = child_soa_view(index);
+        Child child;
+        child.board = view.board;
+        child.state = view.meta.state;
+        child.evaluation = view.meta.evaluation;
+        child.cursor = view.meta.cursor;
+        child.hold = view.meta.hold;
+        child.outcome = view.meta.outcome;
+        child.parent = view.meta.parent;
+        child.candidate = view.meta.candidate;
+        child.played = view.meta.played;
+        child.source = view.meta.source;
+        child.expandable = view.meta.expandable;
+        return child;
+    }
+    std::uint64_t Engine::child_soa_reserved_bytes() const
+    {
+        return static_cast<std::uint64_t>(child_board_buffer_.capacity()) * sizeof(Board)
+            + static_cast<std::uint64_t>(child_meta_buffer_.capacity())
+                * sizeof(ChildSoaMeta);
+    }
+    bool Engine::expand_source(NodeId parent_id, Node const &parent, Piece played,
+        BranchSource source, HoldState hold, std::size_t cursor,
+        std::span<Piece const> policy_next)
+    {
+        if (!tetris::toj::can_spawn(parent.board, played))
+        {
+            return true;
+        }
+        return reachability::call_with_block<tetris::toj::SRS>(played,
+            [&]<reachability::block B>() {
+                return expand_source_for_block<B>(parent_id, parent, played, source, hold,
+                    cursor, policy_next);
+            });
+    }
+    template <auto B>
+        requires reachability::block_spec<decltype(B)>
+    bool Engine::expand_source_for_block(NodeId parent_id, Node const &parent, Piece played,
+        BranchSource source, HoldState hold, std::size_t cursor,
+        std::span<Piece const> policy_next)
+    {
+        bool const count = telemetry_on();
+        bool const time = timers_on();
+        std::size_t const source_begin = child_soa_size();
+        std::int64_t const enum_start = time ? timer_now() : 0;
+        auto batch = tetris::toj::detail::enumerate_into_for_block<B>(parent.board, played,
+            config_.movement, std::span<Candidate>(candidate_buffer_));
+        if (time)
+        {
+            timers_.enum_ns += timer_now() - enum_start;
+        }
+        if (!batch.has_value())
+        {
+            return false;
+        }
+        if (count)
+        {
+            ++search_stats_.enumeration_calls;
+            search_stats_.raw_kernel_landings += batch->raw_landings;
+            search_stats_.unique_candidates += batch->count;
+            stats_.enumerated += batch->count;
+        }
+        bool const record = static_cast<bool>(config_.expand_source_record);
+        std::vector<ExpandSourceCandidateRecord> record_entries;
+        if (record)
+        {
+            record_entries.reserve(batch->count);
+        }
+        auto record_push = [&](Candidate candidate, bool apply_ok, Outcome outcome,
+            Board const *result_board, bool survivor) {
+            if (!record)
+            {
+                return;
+            }
+            ExpandSourceCandidateRecord entry;
+            entry.candidate = candidate;
+            entry.apply_ok = apply_ok;
+            entry.outcome = outcome;
+            entry.result_hash40 = result_board == nullptr
+                ? 0
+                : result_rows_hash40(*result_board);
+            entry.survivor = survivor;
+            record_entries.push_back(entry);
+        };
+        auto record_emit = [&](bool overflow) {
+            if (!record)
+            {
+                return;
+            }
+            ExpandSourceRecord rec;
+            rec.board = &parent.board;
+            rec.played = played;
+            rec.source = source;
+            rec.candidates =
+                std::span<ExpandSourceCandidateRecord const>(record_entries);
+            rec.raw_landings = batch->raw_landings;
+            rec.overflow = overflow;
+            config_.expand_source_record(rec);
+        };
+        toj_policy::DecisionContext context;
+        context.next = policy_next;
+        context.hold = hold.piece;
+        context.used_hold = source == BranchSource::Hold;
+        context.depth = parent.depth;
+        std::int64_t const context_start = time ? timer_now() : 0;
+        int const t_expect = toj_policy::Policy::expected_t_distance(context);
+        if (time)
+        {
+            timers_.policy_ns += timer_now() - context_start;
+        }
+        for (std::size_t index = 0; index < batch->count; ++index)
+        {
+            Candidate const &candidate = candidate_buffer_[index];
+            std::int64_t const rule_start = time ? timer_now() : 0;
+            if (count)
+            {
+                ++search_stats_.rule_applications;
+            }
+            auto applied =
+                tetris::toj::detail::apply_for_block<B>(parent.board, candidate);
+            if (!applied.has_value())
+            {
+                if (time)
+                {
+                    timers_.rule_ns += timer_now() - rule_start;
+                }
+                record_push(candidate, false, Outcome{}, nullptr, false);
+                continue;
+            }
+            Outcome outcome;
+            outcome.spin = applied->spin;
+            outcome.clear_count = applied->clear_count;
+            outcome.lockout = applied->lockout;
+            bool same_result = false;
+            for (std::size_t child_index = source_begin; child_index < child_soa_size();
+                ++child_index)
+            {
+                if (child_board_buffer_[child_index] == applied->board
+                    && child_meta_buffer_[child_index].outcome == outcome)
+                {
+                    same_result = true;
+                    break;
+                }
+            }
+            if (time)
+            {
+                timers_.rule_ns += timer_now() - rule_start;
+            }
+            if (same_result)
+            {
+                record_push(candidate, true, outcome, &applied->board, false);
+                continue;
+            }
+            Evaluation evaluation = evaluate_once(applied->board);
+            std::int64_t const policy_start = time ? timer_now() : 0;
+            PolicyState state =
+                policy_.transition_known_lockout(played, candidate, outcome, applied->board,
+                    parent.policy, context, evaluation, outcome.lockout, t_expect);
+            if (time)
+            {
+                timers_.policy_ns += timer_now() - policy_start;
+            }
+            ChildSoaMeta meta;
+            meta.state = state;
+            meta.evaluation = evaluation;
+            meta.cursor = cursor;
+            meta.hold = hold;
+            meta.outcome = outcome;
+            meta.parent = parent_id;
+            meta.candidate = candidate;
+            meta.played = played;
+            meta.source = source;
+            meta.expandable = !applied->lockout;
+            if (!child_soa_try_push(applied->board, meta))
+            {
+                record_emit(true);
+                return false;
+            }
+            if (count)
+            {
+                ++search_stats_.policy_transitions;
+                ++stats_.transitions;
+            }
+            record_push(candidate, true, outcome, &applied->board, true);
+        }
+        record_emit(false);
+        return true;
+    }
+    TranspositionKey Engine::build_key_soa(std::size_t index, NodeId id) const
+    {
+        (void)id;
+        TranspositionKey key;
+        ChildSoaMeta const &meta = child_meta_buffer_[index];
+        Node const &parent_node = arena_[meta.parent];
+        key.depth = static_cast<std::uint16_t>(parent_node.depth + 1);
+        key.cursor = static_cast<std::uint16_t>(meta.cursor);
+        key.root_child = parent_node.depth == 0
+            ? first_move_fingerprint(meta.played, meta.candidate, meta.source)
+            : parent_node.root_child;
+        key.occupancy = child_board_buffer_[index].occupancy();
+        key.state = meta.state;
+        key.state.acc_value = normalize_zero(key.state.acc_value);
+        key.state.like = normalize_zero(key.state.like);
+        key.state.value = normalize_zero(key.state.value);
+        assert(key.state.acc_value == key.state.acc_value
+            && key.state.like == key.state.like && key.state.value == key.state.value);
+        std::size_t const size = queue_.pieces.size();
+        std::size_t const remaining = meta.cursor < size ? size - meta.cursor : 0;
+        key.boundary_count = static_cast<std::uint16_t>(remaining);
+        for (std::size_t i = 0; i < remaining; ++i)
+        {
+            if (queue_.boundary[meta.cursor + i])
+            {
+                key.boundary_bits[i / 64] |= (1ull << (i % 64));
+            }
+        }
+        key.active_piece = meta.cursor < size
+            ? static_cast<std::uint8_t>(queue_.pieces[meta.cursor])
+            : no_piece_code;
+        key.hold_piece = meta.hold.piece.has_value()
+            ? static_cast<std::uint8_t>(*meta.hold.piece)
+            : no_piece_code;
+        key.hold_available = !meta.hold.locked;
+        return key;
+    }
+    NodeId Engine::materialize_soa(std::size_t index)
+    {
+        ChildSoaMeta const &meta = child_meta_buffer_[index];
+        NodeId const parent = meta.parent;
+        if (arena_.size() >= config_.arena_capacity || arena_.size() >= max_nodes)
+        {
+            exhausted_ = true;
+            return no_node;
+        }
+        std::size_t depth = 0;
+        bool parent_is_root = false;
+        if (parent < arena_.size())
+        {
+            depth = arena_[parent].depth + 1;
+            parent_is_root = parent == 0;
+        }
+        NodeId const root_child = parent_is_root
+            ? first_move_fingerprint(meta.played, meta.candidate, meta.source)
+            : (parent < arena_.size() ? arena_[parent].root_child : no_node);
+        NodeId const id = static_cast<NodeId>(arena_.size());
+        arena_.emplace_back(child_soa_view(index), depth, root_child);
+        return id;
+    }
+    Engine::MaterializeOutcome Engine::search_materialize_soa(std::size_t index)
+    {
+        bool const time = timers_on();
+        std::int64_t const start = time ? timer_now() : 0;
+        if (child_meta_buffer_[index].parent >= arena_.size())
+        {
+            return {};
+        }
+        TranspositionKey const key = build_key_soa(index, no_node);
+        MaterializeOutcome outcome =
+            search_materialize_inner_soa(index, key, transposition_hash(key));
+        if (time)
+        {
+            timers_.materialize_ns += timer_now() - start;
+        }
+        return outcome;
+    }
+    Engine::MaterializeOutcome Engine::search_materialize_prehashed_soa(std::size_t index,
+        TranspositionKey const &key, std::uint64_t fp)
+    {
+        bool const time = timers_on();
+        std::int64_t const start = time ? timer_now() : 0;
+        MaterializeOutcome outcome = search_materialize_inner_soa(index, key, fp);
+        if (time)
+        {
+            timers_.materialize_ns += timer_now() - start;
+        }
+        return outcome;
+    }
+    Engine::MaterializeOutcome Engine::search_materialize_inner_soa(std::size_t index,
+        TranspositionKey const &key, std::uint64_t fp)
+    {
+        if (child_meta_buffer_[index].parent >= arena_.size())
+        {
+            return {};
+        }
+        Node const &parent_node = arena_[child_meta_buffer_[index].parent];
+        if (parent_node.depth != 0)
+        {
+            TranspositionProbe probe = transposition_probe_prehashed(fp, key);
+            if (search_stopped_)
+            {
+                return {};
+            }
+            if (probe.merged)
+            {
+                if (telemetry_on())
+                {
+                    ++search_stats_.transposition_merges;
+                }
+                return { true, probe.node };
+            }
+            NodeId id = materialize_soa(index);
+            if (id == no_node)
+            {
+                return {};
+            }
+            probe.slot->fp = probe.fp;
+            probe.slot->node = id;
+            probe.slot->epoch = transposition_epoch_;
+            ++transposition_used_;
+            arena_[id].registered = true;
+            if (telemetry_on())
+            {
+                ++search_stats_.materialized_nodes;
+            }
+            return { false, id };
+        }
+        NodeId id = materialize_soa(index);
+        if (id == no_node)
+        {
+            return {};
+        }
+        TranspositionProbe probe = transposition_probe_prehashed(fp, key);
+        if (search_stopped_)
+        {
+            return { false, id };
+        }
+        if (probe.merged)
+        {
+            if (telemetry_on())
+            {
+                ++search_stats_.transposition_merges;
+            }
+            arena_.pop_back();
+            return { true, probe.node };
+        }
+        probe.slot->fp = probe.fp;
+        probe.slot->node = id;
+        probe.slot->epoch = transposition_epoch_;
+        ++transposition_used_;
+        if (telemetry_on())
+        {
+            ++search_stats_.materialized_nodes;
+        }
+        return { false, id };
+    }
+    bool Engine::accept_child_soa(MaterializeOutcome outcome, NodeId parent,
+        std::size_t child_level, NodeId &tail)
+    {
+        if (search_stopped_ || exhausted_)
+        {
+            return false;
+        }
+        if (outcome.merged)
+        {
+            if (!arena_[outcome.id].registered)
+            {
+                arena_[outcome.id].registered = true;
+                heap_.push(outcome.id, child_level);
+            }
+            if (arena_[outcome.id].parent == parent)
+            {
+                tail = append_child_link(parent, outcome.id);
+            }
+            return true;
+        }
+        tail = append_fresh_child_link(parent, outcome.id, tail);
+        heap_.push(outcome.id, child_level);
+        return true;
+    }
+    std::size_t Engine::child_soa_size_for_test() const
+    {
+        return child_soa_size();
+    }
+    std::size_t Engine::child_soa_capacity_for_test() const
+    {
+        return child_soa_capacity();
+    }
+    std::size_t Engine::child_soa_board_capacity_for_test() const
+    {
+        return child_board_buffer_.capacity();
+    }
+    std::size_t Engine::child_soa_meta_capacity_for_test() const
+    {
+        return child_meta_buffer_.capacity();
+    }
+    bool Engine::child_soa_lockstep_for_test() const
+    {
+        return child_board_buffer_.size() == child_meta_buffer_.size();
+    }
+    bool Engine::child_soa_board_alignment_for_test() const
+    {
+        if (child_board_buffer_.empty())
+        {
+            return true;
+        }
+        std::uintptr_t address =
+            reinterpret_cast<std::uintptr_t>(child_board_buffer_.data());
+        return address % alignof(Board) == 0;
+    }
+    std::uint64_t Engine::child_soa_reserved_for_test() const
+    {
+        return child_soa_reserved_bytes();
+    }
+    Child Engine::child_soa_gather_for_test(std::size_t index) const
+    {
+        return child_soa_gather(index);
+    }
+    TranspositionKey Engine::child_soa_key_for_test(std::size_t index) const
+    {
+        return build_key_soa(index, no_node);
+    }
+    NodeId Engine::child_soa_materialize_for_test(std::size_t index)
+    {
+        return materialize_soa(index);
+    }
+    bool Engine::child_soa_try_push_for_test(Child const &child)
+    {
+        ChildSoaMeta meta;
+        meta.state = child.state;
+        meta.evaluation = child.evaluation;
+        meta.cursor = child.cursor;
+        meta.hold = child.hold;
+        meta.outcome = child.outcome;
+        meta.parent = child.parent;
+        meta.candidate = child.candidate;
+        meta.played = child.played;
+        meta.source = child.source;
+        meta.expandable = child.expandable;
+        return child_soa_try_push(child.board, meta);
+    }
+    bool Engine::child_soa_search_materialize_for_test(std::size_t index, NodeId &id,
+        bool &merged)
+    {
+        MaterializeOutcome outcome = search_materialize_soa(index);
+        id = outcome.id;
+        merged = outcome.merged;
+        return search_stopped_ == false;
+    }
+#endif
 
     bool Engine::expand_parent(NodeId parent_id)
     {
         clear_eval_memo();
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        child_soa_clear();
+#else
         child_buffer_.clear();
+#endif
         if (parent_id >= arena_.size())
         {
             return true;
@@ -1181,8 +1699,13 @@ namespace tetris_engine
             current = queue_.pieces[node.cursor];
             HoldState hold = node.hold;
             hold.locked = false;
+#ifdef TETRIS_CHILD_SOA_TRIAL
+            if (!expand_source(parent_id, node, *current, BranchSource::Current, hold,
+                    node.cursor + 1, policy_next))
+#else
             if (!expand_source(parent_id, node, *current, BranchSource::Current, hold,
                     node.cursor + 1, policy_next, child_buffer_))
+#endif
             {
                 return false;
             }
@@ -1196,8 +1719,13 @@ namespace tetris_engine
                 hold.locked = false;
                 std::size_t const held_cursor =
                     node.cursor + 1 <= size ? node.cursor + 1 : size;
+#ifdef TETRIS_CHILD_SOA_TRIAL
+                if (!expand_source(parent_id, node, *node.hold.piece, BranchSource::Hold,
+                        hold, held_cursor, policy_next))
+#else
                 if (!expand_source(parent_id, node, *node.hold.piece, BranchSource::Hold,
                         hold, held_cursor, policy_next, child_buffer_))
+#endif
                 {
                     return false;
                 }
@@ -1207,9 +1735,14 @@ namespace tetris_engine
                 HoldState hold;
                 hold.piece = current;
                 hold.locked = false;
+#ifdef TETRIS_CHILD_SOA_TRIAL
+                if (!expand_source(parent_id, node, queue_.pieces[node.cursor + 1],
+                        BranchSource::Hold, hold, node.cursor + 2, policy_next))
+#else
                 if (!expand_source(parent_id, node, queue_.pieces[node.cursor + 1],
                         BranchSource::Hold, hold, node.cursor + 2, policy_next,
                         child_buffer_))
+#endif
                 {
                     return false;
                 }
@@ -1226,7 +1759,15 @@ namespace tetris_engine
         {
             return out;
         }
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        out.reserve(child_soa_size());
+        for (std::size_t index = 0; index < child_soa_size(); ++index)
+        {
+            out.push_back(child_soa_gather(index));
+        }
+#else
         out = child_buffer_;
+#endif
         return out;
     }
 
@@ -1366,7 +1907,13 @@ namespace tetris_engine
                 + static_cast<std::uint64_t>(idmap_.capacity()) * sizeof(NodeId)
                 + heap_.reserved_bytes(),
             static_cast<std::uint64_t>(candidate_buffer_.capacity()) * sizeof(Candidate),
+#ifdef TETRIS_CHILD_SOA_TRIAL
+            static_cast<std::uint64_t>(child_board_buffer_.capacity()) * sizeof(Board)
+                + static_cast<std::uint64_t>(child_meta_buffer_.capacity())
+                    * sizeof(ChildSoaMeta),
+#else
             static_cast<std::uint64_t>(child_buffer_.capacity()) * sizeof(Child),
+#endif
             static_cast<std::uint64_t>(eval_memo_fingerprints_.capacity())
                     * sizeof(std::uint64_t)
                 + static_cast<std::uint64_t>(eval_memo_boards_.capacity()) * sizeof(Board)
@@ -1735,6 +2282,50 @@ namespace tetris_engine
         constexpr std::size_t hash_batch_size = 8;
         std::size_t child_index = 0;
         bool halted = false;
+#ifdef TETRIS_CHILD_SOA_TRIAL
+        for (; child_index + hash_batch_size <= child_soa_size();
+            child_index += hash_batch_size)
+        {
+            std::int64_t const hash_start = time ? timer_now() : 0;
+            std::array<TranspositionKey, hash_batch_size> const keys{
+                build_key_soa(child_index, no_node),
+                build_key_soa(child_index + 1, no_node),
+                build_key_soa(child_index + 2, no_node),
+                build_key_soa(child_index + 3, no_node),
+                build_key_soa(child_index + 4, no_node),
+                build_key_soa(child_index + 5, no_node),
+                build_key_soa(child_index + 6, no_node),
+                build_key_soa(child_index + 7, no_node),
+            };
+            auto const hashes = transposition_hash_batch(keys);
+            if (time)
+            {
+                timers_.materialize_ns += timer_now() - hash_start;
+            }
+            for (std::size_t k = 0; k < hash_batch_size; ++k)
+            {
+                MaterializeOutcome outcome = search_materialize_prehashed_soa(
+                    child_index + k, keys[k], hashes[k]);
+                if (!accept_child_soa(outcome, id, child_level, tail))
+                {
+                    halted = true;
+                    break;
+                }
+            }
+            if (halted)
+            {
+                break;
+            }
+        }
+        for (; !halted && child_index < child_soa_size(); ++child_index)
+        {
+            if (!accept_child_soa(search_materialize_soa(child_index), id, child_level,
+                    tail))
+            {
+                break;
+            }
+        }
+#else
         for (; child_index + hash_batch_size <= child_buffer_.size();
             child_index += hash_batch_size)
         {
@@ -1777,6 +2368,7 @@ namespace tetris_engine
                 break;
             }
         }
+#endif
         if (time)
         {
             timers_.parent_ns += timer_now() - start;
@@ -1823,11 +2415,18 @@ namespace tetris_engine
             {
                 tail = arena_[tail].next_sibling;
             }
+#ifdef TETRIS_CHILD_SOA_TRIAL
+            for (std::size_t child_index = 0; child_index < child_soa_size();
+                ++child_index)
+            {
+                MaterializeOutcome outcome = search_materialize_soa(child_index);
+#else
             for (std::size_t child_index = 0; child_index < child_buffer_.size();
                 ++child_index)
             {
                 MaterializeOutcome outcome =
                     search_materialize(child_buffer_[child_index]);
+#endif
                 if (search_stopped_ || exhausted_)
                 {
                     break;
