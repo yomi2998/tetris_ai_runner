@@ -1,0 +1,46 @@
+HEAD=6dd157aa9bf78e22e7af69e3c3280cc31a7df83d
+TRACKED_STATE=clean
+HASH path=/home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_normal expected=1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765 actual=1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765
+HASH path=/home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_row_fusion expected=ce2bd5a65967772bdbb89ac25b94a009c4d189cb1396a16a38ce96c27594ee7c actual=ce2bd5a65967772bdbb89ac25b94a009c4d189cb1396a16a38ce96c27594ee7c
+HASH path=/home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin expected=ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037 actual=ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037
+HASH path=/home/icly/Documents/tetris_ai_runner/results/phase7/row_export_fusion_trial_2026-09-09/count/PARENT_VERDICT.md expected=6211dd00e6b554a3338520fb4285a2c4d4c098a4db81131d11a03da3bc790a19 actual=6211dd00e6b554a3338520fb4285a2c4d4c098a4db81131d11a03da3bc790a19
+CPU_CONTROL_PREFLIGHT=pass CPU15=1
+PRECHECK attempt=0 utc=2026-09-09T19:42:51Z load1=0.99 load5=0.93 load15=0.99
+CPU15_OFFLINE_START=2026-09-09T19:42:51Z state=0
+START label=prewarm_normal utc=2026-09-09T19:42:51Z load1=0.99 load5=0.93 load15=0.99 cpu15=0
+COMMAND label=prewarm_normal env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_normal --seed 1 --warmup-moves 20 --moves 40 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 200 --quiet --quiet-version 3 --telemetry off --timers off
+END label=prewarm_normal utc=2026-09-09T19:42:52Z exit=0 cpu15=0
+START label=prewarm_soa utc=2026-09-09T19:42:52Z load1=0.99 load5=0.93 load15=0.99 cpu15=0
+COMMAND label=prewarm_soa env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_row_fusion --seed 1 --warmup-moves 20 --moves 40 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 200 --quiet --quiet-version 3 --telemetry off --timers off
+END label=prewarm_soa utc=2026-09-09T19:42:53Z exit=0 cpu15=0
+PAIR_CHECK pair=1 attempt=0 utc=2026-09-09T19:42:53Z load1=0.99 load5=0.93 load15=0.99 cpu15=0
+START label=run1_normal utc=2026-09-09T19:42:53Z load1=0.99 load5=0.93 load15=0.99 cpu15=0
+COMMAND label=run1_normal env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_normal --seed 1 --warmup-moves 20 --moves 200 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry off --timers off
+END label=run1_normal utc=2026-09-09T19:43:13Z exit=0 cpu15=0
+START label=run2_soa utc=2026-09-09T19:43:13Z load1=1.21 load5=0.98 load15=1.01 cpu15=0
+COMMAND label=run2_soa env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_row_fusion --seed 1 --warmup-moves 20 --moves 200 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry off --timers off
+END label=run2_soa utc=2026-09-09T19:43:33Z exit=0 cpu15=0
+PAIR_CHECK pair=2 attempt=0 utc=2026-09-09T19:43:33Z load1=1.15 load5=0.98 load15=1.01 cpu15=0
+START label=run3_soa utc=2026-09-09T19:43:33Z load1=1.15 load5=0.98 load15=1.01 cpu15=0
+COMMAND label=run3_soa env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_row_fusion --seed 1 --warmup-moves 20 --moves 200 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry off --timers off
+END label=run3_soa utc=2026-09-09T19:43:53Z exit=0 cpu15=0
+START label=run4_normal utc=2026-09-09T19:43:53Z load1=1.71 load5=1.13 load15=1.06 cpu15=0
+COMMAND label=run4_normal env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_normal --seed 1 --warmup-moves 20 --moves 200 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry off --timers off
+END label=run4_normal utc=2026-09-09T19:44:13Z exit=0 cpu15=0
+PAIR_CHECK pair=3 attempt=0 utc=2026-09-09T19:44:13Z load1=1.58 load5=1.14 load15=1.06 cpu15=0
+START label=run5_soa utc=2026-09-09T19:44:13Z load1=1.58 load5=1.14 load15=1.06 cpu15=0
+COMMAND label=run5_soa env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_row_fusion --seed 1 --warmup-moves 20 --moves 200 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry off --timers off
+END label=run5_soa utc=2026-09-09T19:44:33Z exit=0 cpu15=0
+START label=run6_normal utc=2026-09-09T19:44:33Z load1=1.63 load5=1.17 load15=1.07 cpu15=0
+COMMAND label=run6_normal env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_normal --seed 1 --warmup-moves 20 --moves 200 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry off --timers off
+END label=run6_normal utc=2026-09-09T19:44:53Z exit=0 cpu15=0
+PAIR_CHECK pair=4 attempt=0 utc=2026-09-09T19:44:53Z load1=1.66 load5=1.21 load15=1.09 cpu15=0
+START label=run7_normal utc=2026-09-09T19:44:53Z load1=1.66 load5=1.21 load15=1.09 cpu15=0
+COMMAND label=run7_normal env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_normal --seed 1 --warmup-moves 20 --moves 200 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry off --timers off
+END label=run7_normal utc=2026-09-09T19:45:13Z exit=0 cpu15=0
+START label=run8_soa utc=2026-09-09T19:45:13Z load1=1.56 load5=1.21 load15=1.09 cpu15=0
+COMMAND label=run8_soa env -u TETRIS_AI_PARAM_FILE taskset --cpu-list 7 /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/selector_artifacts/tetris_profile_row_fusion --seed 1 --warmup-moves 20 --moves 200 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --quiet --quiet-version 3 --telemetry off --timers off
+END label=run8_soa utc=2026-09-09T19:45:33Z exit=0 cpu15=0
+COLLECTION_COMPLETE=2026-09-09T19:45:33Z cpu15=0
+CPU15_ONLINE_END=2026-09-09T19:45:33Z state=1
+TERMINAL=COLLECTED
