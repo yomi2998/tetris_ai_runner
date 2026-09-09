@@ -621,6 +621,10 @@ namespace tetris_engine
         bool operator==(SearchSelection const &) const = default;
     };
 
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+#include "direct_key_trial.h"
+#endif
+
     struct PathTelemetry
     {
         std::size_t calls = 0;
@@ -1094,6 +1098,23 @@ namespace tetris_engine
         bool transposition_reinsert_for_test(
             std::uint64_t fp, TranspositionKey const &key, NodeId node);
 
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+        std::uint64_t direct_key_hash_for_test(Child const &child) const;
+
+        bool direct_key_node_matches_for_test(NodeId node, Child const &child) const;
+
+        std::size_t direct_key_context_count_for_test() const;
+
+        DirectKeySourceContext const &direct_key_context_for_test(
+            std::size_t index) const;
+
+        void direct_key_probe_outcome_for_test(std::uint64_t fp, Child const &child,
+            bool &merged, NodeId &node);
+
+        void direct_key_probe_materialized_outcome_for_test(std::uint64_t fp,
+            TranspositionKey const &key, bool &merged, NodeId &node);
+#endif
+
         std::size_t transposition_table_size_for_test() const;
 
         TranspositionEntry transposition_entry_for_test(std::size_t slot) const;
@@ -1201,6 +1222,13 @@ namespace tetris_engine
         SearchStats search_stats_{};
         ComponentTimers timers_{};
         PathTelemetry path_stats_{};
+
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+        static constexpr std::size_t direct_key_max_sources = 3;
+        std::array<DirectKeySourceContext, direct_key_max_sources> direct_key_contexts_{};
+        std::size_t direct_key_context_count_ = 0;
+        mutable DirectKeySourceContext direct_key_fallback_{};
+#endif
 
         void reset_run_state();
 
@@ -1322,6 +1350,23 @@ namespace tetris_engine
         TranspositionKey build_key(Child const &child, NodeId id) const;
 
         TranspositionKey key_from_node(NodeId id) const;
+
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+        DirectKeySourceContext const &direct_key_select_context(Child const &child) const;
+
+        std::uint64_t direct_key_hash_child(Child const &child) const;
+
+        TranspositionProbe transposition_probe_direct(std::uint64_t fp, Child const &child,
+            DirectKeySourceContext const &context);
+
+        MaterializeOutcome search_materialize_direct(Child const &child);
+
+        MaterializeOutcome search_materialize_prehashed_direct(Child const &child,
+            std::uint64_t fp);
+
+        MaterializeOutcome search_materialize_inner_direct(Child const &child,
+            DirectKeySourceContext const &context, std::uint64_t fp);
+#endif
 
         void run_pass();
     };

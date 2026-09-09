@@ -156,6 +156,43 @@ add_test(NAME child_soa_profile_equivalence
     COMMAND bash -c "a=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); b=$($<TARGET_FILE:tetris_profile_child_soa> --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); s() { echo \"$1\" | tr ' ' '\\n' | grep -v -E '(_ms=|_ns=|total_s=|_per_s=|mem_retained_bytes=)'; }; f() { echo \"$1\" | tr ' ' '\\n' | grep \"^$2=\" | cut -d= -f2; }; test \"$(s \"$a\")\" = \"$(s \"$b\")\" -a \"$(f \"$b\" mem_retained_bytes)\" -lt \"$(f \"$a\" mem_retained_bytes)\" -a \"$(f \"$b\" mem_retained_bytes)\" -lt 268435456"
 )
 
+add_executable(tetris_profile_direct_key
+    src/tetris_profile_value.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(tetris_profile_direct_key PRIVATE fast_reachability)
+target_include_directories(tetris_profile_direct_key PRIVATE src)
+target_compile_definitions(tetris_profile_direct_key PRIVATE TETRIS_DIRECT_KEY_TRIAL)
+
+add_executable(direct_key_trial_tests
+    tests/direct_key_trial_tests.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(direct_key_trial_tests PRIVATE fast_reachability)
+target_include_directories(direct_key_trial_tests PRIVATE src tests src/fast-reachability)
+target_compile_definitions(direct_key_trial_tests PRIVATE TETRIS_DIRECT_KEY_TRIAL)
+add_test(NAME direct_key_trial_tests COMMAND direct_key_trial_tests)
+add_test(NAME direct_key_absent_from_normal_build
+    COMMAND bash -c "! $<TARGET_FILE:tetris_profile_value> --help | grep -q -- --direct-key && ! nm $<TARGET_FILE:tetris_profile_value> | grep -qi direct_key"
+)
+add_test(NAME direct_key_profile_equivalence
+    COMMAND bash -c "a=$($<TARGET_FILE:tetris_profile_value> --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); b=$($<TARGET_FILE:tetris_profile_direct_key> --warmup-moves 1 --moves 2 --iters 10 --seed 1 --maxdepth 6 --quiet --quiet-version 3 --telemetry on --timers off); s() { echo \"$1\" | tr ' ' '\n' | grep -v -E '(_ms=|_ns=|total_s=|_per_s=)'; }; test \"$(s \"$a\")\" = \"$(s \"$b\")\""
+)
+add_test(NAME direct_key_excludes_child_soa_macro
+    COMMAND bash -c "echo '#include \"direct_key_trial.h\"' | ${CMAKE_CXX_COMPILER} -std=c++23 -x c++ -fsyntax-only -DTETRIS_DIRECT_KEY_TRIAL -DTETRIS_CHILD_SOA_TRIAL -I${CMAKE_CURRENT_SOURCE_DIR}/src 2>/dev/null; test $? -ne 0"
+)
+add_test(NAME direct_key_excludes_eval_index_macro
+    COMMAND bash -c "echo '#include \"direct_key_trial.h\"' | ${CMAKE_CXX_COMPILER} -std=c++23 -x c++ -fsyntax-only -DTETRIS_DIRECT_KEY_TRIAL -DTETRIS_EVAL_INDEX_TRIAL -I${CMAKE_CURRENT_SOURCE_DIR}/src 2>/dev/null; test $? -ne 0"
+)
+add_test(NAME direct_key_excludes_eval_trace_macro
+    COMMAND bash -c "echo '#include \"direct_key_trial.h\"' | ${CMAKE_CXX_COMPILER} -std=c++23 -x c++ -fsyntax-only -DTETRIS_DIRECT_KEY_TRIAL -DTETRIS_EVAL_REUSE_TRACE -I${CMAKE_CURRENT_SOURCE_DIR}/src 2>/dev/null; test $? -ne 0"
+)
+add_test(NAME direct_key_excludes_all_macros
+    COMMAND bash -c "echo '#include \"direct_key_trial.h\"' | ${CMAKE_CXX_COMPILER} -std=c++23 -x c++ -fsyntax-only -DTETRIS_DIRECT_KEY_TRIAL -DTETRIS_CHILD_SOA_TRIAL -DTETRIS_EVAL_INDEX_TRIAL -DTETRIS_EVAL_REUSE_TRACE -I${CMAKE_CURRENT_SOURCE_DIR}/src 2>/dev/null; test $? -ne 0"
+)
+
 add_executable(tetris_profile_legacy_cmp
     src/tetris_profile_legacy_cmp.cpp
     src/tetris_core.cpp
@@ -360,6 +397,21 @@ target_link_libraries(candidate_partition_child_soa PRIVATE fast_reachability)
 target_include_directories(candidate_partition_child_soa PRIVATE src tests src/fast-reachability)
 target_compile_definitions(candidate_partition_child_soa PRIVATE TETRIS_CHILD_SOA_TRIAL)
 add_test(NAME candidate_partition_child_soa_selftest COMMAND candidate_partition_child_soa selftest)
+
+add_executable(candidate_partition_direct_key
+    tests/candidate_partition.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_link_libraries(candidate_partition_direct_key PRIVATE fast_reachability)
+target_include_directories(candidate_partition_direct_key PRIVATE src tests src/fast-reachability)
+target_compile_definitions(candidate_partition_direct_key PRIVATE TETRIS_DIRECT_KEY_TRIAL)
+add_test(NAME candidate_partition_direct_key_selftest COMMAND candidate_partition_direct_key selftest)
 
 add_executable(toj_policy_tests
     tests/toj_policy_tests.cpp

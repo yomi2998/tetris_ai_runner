@@ -477,6 +477,9 @@ namespace tetris_engine
 #else
         child_buffer_.clear();
 #endif
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+        direct_key_context_count_ = 0;
+#endif
         heap_.reset(max_frontiers);
         for (std::size_t i = 0; i < max_frontiers; ++i)
         {
@@ -1019,6 +1022,13 @@ namespace tetris_engine
         {
             return true;
         }
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+        if (direct_key_context_count_ < direct_key_max_sources)
+        {
+            direct_key_contexts_[direct_key_context_count_++] =
+                direct_key_begin_source(parent, hold, cursor, queue_);
+        }
+#endif
         return reachability::call_with_block<tetris::toj::SRS>(played,
             [&]<reachability::block B>() {
                 return expand_source_for_block<B>(parent_id, parent, played, source, hold,
@@ -1678,6 +1688,9 @@ namespace tetris_engine
 #else
         child_buffer_.clear();
 #endif
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+        direct_key_context_count_ = 0;
+#endif
         if (parent_id >= arena_.size())
         {
             return true;
@@ -1878,6 +1891,64 @@ namespace tetris_engine
     {
         return transposition_reinsert(fp, key, node);
     }
+
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+    std::uint64_t Engine::direct_key_hash_for_test(Child const &child) const
+    {
+        return direct_key_hash_child(child);
+    }
+
+    bool Engine::direct_key_node_matches_for_test(NodeId node_id, Child const &child) const
+    {
+        if (node_id >= arena_.size() || child.parent >= arena_.size())
+        {
+            return false;
+        }
+        Node const &node = arena_[node_id];
+        if (node.parent >= arena_.size())
+        {
+            return false;
+        }
+        Node const &parent_node = arena_[node.parent];
+        DirectKeySourceContext const &context = direct_key_select_context(child);
+        return direct_key_node_matches(node, parent_node, context, queue_, child.board,
+            child.state, child.played, child.candidate, child.source);
+    }
+
+    std::size_t Engine::direct_key_context_count_for_test() const
+    {
+        return direct_key_context_count_;
+    }
+
+    DirectKeySourceContext const &Engine::direct_key_context_for_test(
+        std::size_t index) const
+    {
+        return direct_key_contexts_[index];
+    }
+
+    void Engine::direct_key_probe_outcome_for_test(std::uint64_t fp, Child const &child,
+        bool &merged, NodeId &node)
+    {
+        merged = false;
+        node = no_node;
+        if (child.parent >= arena_.size())
+        {
+            return;
+        }
+        DirectKeySourceContext const &context = direct_key_select_context(child);
+        TranspositionProbe probe = transposition_probe_direct(fp, child, context);
+        merged = probe.merged;
+        node = probe.node;
+    }
+
+    void Engine::direct_key_probe_materialized_outcome_for_test(std::uint64_t fp,
+        TranspositionKey const &key, bool &merged, NodeId &node)
+    {
+        TranspositionProbe probe = transposition_probe_prehashed(fp, key);
+        merged = probe.merged;
+        node = probe.node;
+    }
+#endif
 
     std::size_t Engine::transposition_table_size_for_test() const
     {
@@ -2104,6 +2175,193 @@ namespace tetris_engine
         return true;
     }
 
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+    DirectKeySourceContext const &Engine::direct_key_select_context(
+        Child const &child) const
+    {
+        Node const &parent_node = arena_[child.parent];
+        std::uint16_t const depth = static_cast<std::uint16_t>(parent_node.depth + 1);
+        std::uint16_t const cursor = static_cast<std::uint16_t>(child.cursor);
+        std::uint8_t const hold_piece = child.hold.piece.has_value()
+            ? static_cast<std::uint8_t>(*child.hold.piece)
+            : no_piece_code;
+        bool const hold_available = !child.hold.locked;
+        for (std::size_t i = 0; i < direct_key_context_count_; ++i)
+        {
+            DirectKeySourceContext const &context = direct_key_contexts_[i];
+            if (context.depth == depth && context.cursor == cursor
+                && context.hold_piece == hold_piece
+                && context.hold_available == hold_available)
+            {
+                return context;
+            }
+        }
+        direct_key_fallback_ =
+            direct_key_begin_source(parent_node, child.hold, child.cursor, queue_);
+        return direct_key_fallback_;
+    }
+
+    std::uint64_t Engine::direct_key_hash_child(Child const &child) const
+    {
+        DirectKeySourceContext const &context = direct_key_select_context(child);
+        return direct_key_hash(context, child.board, child.state, child.played,
+            child.candidate, child.source);
+    }
+
+    Engine::TranspositionProbe Engine::transposition_probe_direct(std::uint64_t fp,
+        Child const &child, DirectKeySourceContext const &context)
+    {
+        std::size_t slot = static_cast<std::size_t>(fp) & (transposition_entries - 1);
+        auto count_probe = [this](std::size_t length) {
+            if (telemetry_on())
+            {
+                search_stats_.probe_steps += length;
+                ++search_stats_.probe_histogram[probe_length_bucket(length)];
+            }
+        };
+        for (std::size_t i = 0; i < transposition_entries; ++i)
+        {
+            TranspositionEntry &entry = transposition_[slot];
+            if (entry.epoch != transposition_epoch_)
+            {
+                count_probe(i + 1);
+                return { false, no_node, &entry, fp };
+            }
+            if (entry.fp == fp)
+            {
+                if (telemetry_on())
+                {
+                    ++search_stats_.probe_rebuilds;
+                }
+                Node const &node = arena_[entry.node];
+                Node const &parent_node = arena_[node.parent];
+                if (direct_key_node_matches(node, parent_node, context, queue_,
+                        child.board, child.state, child.played, child.candidate,
+                        child.source))
+                {
+                    count_probe(i + 1);
+                    return { true, entry.node, nullptr, fp };
+                }
+            }
+            slot = (slot + 1) & (transposition_entries - 1);
+        }
+        count_probe(transposition_entries);
+        search_stopped_ = true;
+        transposition_exhausted_ = true;
+        if (telemetry_on())
+        {
+            search_stats_.transposition_exhausted = true;
+        }
+        return { false, no_node, nullptr, fp };
+    }
+
+    Engine::MaterializeOutcome Engine::search_materialize_direct(Child const &child)
+    {
+        bool const time = timers_on();
+        std::int64_t const start = time ? timer_now() : 0;
+        MaterializeOutcome outcome{};
+        if (child.parent < arena_.size())
+        {
+            DirectKeySourceContext const &context = direct_key_select_context(child);
+            std::uint64_t const fp = direct_key_hash(context, child.board, child.state,
+                child.played, child.candidate, child.source);
+            outcome = search_materialize_inner_direct(child, context, fp);
+        }
+        if (time)
+        {
+            timers_.materialize_ns += timer_now() - start;
+        }
+        return outcome;
+    }
+
+    Engine::MaterializeOutcome Engine::search_materialize_prehashed_direct(
+        Child const &child, std::uint64_t fp)
+    {
+        bool const time = timers_on();
+        std::int64_t const start = time ? timer_now() : 0;
+        MaterializeOutcome outcome{};
+        if (child.parent < arena_.size())
+        {
+            DirectKeySourceContext const &context = direct_key_select_context(child);
+            outcome = search_materialize_inner_direct(child, context, fp);
+        }
+        if (time)
+        {
+            timers_.materialize_ns += timer_now() - start;
+        }
+        return outcome;
+    }
+
+    Engine::MaterializeOutcome Engine::search_materialize_inner_direct(
+        Child const &child, DirectKeySourceContext const &context, std::uint64_t fp)
+    {
+        if (child.parent >= arena_.size())
+        {
+            return {};
+        }
+        Node const &parent_node = arena_[child.parent];
+        if (parent_node.depth != 0)
+        {
+            TranspositionProbe probe = transposition_probe_direct(fp, child, context);
+            if (search_stopped_)
+            {
+                return {};
+            }
+            if (probe.merged)
+            {
+                if (telemetry_on())
+                {
+                    ++search_stats_.transposition_merges;
+                }
+                return { true, probe.node };
+            }
+            NodeId id = materialize(child);
+            if (id == no_node)
+            {
+                return {};
+            }
+            probe.slot->fp = probe.fp;
+            probe.slot->node = id;
+            probe.slot->epoch = transposition_epoch_;
+            ++transposition_used_;
+            arena_[id].registered = true;
+            if (telemetry_on())
+            {
+                ++search_stats_.materialized_nodes;
+            }
+            return { false, id };
+        }
+        NodeId id = materialize(child);
+        if (id == no_node)
+        {
+            return {};
+        }
+        TranspositionProbe probe = transposition_probe_direct(fp, child, context);
+        if (search_stopped_)
+        {
+            return { false, id };
+        }
+        if (probe.merged)
+        {
+            if (telemetry_on())
+            {
+                ++search_stats_.transposition_merges;
+            }
+            arena_.pop_back();
+            return { true, probe.node };
+        }
+        probe.slot->fp = probe.fp;
+        probe.slot->node = id;
+        probe.slot->epoch = transposition_epoch_;
+        ++transposition_used_;
+        if (telemetry_on())
+        {
+            ++search_stats_.materialized_nodes;
+        }
+        return { false, id };
+    }
+#endif
+
     Engine::MaterializeOutcome Engine::search_materialize(Child const &child)
     {
         bool const time = timers_on();
@@ -2326,6 +2584,44 @@ namespace tetris_engine
             }
         }
 #else
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+        for (; child_index + hash_batch_size <= child_buffer_.size();
+            child_index += hash_batch_size)
+        {
+            std::int64_t const hash_start = time ? timer_now() : 0;
+            std::array<std::uint64_t, hash_batch_size> hashes{};
+            for (std::size_t k = 0; k < hash_batch_size; ++k)
+            {
+                hashes[k] = direct_key_hash_child(child_buffer_[child_index + k]);
+            }
+            if (time)
+            {
+                timers_.materialize_ns += timer_now() - hash_start;
+            }
+            for (std::size_t k = 0; k < hash_batch_size; ++k)
+            {
+                MaterializeOutcome outcome = search_materialize_prehashed_direct(
+                    child_buffer_[child_index + k], hashes[k]);
+                if (!accept_child(child_buffer_[child_index + k], outcome))
+                {
+                    halted = true;
+                    break;
+                }
+            }
+            if (halted)
+            {
+                break;
+            }
+        }
+        for (; !halted && child_index < child_buffer_.size(); ++child_index)
+        {
+            Child const &child = child_buffer_[child_index];
+            if (!accept_child(child, search_materialize_direct(child)))
+            {
+                break;
+            }
+        }
+#else
         for (; child_index + hash_batch_size <= child_buffer_.size();
             child_index += hash_batch_size)
         {
@@ -2368,6 +2664,7 @@ namespace tetris_engine
                 break;
             }
         }
+#endif
 #endif
         if (time)
         {
@@ -2424,8 +2721,13 @@ namespace tetris_engine
             for (std::size_t child_index = 0; child_index < child_buffer_.size();
                 ++child_index)
             {
+#ifdef TETRIS_DIRECT_KEY_TRIAL
+                MaterializeOutcome outcome =
+                    search_materialize_direct(child_buffer_[child_index]);
+#else
                 MaterializeOutcome outcome =
                     search_materialize(child_buffer_[child_index]);
+#endif
 #endif
                 if (search_stopped_ || exhausted_)
                 {
