@@ -1,0 +1,34 @@
+HEAD e0da80422169c81c92032ec7fa05b9e28638b45f
+TRACKED_STATUS_BEGIN
+TRACKED_STATUS_END
+FROZEN_HASHES_BEGIN
+1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765  out/build/linux-gcc-self-release/tetris_profile_value
+420002a847f6fea6cb9e87b868f82ad1497bc0b12b7e817ebbe612c9dce6ee89  out/build/linux-gcc-self-release/tetris_profile_direct_key
+5986bdeebf9ff34fe4c3de0845881991fe463f6dc84dcbfb8d1b4bd7944642a1  out/build/linux-gcc-self-release/candidate_partition
+4642f85a76e6f04635cca482c9654f3e465d266ae6e43441d0c539776da83fd8  out/build/linux-gcc-self-release/candidate_partition_direct_key
+ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037  artifacts/frozen_29d.bin
+FROZEN_HASHES_END
+NORMAL_DIRECT_KEY_SYMBOL_COUNT 0
+CTEST_BEGIN out/build/linux-gcc-self-release
+7: direct_key_trial_tests: 75722 checks, 0 failures
+The following tests passed:
+100% tests passed out of 7
+CTEST_END out/build/linux-gcc-self-release
+CTEST_BEGIN out/build/linux-gcc-debug
+7: direct_key_trial_tests: 75722 checks, 0 failures
+The following tests passed:
+100% tests passed out of 7
+CTEST_END out/build/linux-gcc-debug
+CTEST_BEGIN out/build/linux-clang-self-release
+7: direct_key_trial_tests: 75722 checks, 0 failures
+The following tests passed:
+100% tests passed out of 7
+CTEST_END out/build/linux-clang-self-release
+PARTITION_CTEST_BEGIN
+The following tests passed:
+100% tests passed out of 3
+PARTITION_CTEST_END
+SANITIZER_BEGIN
+direct_key_trial_tests: 75722 checks, 0 failures
+SANITIZER_END
+CPU15_AFTER_TESTS 1
