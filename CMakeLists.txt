@@ -346,6 +346,21 @@ target_link_libraries(candidate_partition PRIVATE fast_reachability)
 target_include_directories(candidate_partition PRIVATE src tests src/fast-reachability)
 add_test(NAME candidate_partition_selftest COMMAND candidate_partition selftest)
 
+add_executable(candidate_partition_child_soa
+    tests/candidate_partition.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+)
+target_link_libraries(candidate_partition_child_soa PRIVATE fast_reachability)
+target_include_directories(candidate_partition_child_soa PRIVATE src tests src/fast-reachability)
+target_compile_definitions(candidate_partition_child_soa PRIVATE TETRIS_CHILD_SOA_TRIAL)
+add_test(NAME candidate_partition_child_soa_selftest COMMAND candidate_partition_child_soa selftest)
+
 add_executable(toj_policy_tests
     tests/toj_policy_tests.cpp
     src/toj_policy.cpp
