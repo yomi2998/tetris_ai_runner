@@ -15,6 +15,7 @@ cpu15=/sys/devices/system/cpu/cpu15/online
 cpu15_offline=0
 phase=preflight
 
+mkdir -p "$stage_dir"
 if test -e "$log" || test -e "$csv"; then
     printf '%s\n' "TERMINAL=BLOCKED reason=stage_exists" >&2
     exit 28
@@ -37,6 +38,7 @@ cleanup() {
     trap - ERR EXIT
     set +e
     restore_result=not_needed
+    restore_after=$(cat "$cpu15" 2>/dev/null || printf unknown)
     if test "$cpu15_offline" = 1; then
         restore_result=fail
         for restore_attempt in 1 2; do
