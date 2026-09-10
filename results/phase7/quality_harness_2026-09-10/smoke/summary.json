@@ -1,0 +1,17 @@
+{
+  "games": 64, "pairs": 32, "seed": 910, "budget_ms": 20, "threads": 8,
+  "value_win_equiv": 27.0, "legacy_win_equiv": 37.0,
+  "wr_point": 0.421875,
+  "wr_one_sided_95_lower": 0.325531,
+  "wr_two_sided_95": [0.308696, 0.543902],
+  "app_value": 1.040064, "app_legacy": 0.992562, "app_ratio": 1.0479,
+  "apl_value": 1.645935, "apl_legacy": 1.489595, "apl_ratio": 1.1050,
+  "deaths_value": 37, "deaths_legacy": 27,
+  "replay_failures": 0, "arena_exhaustions": 0, "capped": 0,
+  "deaths_spawn": 20, "deaths_lockout": 0, "deaths_invalid": 0,
+  "value_wall_ms": {"median": 20.648, "p95": 22.863, "max": 26.205},
+  "total_wall_s": 44.661,
+  "terminal": "COLLECTED",
+  "sanity_gate": "PASS",
+  "criterion_note": "sanity only; WR/APP/APL are diagnostic at this scale"
+}

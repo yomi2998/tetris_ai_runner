@@ -1,0 +1,4 @@
+stage=smoke head=7c8d465fa7f91931ddd6d3a053c59b093a92ffd1 collector=results/phase7/quality_harness_2026-09-10/collect.sh collector_sha256=5ba94d5aa1bc45ac436c128dd1111320175ab7bbaccc72870cdf3179e5eff502 driver_sha256=b92ee3b2e68661c1d822de25fddc532ed842a90cfaf2728cab9d44a4f6be9d9d terminal=COLLECTED
+command=quality_match match --param-a artifacts/frozen_29d.bin --param-b artifacts/frozen_29d.bin --pairs 32 --ms 20 --seed 910 --threads 8 --max-rounds 3600 --out smoke/matches.csv --seats legacy,value
+cpu15=2026-09-10T13:59:18Z to 14:00:03Z offline state=0 restored=1 precheck_load5=1.32 attempts=0
+prior_attempts=3 BLOCKED archived under blocked_attempt_*/

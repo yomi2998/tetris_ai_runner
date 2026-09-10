@@ -1,0 +1,13 @@
+HEAD=7c8d465fa7f91931ddd6d3a053c59b093a92ffd1
+TRACKED_STATE=clean
+HASH path=/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/quality_match expected=b92ee3b2e68661c1d822de25fddc532ed842a90cfaf2728cab9d44a4f6be9d9d actual=b92ee3b2e68661c1d822de25fddc532ed842a90cfaf2728cab9d44a4f6be9d9d
+HASH path=/home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin expected=ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037 actual=ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037
+CPU_CONTROL_PREFLIGHT=pass CPU15=1
+PRECHECK attempt=0 utc=2026-09-10T13:59:18Z load1=0.91 load5=1.32 load15=3.46
+CPU15_OFFLINE_START=2026-09-10T13:59:18Z state=0
+STAGE=smoke pairs=32 seed=910 threads=8 budget_ms=20
+COMMAND /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/quality_match match --param-a /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --param-b /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --pairs 32 --ms 20 --seed 910 --threads 8 --max-rounds 3600 --out /home/icly/Documents/tetris_ai_runner/results/phase7/quality_harness_2026-09-10/smoke/matches.csv --seats legacy,value
+QUALITY_MATCH games=64 value_win_equiv=27.0 wr=0.421875 ci95_two=[0.308696,0.543902] lo95_one=0.325531 app_value=1.040064 app_other=0.992562 apl_value=1.645935 apl_other=1.489595 rounds_mean=230.797 deaths_value=37 deaths_other=27 replay_failures=0 arena_exhaustions=0 deaths_spawn=20 deaths_lockout=0 deaths_invalid=0 value_wall_ms_median_across_pairs=20.648 value_wall_ms_p95_across_pairs=22.863 value_wall_ms_max_across_pairs=26.205 total_wall_s=44.661
+MATCH_EXIT=0 utc=2026-09-10T14:00:02Z
+CPU15_ONLINE_END=2026-09-10T14:00:03Z state=1
+TERMINAL=COLLECTED
