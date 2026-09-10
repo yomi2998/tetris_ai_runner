@@ -560,6 +560,8 @@ namespace tuner_match
         int budget_iters_p2 = -1;
         int budget_ms_p1 = -1;
         int budget_ms_p2 = -1;
+        int engine1 = 0;
+        int engine2 = 0;
     };
 
     struct MatchOutcome

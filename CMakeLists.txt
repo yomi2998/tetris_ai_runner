@@ -813,3 +813,23 @@ add_test(NAME legacy_host_diag_replay_parity
     COMMAND legacy_host_diag_tests)
 set_tests_properties(legacy_host_diag_replay_parity
     PROPERTIES ENVIRONMENT "DIAG_INPUTS=/home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/trace/trace_normal.inputs.bin")
+
+add_executable(quality_match
+    tests/quality_match.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(quality_match PRIVATE fast_reachability)
+target_include_directories(quality_match PRIVATE src tests src/fast-reachability)
+add_test(NAME quality_match_selftest COMMAND quality_match selftest)
+add_test(NAME quality_match_selftest_quick COMMAND quality_match selftest --quick)
+set_tests_properties(quality_match_selftest PROPERTIES RUN_SERIAL ON)
+set_tests_properties(quality_match_selftest_quick PROPERTIES RUN_SERIAL ON)
+add_test(NAME quality_match_absent_from_normal_build
+    COMMAND bash -c "! nm $<TARGET_FILE:tetris_profile_value> | grep -qi quality_match"
+)
