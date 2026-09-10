@@ -1,0 +1,1 @@
+stage=smoke head=911e8768da044867c050d6ac6d3e5ada9811c847 tracked=clean collector=results/phase7/quality_harness_2026-09-10/collect.sh collector_sha256=5ba94d5aa1bc45ac436c128dd1111320175ab7bbaccc72870cdf3179e5eff502 collector_exit=30 terminal=BLOCKED reason=load_precheck invocations=1 matches_csv=absent cpu15=never-offline restored=not_needed

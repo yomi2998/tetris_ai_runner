@@ -1,0 +1,11 @@
+{
+  "stage": "smoke",
+  "head": "911e8768da044867c050d6ac6d3e5ada9811c847",
+  "collector": {"hash": "5ba94d5aa1bc45ac436c128dd1111320175ab7bbaccc72870cdf3179e5eff502", "invocations": 1, "exit": 30, "terminal": "BLOCKED", "reason": "load_precheck"},
+  "preconditions": {"tracked_clean": true, "driver_hash_match": true, "params_hash_match": true, "normal_byte_identical": true, "csv_absent_before": true, "cpu15_online_before": true},
+  "load_precheck": {"gate": "load5 below 1.5", "budget": "initial read plus 10 one-minute rechecks", "series_load5": [2.13, 1.96, 1.77, 1.63, 1.65, 1.65, 5.04, 9.86, 9.09, 10.94, 15.23], "external_spike_at_attempt": 6, "never_met": true},
+  "execution": {"quality_match_invoked": false, "matches_csv": "absent", "rows": 0},
+  "cpu15": {"taken_offline": false, "online_after": true, "cleanup": "not_needed"},
+  "sanity_gate": {"evaluated": false, "reason": "no collection on BLOCKED"},
+  "verdict": "BLOCKED"
+}
