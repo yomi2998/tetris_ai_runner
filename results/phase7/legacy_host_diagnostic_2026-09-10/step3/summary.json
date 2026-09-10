@@ -1,0 +1,16 @@
+{
+  "collector": {"hash": "2adfc6eb318b027c08880e3fb1abebc19bcc8b0ef67886e21568120916d56e51", "invocations": 1, "exit": "signal", "terminal": "ABORTED"},
+  "prior_attempt": {"path": "step3/blocked_attempt_2026-09-10_0617Z/", "terminal": "BLOCKED reason=baseline_mode", "ran_nothing": true},
+  "head": "fd614b97b113381e363008d0f46d263cf67f8fd1",
+  "prewarm": {"value": "exit 0", "driver": "exit 0", "baseline_copy_555": "exit 0"},
+  "binding_runs_completed": 1,
+  "run1_L0": {"exit": 0, "total_searches": 692749398, "wall_minutes": 93, "diagnostic_row": "run1_L0.txt"},
+  "run1_L1": {"exit": 137, "signal": "SIGKILL", "cause": "operating system OOM killer after RAM and swap exhaustion", "observed_by_owner": "100 percent RAM and 100 percent swap"},
+  "cpu15": {"window": "prewarm through run1_L1", "restored": 1, "cleanup": "pass_attempt_1"},
+  "load_precheck": {"attempts_before_pass": 4, "first_below_1_5": "attempt 4, load5 1.44"},
+  "verdict": "ABORTED",
+  "binding_budget_consumed": true,
+  "no_replacement": true,
+  "no_extra_rows": true,
+  "evidence_preserved": ["collect.log", "run1_L0.txt", "run1_L0.stderr.txt", "run1_L1.stderr.txt (empty)", "prewarm stdout/stderr"]
+}

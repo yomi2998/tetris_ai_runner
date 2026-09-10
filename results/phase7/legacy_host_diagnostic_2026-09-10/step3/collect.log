@@ -1,0 +1,35 @@
+HEAD=e544ffe92f8cc95ccf0ae175579516c479702691
+TRACKED_STATE=clean
+HASH path=/home/icly/Documents/tetris_ai_runner_results/phase7/legacy_host_diagnostic_2026-09-10/tetris_profile_baseline_copy expected=84cb7a309f59db98b33709ececc168d330991b2226956cc7b310445870aac376 actual=84cb7a309f59db98b33709ececc168d330991b2226956cc7b310445870aac376
+HASH path=/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_value expected=1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765 actual=1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765
+HASH path=/home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin expected=ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037 actual=ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037
+HASH path=/home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/trace/trace_normal.inputs.bin expected=c6b5ecf6c2b7e956b7770ea957820d77fefc4fcaad0a9e1be22a55d1d1473da5 actual=c6b5ecf6c2b7e956b7770ea957820d77fefc4fcaad0a9e1be22a55d1d1473da5
+HASH driver=/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/legacy_fast_adapter_bench recorded in binaries.sha256 at finalization
+CPU_CONTROL_PREFLIGHT=pass CPU15=1
+PRECHECK attempt=0 utc=2026-09-10T06:24:22Z load1=1.25 load5=2.62 load15=5.39
+PRECHECK attempt=1 utc=2026-09-10T06:25:22Z load1=1.45 load5=2.41 load15=5.15
+PRECHECK attempt=2 utc=2026-09-10T06:26:22Z load1=2.59 load5=2.50 load15=5.00
+PRECHECK attempt=3 utc=2026-09-10T06:27:22Z load1=1.86 load5=2.32 load15=4.78
+PRECHECK attempt=4 utc=2026-09-10T06:28:22Z load1=1.53 load5=2.11 load15=4.55
+PRECHECK attempt=5 utc=2026-09-10T06:29:22Z load1=1.25 load5=1.91 load15=4.33
+PRECHECK attempt=6 utc=2026-09-10T06:30:22Z load1=0.89 load5=1.67 load15=4.09
+PRECHECK attempt=7 utc=2026-09-10T06:31:22Z load1=1.21 load5=1.60 load15=3.91
+PRECHECK attempt=8 utc=2026-09-10T06:32:22Z load1=0.92 load5=1.44 load15=3.71
+CPU15_OFFLINE_START=2026-09-10T06:32:23Z state=0
+START label=prewarm_driver utc=2026-09-10T06:32:23Z load1=0.92 load5=1.44 load15=3.71 cpu15=0
+COMMAND label=prewarm_driver /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/legacy_fast_adapter_bench --mode replay --inputs /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/trace/trace_normal.inputs.bin --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --maxdepth 6 --arm L1 --max-inputs 20
+END label=prewarm_driver utc=2026-09-10T06:32:23Z exit=0 cpu15=0
+START label=prewarm_baseline utc=2026-09-10T06:32:23Z load1=0.92 load5=1.44 load15=3.71 cpu15=0
+COMMAND label=prewarm_baseline /home/icly/Documents/tetris_ai_runner_results/phase7/legacy_host_diagnostic_2026-09-10/tetris_profile_baseline_copy --seed 1 --warmup-moves 20 --moves 40 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 200 --quiet --quiet-version 2 --telemetry off
+END label=prewarm_baseline utc=2026-09-10T06:32:24Z exit=0 cpu15=0
+START label=prewarm_value utc=2026-09-10T06:32:24Z load1=0.92 load5=1.44 load15=3.71 cpu15=0
+COMMAND label=prewarm_value /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_value --seed 1 --warmup-moves 20 --moves 40 --maxdepth 6 --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 200 --quiet --quiet-version 3 --telemetry off --timers off
+END label=prewarm_value utc=2026-09-10T06:32:26Z exit=0 cpu15=0
+START label=run1_L0 utc=2026-09-10T06:32:26Z load1=0.92 load5=1.44 load15=3.71 cpu15=0
+COMMAND label=run1_L0 /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/legacy_fast_adapter_bench --mode replay --inputs /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/trace/trace_normal.inputs.bin --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --maxdepth 6 --arm L0
+END label=run1_L0 utc=2026-09-10T08:00:31Z exit=0 cpu15=0
+START label=run1_L1 utc=2026-09-10T08:00:31Z load1=1.80 load5=1.60 load15=1.81 cpu15=0
+COMMAND label=run1_L1 /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/legacy_fast_adapter_bench --mode replay --inputs /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/trace/trace_normal.inputs.bin --param-file /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --iters 1000 --maxdepth 6 --arm L1
+END label=run1_L1 utc=2026-09-10T08:05:08Z exit=137 cpu15=0
+TERMINAL=ABORTED reason=nonzero_exit label=run1_L1
+CLEANUP_RESTORE utc=2026-09-10T08:05:08Z before=0 after=1 result=pass_attempt_1
