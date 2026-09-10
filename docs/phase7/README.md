@@ -1,5 +1,19 @@
 # Phase 7 record: profile migration
 
+## Status: paused (2026-09-10)
+
+The migration is paused by owner decision after the quality campaign
+(`c676532`, report `docs/phase7/session_report_2026-09-10_quality_campaign.md`)
+returned `NON-INFERIORITY-FAILED`: at equal 20 ms budgets the value engine won
+40.2 percent of 2000 games against the legacy engine, below the frozen 0.47
+non-inferiority floor. Performance had already failed (binding 1.04155 against
+the 1.02 bar; four `NO-ADVANCE` optimization trials), and the legacy-host
+alternative was shown memory-infeasible at real-workload scale. Production
+remains on the legacy engine, byte-frozen at `84cb7a30...`. All migration work,
+diagnostics, and evidence are preserved on this branch (`fast-reachability-migration`,
+HEAD `7cfaec0`) and under `results/phase7/`; the legacy deletion and Phase 8
+were never started. Revisit requires a new owner decision.
+
 ## Slice 7.1A: profile comparison contract (closed)
 
 Design note `profile_71a_design.md` revision 3, amended at close with the
@@ -265,7 +279,7 @@ changes, no cutover work.
 
 - Audit of 7.1C-7.2E committed (`d928a05`): three source repairs accepted
   after source review, exhaustive differentials, and a four-preset
-  build/ctest matrix (29/29 each) — comparator exact occupied-cell
+  build/ctest matrix (29/29 each); comparator exact occupied-cell
   identity, compact 152/160-byte transposition keys, per-candidate
   landing validation. Gates 8/9 corrected to UNPROVEN in both verdict
   documents; audit tooling repaired (`tests/audit_phase7_campaign.py`);
@@ -279,7 +293,7 @@ changes, no cutover work.
   D/B 0.8716 (epoch alone); materialize leg 0.6318; comparator identity
   repair verified collision-free at production scale (55.8M uniques
   identical); recorded counters-only bound 1.02528 reproduced to 8e-05.
-  Diagnostics only — binding gates require re-frozen artifacts, the full
+  Diagnostics only; binding gates require re-frozen artifacts; the full
   campaign protocol, and the gates 8/9 legacy comparators.
 - Gates 8 and 9 measured and PASSING (`results/phase7/gate89/`, bench
   committed at `ea6bf7f`): legacy corpus comparator on the 33-board
