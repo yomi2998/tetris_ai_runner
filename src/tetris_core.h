@@ -681,6 +681,16 @@ namespace m_tetris
                 entries_[hash & mask_].hash = hash;
             }
         }
+#ifdef TETRIS_LEGACY_HOST_DIAG
+        std::size_t diag_size() const
+        {
+            return max_count;
+        }
+        Entry *diag_entries()
+        {
+            return entries_;
+        }
+#endif
     private:
         Entry entries_[max_count];
         size_t mask_;
@@ -714,6 +724,9 @@ namespace m_tetris
         return h;
     }
 
+#ifdef TETRIS_LEGACY_HOST_DIAG
+#include "legacy_host_diag.h"
+#endif
     template<class TetrisAI, class TetrisSearch>
     struct TetrisCore
     {
@@ -869,6 +882,61 @@ namespace m_tetris
             {
                 ++cmp_observer->counts.eval_hits;
                 cmp_observer->counts.eval_hit_ns += cmp_observer->now() - cmp_start;
+            }
+#endif
+#ifdef TETRIS_LEGACY_HOST_DIAG
+            if (legacy_host_diag::audit_enabled())
+            {
+                using Audit = legacy_host_diag::EvalAudit<Result>;
+                Audit &audit = Audit::instance();
+                typename Audit::Entry &entry = audit.slot(hash,
+                    static_cast<std::uint32_t>(depth));
+                bool const entry_live = audit.active(entry);
+                bool const exact_hit = entry_live && entry.hash == hash
+                    && entry.depth == static_cast<std::uint32_t>(depth)
+                    && std::memcmp(&entry.map, &new_map, sizeof(m_tetris::TetrisMap)) == 0;
+                ++audit.requests;
+                if (exact_hit)
+                {
+                    ++audit.exact_hits;
+                }
+                else
+                {
+                    if (entry_live)
+                    {
+                        ++audit.evictions;
+                    }
+                    if (!hit)
+                    {
+                        entry.value = *slot;
+                    }
+                    else
+                    {
+                        entry.value = TetrisCallAI<TetrisAI, LandPoint>::eval(
+                            *context->ai, tree_node->identity, new_map, map);
+                    }
+                    entry.map = new_map;
+                    entry.hash = hash;
+                    entry.depth = static_cast<std::uint32_t>(depth);
+                    entry.epoch = audit.epoch();
+                    ++audit.fresh_evals;
+                }
+                if (hit)
+                {
+                    if (std::memcmp(&*slot, &entry.value, sizeof(Result)) != 0)
+                    {
+                        ++audit.collisions;
+                    }
+                    else
+                    {
+                        ++audit.legacy_hits;
+                    }
+                }
+                if (legacy_host_diag::exact_only())
+                {
+                    tree_node->result = &entry.value;
+                    ++audit.retargets;
+                }
             }
 #endif
         }
@@ -2269,6 +2337,16 @@ namespace m_tetris
         {
             return shared_context_->node_storage_.size() * sizeof(TetrisNode) + (local_context_.node_storage->size() - local_context_.free_count) * sizeof(TreeNode);
         }
+#ifdef TETRIS_LEGACY_HOST_DIAG
+        auto *diag_tt(std::size_t depth)
+        {
+            return depth < local_context_.tt.size() ? local_context_.tt[depth].get() : nullptr;
+        }
+        std::size_t diag_tt_depths() const
+        {
+            return local_context_.tt.size();
+        }
+#endif
         //AI名称
         std::string ai_name() const
         {

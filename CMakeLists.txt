@@ -761,3 +761,55 @@ if (EXISTS ${REFERENCE_A_ROOT}/src/search/reachability_search.cpp)
 else()
     message(STATUS "reference_a_frozen: not configured, set -DREFERENCE_A_ROOT to a pinned tet checkout")
 endif()
+
+add_executable(legacy_stage_bench
+    tests/legacy_stage_bench.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(legacy_stage_bench PRIVATE fast_reachability)
+target_include_directories(legacy_stage_bench PRIVATE src tests src/fast-reachability)
+target_compile_definitions(legacy_stage_bench PRIVATE TETRIS_LEGACY_HOST_DIAG)
+add_test(NAME legacy_stage_bench_smoke
+    COMMAND legacy_stage_bench --corpus c1 --drives-s1 200 --drives-rest 50 --warmup 1 --timed 2)
+
+add_executable(legacy_fast_adapter_bench
+    tests/legacy_fast_adapter_bench.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(legacy_fast_adapter_bench PRIVATE fast_reachability)
+target_include_directories(legacy_fast_adapter_bench PRIVATE src tests src/fast-reachability)
+target_compile_definitions(legacy_fast_adapter_bench PRIVATE TETRIS_LEGACY_HOST_DIAG)
+
+add_executable(legacy_host_diag_tests
+    tests/legacy_host_diag_tests.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/random.cpp
+    src/tetris_engine.cpp
+    src/toj_policy.cpp
+)
+target_link_libraries(legacy_host_diag_tests PRIVATE fast_reachability)
+target_include_directories(legacy_host_diag_tests PRIVATE src tests src/fast-reachability)
+target_compile_definitions(legacy_host_diag_tests PRIVATE TETRIS_LEGACY_HOST_DIAG)
+add_test(NAME legacy_host_diag_tests COMMAND legacy_host_diag_tests)
+add_test(NAME legacy_host_diag_absent_from_normal_build
+    COMMAND bash -c "! nm $<TARGET_FILE:tetris_profile_value> | grep -qi legacy_host_diag"
+)
+add_test(NAME legacy_host_diag_replay_parity
+    COMMAND legacy_host_diag_tests)
+set_tests_properties(legacy_host_diag_replay_parity
+    PROPERTIES ENVIRONMENT "DIAG_INPUTS=/home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/trace/trace_normal.inputs.bin")
