@@ -1,0 +1,8 @@
+head=041be1e1862024af3603f9f65db946e86be1432c tracked=clean collector_sha256=5ba94d5aa1bc45ac436c128dd1111320175ab7bbaccc72870cdf3179e5eff502 collector_invocations=1 collector_exit=0 terminal=COLLECTED
+stage=screen pairs=128 seed=911 threads=8 budget_ms=20 max_rounds=3600 seats=legacy,value
+driver=out/build/linux-gcc-self-release/quality_match sha256=b92ee3b2e68661c1d822de25fddc532ed842a90cfaf2728cab9d44a4f6be9d9d
+params=artifacts/frozen_29d.bin sha256=ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037
+normal_value_binary_sha256=1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765 unchanged
+cpu15_window=2026-09-10T14:07:01Z to 14:09:59Z continuous state=0 restored=1
+load_precheck=initial 1.99, attempts 1.78 1.60 1.55 1.35, passed attempt 4
+cmd=/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/quality_match match --param-a /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --param-b /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --pairs 128 --ms 20 --seed 911 --threads 8 --max-rounds 3600 --out /home/icly/Documents/tetris_ai_runner/results/phase7/quality_harness_2026-09-10/screen/matches.csv --seats legacy,value
