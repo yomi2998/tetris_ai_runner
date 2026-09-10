@@ -1,0 +1,29 @@
+# DIAGNOSTIC NON-BINDING step1 digest manifest
+# retained collection files
+1b9543f41a0abfd8c958216ec85a759e49a6c713bf373434205f619e1f5f35fd  stdout.log
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  stderr.log
+65bbea0492b83db5d68a66a299aaca5c92c39d92cb7b3fd7767f0cffdd3a5ca8  run_meta.txt
+07f95688f605df8fd5c16b627e0324c160afbb2e8f32fde8adac6bf2860dc7e8  stage_table.tsv
+976f2dee508e6866644934c7fe169e401fc5bc9d994d8aefd2db2e246f915865  summary.json
+b3dbd84266a420f6a46ca3776f59f5af63b551b5b685ced748f8b8840a9b3874  MACHINE.md
+fd85f5f852500065aafe74d4ff3bfa784df9d9156256acf4dc211bc388e78f98  REPORT.md
+# frozen inputs
+c6b5ecf6c2b7e956b7770ea957820d77fefc4fcaad0a9e1be22a55d1d1473da5  /home/icly/Documents/tetris_ai_runner_results/phase7/row_export_fusion_trial_2026-09-09/trace/trace_normal.inputs.bin
+# binaries
+d59989c0adfaacc764a1adf9074f543fd1eaa548ad8e84fdbf8fc827ce03a699  /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/legacy_stage_bench
+1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765  /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_value
+# per-cell ordered candidate digests
+cell c1 T ordered_digest=93f2ec9fc1f6e64c
+cell c1 Z ordered_digest=6c30c09397bf6b87
+cell c1 S ordered_digest=1580c224c420993a
+cell c1 J ordered_digest=553c932559f6257f
+cell c1 L ordered_digest=8574485920579ba6
+cell c1 O ordered_digest=403986c1ba717fe4
+cell c1 I ordered_digest=6caeaa8c14cd969f
+cell c2 T ordered_digest=4b593052cd6d75fd
+cell c2 Z ordered_digest=83febf532ec0659f
+cell c2 S ordered_digest=a966b74a647fcdb2
+cell c2 J ordered_digest=0f1920259378bb45
+cell c2 L ordered_digest=b795bb390c13a5b1
+cell c2 O ordered_digest=8589cc26ddda06b4
+cell c2 I ordered_digest=16e02c38003ca92a

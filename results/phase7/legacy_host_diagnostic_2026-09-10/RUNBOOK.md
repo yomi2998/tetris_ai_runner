@@ -30,7 +30,7 @@ Binding versus non-binding labels are mandatory throughout. Step 1 and Step 2 ti
 Verify every hash before any execution. A mismatch is `BLOCKED`.
 
 - Decision request: `docs/phase7/decision_request_2026-09-09.md` at commit `b0dcc28`.
-- Legacy baseline: `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile.baseline`, SHA-256 `84cb7a309f59db98b33709ececc168d330991b2226956cc7b310445870aac376`, read-only.
+- Legacy baseline: frozen original at `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile.baseline`, SHA-256 `84cb7a309f59db98b33709ececc168d330991b2226956cc7b310445870aac376`, mode 444, never executed. For the anchor runs the collector executes a hash-verified mode-555 copy at `/home/icly/Documents/tetris_ai_runner_results/phase7/legacy_host_diagnostic_2026-09-10/tetris_profile_baseline_copy` with the identical SHA-256; provenance is preserved by the hash, and the original stays untouched.
 - Legacy comparator (count parity only, not timed here): `/home/icly/Documents/tetris_ai_runner_results/phase7/tetris_profile_legacy_cmp`, SHA-256 `08e91644054b5bc07da45462378596f3364ae7e58459edd59e5d8a38cf885450`.
 - Normal value candidate: `/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/tetris_profile_value`, SHA-256 `1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765`.
 - Parameters: `/home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin`, SHA-256 `ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037`.

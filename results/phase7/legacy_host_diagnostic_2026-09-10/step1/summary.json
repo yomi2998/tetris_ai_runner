@@ -1,0 +1,130 @@
+{
+ "status": "PASS",
+ "labels": "DIAGNOSTIC NON-BINDING",
+ "step": "step1 stage-cost table",
+ "runbook": "results/phase7/legacy_host_diagnostic_2026-09-10/RUNBOOK.md",
+ "head": "fd614b97b113381e363008d0f46d263cf67f8fd1",
+ "ancestry": [
+  "578db3b frozen runbook",
+  "fd614b9 diagnostic implementation"
+ ],
+ "tracked_clean": true,
+ "binary": "out/build/linux-gcc-self-release/legacy_stage_bench",
+ "binary_sha256": "d59989c0adfaacc764a1adf9074f543fd1eaa548ad8e84fdbf8fc827ce03a699",
+ "normal_candidate_sha256": "1dccaa808044593bd97d6e8af09848ce8b19e75b9dcefa50d63a17a6381db765",
+ "normal_direct_key_symbols": 0,
+ "invocations": 1,
+ "reruns": 0,
+ "start_utc": "2026-09-10T05:18:38Z",
+ "end_utc": "2026-09-10T05:19:14Z",
+ "exit": 0,
+ "load_before": "1.21 1.39 1.72",
+ "load5_before": 1.39,
+ "load5_threshold": 1.5,
+ "load_after": "2.35 1.65 1.79",
+ "cpu15_before": 1,
+ "cpu15_after": 1,
+ "cpu15_note": "CPU 15 stayed online for this non-binding microbenchmark; the frozen offline window requirement applies to the Step 3 binding block.",
+ "governor": "performance",
+ "epp": "performance",
+ "boost": "1",
+ "pinned": "cpu7",
+ "method": {
+  "warmup_batches": 3,
+  "timed_batches": 7,
+  "drives_s1": 200000,
+  "drives_other": 50000,
+  "per_call": "median batch nanoseconds divided by drives",
+  "hoist_control": "per-drive case rotation plus nonzero sink plus poisoned-board check"
+ },
+ "poison_check": "pass (fully occupied board yields zero landings)",
+ "cells": 14,
+ "pieces": "T Z S L I O J",
+ "stderr_bytes": 0,
+ "c1": {
+  "cases": 33,
+  "domain": "legacy 40-row subcorpus, all cases forced mappable",
+  "medians": {
+   "s1_prepacked_raw_bfs_ns": 93.6,
+   "s1x_prep_only_ns": 0.7,
+   "s2_workspace_arrival_extraction_ns": 203.9,
+   "s3_full_production_enumeration_ns": 750.9,
+   "s4_legacy_search_prepared_import_ns": 742.7,
+   "s4i_legacy_search_import_inclusive_ns": 800.8,
+   "s5_adapter_conversion_pose_resolution_ns": 845.4
+  }
+ },
+ "c2": {
+  "distinct_boards": 105122,
+  "total_input_records": 111719,
+  "out_of_domain_records": 0,
+  "multiplicity_sum": 276768,
+  "medians": {
+   "s1_prepacked_raw_bfs_ns": 160.0,
+   "s1x_prep_only_ns": 2.9,
+   "s2_workspace_arrival_extraction_ns": 316.6,
+   "s3_full_production_enumeration_ns": 1103.6,
+   "s4_legacy_search_prepared_import_ns": 507.0,
+   "s4i_legacy_search_import_inclusive_ns": 608.9,
+   "s5_adapter_conversion_pose_resolution_ns": 1161.6
+  },
+  "board_class_counts_summary_level": {
+   "a_fully_legacy_domain_mappable_distinct": 105122,
+   "b_upper_row_at_or_above_40_records": 0,
+   "c_T_inputs_with_terminal_rotation_arrival_records": 18201,
+   "c_T_inputs_total_records": 18201,
+   "c_T_inputs_with_terminal_rotation_weighted": 38959,
+   "d_blocked_spawn_records": "not counted, disclosed limitation",
+   "e_density_decile_distinct": {
+    "0": 94703,
+    "1": 10419
+   },
+   "e_density_decile_weighted": {
+    "0": 236821,
+    "1": 39947
+   }
+  }
+ },
+ "derived_ratios_c2": {
+  "s3_over_s4": 2.177,
+  "s3_over_s4i": 1.812,
+  "s5_minus_s3_ns": 58.0,
+  "s2_over_s3": 0.287,
+  "s1_over_s3": 0.145
+ },
+ "derived_ratios_c1": {
+  "s3_over_s4": 1.011,
+  "s5_minus_s3_ns": 94.5
+ },
+ "count_partition_reconciliation": {
+  "corpus_sha256": "c6b5ecf6c2b7e956b7770ea957820d77fefc4fcaad0a9e1be22a55d1d1473da5",
+  "inputs_read": 111719,
+  "accepted_distinct_inputs": 111719,
+  "match": true,
+  "multiplicity_sum": 276768,
+  "accepted_enum_calls": 276768,
+  "weighted_apply_ok_candidates": 7266627,
+  "accepted_unique_candidates": 7266627,
+  "accepted_rule_transitions": 7266627,
+  "weighted_survivors": 6132302,
+  "accepted_policy_transitions": 6132302,
+  "distinct_result_boards_of_survivors": 6126843,
+  "accepted_materialized_nodes": 5978871,
+  "accepted_transposition_merges": 153431,
+  "note": "materialized nodes and merges are engine-side counts not derivable from the candidate lists; they are carried from the accepted sidecar unchanged"
+ },
+ "prohibited_claims": [
+  "no end-to-end engine speed inferred from raw BFS ratio",
+  "no qualification",
+  "no production readiness",
+  "no superiority over legacy",
+  "no quality statement"
+ ],
+ "disclosed_p3": [
+  "sink-equality clause replaced by per-drive case rotation: the untimed-digest-equals-timed-sink assertion is not implemented; rotation makes hoisting structurally impossible, plus nonzero sink check and poisoned-board check",
+  "board-class counts are reported at summary level only; per-class medians are not produced because the bench emits per-piece cells only, and unmappable/spawn_blocked counters are voided in the binary",
+  "every printed row carries DIAGNOSTIC NON-BINDING",
+  "isolated legacy timings are much cheaper than the recorded in-engine legacy figure, so the recorded 0.621 enumeration ratio is not reproduced by these scopes; reported rather than reconciled away"
+ ],
+ "verdict": "Step 1 has no pass or fail threshold; it produces the budget for interpreting Step 3."
+}

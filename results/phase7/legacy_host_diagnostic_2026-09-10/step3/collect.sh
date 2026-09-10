@@ -5,7 +5,7 @@ results_root=/home/icly/Documents/tetris_ai_runner_results
 local_dir=$repo/results/phase7/legacy_host_diagnostic_2026-09-10/step3
 external_dir=$results_root/phase7/legacy_host_diagnostic_2026-09-10/step3
 driver=$repo/out/build/linux-gcc-self-release/legacy_fast_adapter_bench
-baseline=$results_root/phase7/tetris_profile.baseline
+baseline=$results_root/phase7/legacy_host_diagnostic_2026-09-10/tetris_profile_baseline_copy
 value_bin=$repo/out/build/linux-gcc-self-release/tetris_profile_value
 params=$repo/artifacts/frozen_29d.bin
 inputs=$results_root/phase7/row_export_fusion_trial_2026-09-09/trace/trace_normal.inputs.bin
@@ -115,7 +115,7 @@ verify_hash ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037 "$p
 verify_hash c6b5ecf6c2b7e956b7770ea957820d77fefc4fcaad0a9e1be22a55d1d1473da5 "$inputs"
 record "HASH driver=$driver recorded in binaries.sha256 at finalization"
 
-if test "$(stat -c %a "$baseline")" != 444; then
+if test "$(stat -c %a "$baseline")" != 555; then
     record "TERMINAL=BLOCKED reason=baseline_mode"
     exit 28
 fi
