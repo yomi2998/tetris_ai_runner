@@ -1,0 +1,17 @@
+HEAD=b6357e1d8996d52262071c650aa536ce25c283b6
+TRACKED_STATE=clean
+HASH path=/home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/quality_match expected=b92ee3b2e68661c1d822de25fddc532ed842a90cfaf2728cab9d44a4f6be9d9d actual=b92ee3b2e68661c1d822de25fddc532ed842a90cfaf2728cab9d44a4f6be9d9d
+HASH path=/home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin expected=ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037 actual=ea95ba584f4eb5a7234bf0fbdd68fb422e00e29d13373e4df9e6b9ea2ca98037
+CPU_CONTROL_PREFLIGHT=pass CPU15=1
+PRECHECK attempt=0 utc=2026-09-10T14:17:31Z load1=0.83 load5=2.30 load15=3.46
+PRECHECK attempt=1 utc=2026-09-10T14:18:31Z load1=1.12 load5=2.09 load15=3.32
+PRECHECK attempt=2 utc=2026-09-10T14:19:31Z load1=1.01 load5=1.89 load15=3.17
+PRECHECK attempt=3 utc=2026-09-10T14:20:31Z load1=0.48 load5=1.58 load15=2.98
+PRECHECK attempt=4 utc=2026-09-10T14:21:31Z load1=0.87 load5=1.47 load15=2.85
+CPU15_OFFLINE_START=2026-09-10T14:21:31Z state=0
+STAGE=final pairs=1000 seed=999 threads=8 budget_ms=20
+COMMAND /home/icly/Documents/tetris_ai_runner/out/build/linux-gcc-self-release/quality_match match --param-a /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --param-b /home/icly/Documents/tetris_ai_runner/artifacts/frozen_29d.bin --pairs 1000 --ms 20 --seed 999 --threads 8 --max-rounds 3600 --out /home/icly/Documents/tetris_ai_runner/results/phase7/quality_harness_2026-09-10/final/matches.csv --seats legacy,value
+QUALITY_MATCH games=2000 value_win_equiv=804.0 wr=0.402000 ci95_two=[0.380719,0.423657] lo95_one=0.384110 app_value=1.027320 app_other=1.016087 apl_value=1.590098 apl_other=1.475673 rounds_mean=248.221 deaths_value=1196 deaths_other=804 replay_failures=0 arena_exhaustions=0 deaths_spawn=620 deaths_lockout=7 deaths_invalid=0 value_wall_ms_median_across_pairs=20.759 value_wall_ms_p95_across_pairs=22.848 value_wall_ms_max_across_pairs=30.125 total_wall_s=1405.899
+MATCH_EXIT=0 utc=2026-09-10T14:44:57Z
+CPU15_ONLINE_END=2026-09-10T14:44:57Z state=1
+TERMINAL=COLLECTED

@@ -1,0 +1,32 @@
+{
+  "stage": "final",
+  "head": "b6357e1d8996d52262071c650aa536ce25c283b6",
+  "collector": {"hash": "5ba94d5aa1bc45ac436c128dd1111320175ab7bbaccc72870cdf3179e5eff502", "invocations": 1, "exit": 0, "terminal": "COLLECTED"},
+  "driver": {"path": "out/build/linux-gcc-self-release/quality_match", "hash": "b92ee3b2e68661c1d822de25fddc532ed842a90cfaf2728cab9d44a4f6be9d9d"},
+  "controls": {"pairs": 1000, "games": 2000, "seed": 999, "threads": 8, "budget_ms": 20, "max_rounds": 3600, "cpu15_offline_window": "2026-09-10T14:21:31Z to 14:44:57Z", "cpu15_restored": 1, "load_precheck_attempts": 5, "no_surviving_process": true},
+  "outcome": {
+    "games": 2000, "value_win_equiv": 804.0, "wr": 0.402000,
+    "wilson_one_sided_lo95_z16449": 0.384110,
+    "wilson_two_sided_95": [0.380720, 0.423656],
+    "app_value_per_game_mean": 1.027320, "app_legacy_per_game_mean": 1.016087, "app_ratio": 1.011053,
+    "app_ratio_totals_crosscheck": 1.027203,
+    "apl_value_per_game_mean": 1.590098, "apl_legacy_per_game_mean": 1.475673, "apl_ratio": 1.077518,
+    "apl_ratio_totals_crosscheck": 1.081175,
+    "rounds_mean": 248.221, "capped": 0,
+    "deaths_value": 1196, "deaths_legacy": 804,
+    "value_deaths_reason1_spawn_plus_lockout": 627, "value_deaths_reason2": 569,
+    "legacy_deaths_reason1_spawn_plus_lockout": 431, "legacy_deaths_reason2": 373,
+    "value_seat_internal": {"deaths_spawn": 620, "deaths_lockout": 7, "deaths_invalid": 0},
+    "replay_failures": 0, "arena_exhaustions": 0,
+    "value_wall_ms": {"median": 20.759, "p95": 22.848, "max": 30.125},
+    "total_wall_s": 1405.899
+  },
+  "criteria": {
+    "wr_lo95_exceeds_0_47": {"pass": false, "observed": 0.384110},
+    "app_ratio_at_least_0_97": {"pass": true, "observed": 1.011053},
+    "apl_ratio_at_least_0_97": {"pass": true, "observed": 1.077518},
+    "superiority_ci_entirely_above_0_50": {"pass": false, "observed_ci": [0.380720, 0.423656]}
+  },
+  "decision": "NON-INFERIORITY-FAILED",
+  "consistency": {"smoke_wr": 0.422, "screen_wr": 0.4336, "final_wr": 0.402}
+}
