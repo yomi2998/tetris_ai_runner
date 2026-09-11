@@ -979,6 +979,7 @@ namespace m_tetris
             size_t max_length;
             size_t width;
             std::vector<std::unique_ptr<TetrisTreeNode[]>> node_slabs;
+            std::vector<std::unique_ptr<TetrisTreeNode[]>> spare_slabs;
             TetrisTreeNode *bump = nullptr;
             TetrisTreeNode *bump_end = nullptr;
             size_t live_count = 0;
@@ -996,7 +997,15 @@ namespace m_tetris
             {
                 if (bump == bump_end)
                 {
-                    node_slabs.push_back(std::make_unique<TetrisTreeNode[]>(slab_size));
+                    if (spare_slabs.empty())
+                    {
+                        node_slabs.push_back(std::make_unique<TetrisTreeNode[]>(slab_size));
+                    }
+                    else
+                    {
+                        node_slabs.push_back(std::move(spare_slabs.back()));
+                        spare_slabs.pop_back();
+                    }
                     bump = node_slabs.back().get();
                     bump_end = bump + slab_size;
                 }
@@ -1013,25 +1022,37 @@ namespace m_tetris
             {
                 if (src_root == nullptr)
                 {
+                    for (auto &slab : node_slabs)
+                    {
+                        spare_slabs.push_back(std::move(slab));
+                    }
                     node_slabs.clear();
                     bump = nullptr;
                     bump_end = nullptr;
                     live_count = 0;
                     return nullptr;
                 }
-                std::vector<std::unique_ptr<TetrisTreeNode[]>> dst_slabs;
+                size_t spare_index = 0;
+                size_t spare_offset = 0;
+                auto next_slot = [&]() -> TetrisTreeNode *
+                {
+                    if (spare_index == spare_slabs.size())
+                    {
+                        spare_slabs.push_back(std::make_unique<TetrisTreeNode[]>(slab_size));
+                    }
+                    TetrisTreeNode *slot = spare_slabs[spare_index].get() + spare_offset;
+                    if (++spare_offset == slab_size)
+                    {
+                        ++spare_index;
+                        spare_offset = 0;
+                    }
+                    return slot;
+                };
                 TetrisTreeNode *dst_bump = nullptr;
-                TetrisTreeNode *dst_end = nullptr;
                 size_t copied = 0;
                 auto copy_subtree = [&](auto &&self, TetrisTreeNode *src, TetrisTreeNode *dst_parent) -> TetrisTreeNode *
                 {
-                    if (dst_bump == dst_end)
-                    {
-                        dst_slabs.push_back(std::make_unique<TetrisTreeNode[]>(slab_size));
-                        dst_bump = dst_slabs.back().get();
-                        dst_end = dst_bump + slab_size;
-                    }
-                    TetrisTreeNode *dst = dst_bump++;
+                    TetrisTreeNode *dst = next_slot();
                     *dst = *src;
                     dst->result = &dst->result_storage;
                     dst->parent = dst_parent;
@@ -1048,9 +1069,19 @@ namespace m_tetris
                     return dst;
                 };
                 TetrisTreeNode *dst_root = copy_subtree(copy_subtree, src_root, nullptr);
-                node_slabs = std::move(dst_slabs);
-                bump = dst_bump;
-                bump_end = dst_end;
+                for (auto &slab : node_slabs)
+                {
+                    spare_slabs.push_back(std::move(slab));
+                }
+                node_slabs.clear();
+                size_t const used_slabs = spare_index + (spare_offset != 0 ? 1 : 0);
+                for (size_t i = 0; i < used_slabs; ++i)
+                {
+                    node_slabs.push_back(std::move(spare_slabs[i]));
+                }
+                spare_slabs.erase(spare_slabs.begin(), spare_slabs.begin() + used_slabs);
+                bump = node_slabs.back().get() + spare_offset;
+                bump_end = node_slabs.back().get() + slab_size;
                 live_count = copied;
                 return dst_root;
             }
