@@ -830,13 +830,19 @@ namespace m_tetris
             tree_node->clear = node->attach(context->engine, new_map);
             auto table = depth < context->tt.size() ? context->tt[depth].get() : nullptr;
             uint64_t hash = map_hash(new_map);
+            tree_node->order_key = hash;
             auto [hit, slot] = table->find(hash);
-            tree_node->result = slot;
-            if (!hit)
+            if (hit)
             {
-                *slot = TetrisCallAI<TetrisAI, LandPoint>::eval(*context->ai, tree_node->identity, new_map, map);
+                tree_node->result_storage = *slot;
+            }
+            else
+            {
+                tree_node->result_storage = TetrisCallAI<TetrisAI, LandPoint>::eval(*context->ai, tree_node->identity, new_map, map);
+                *slot = tree_node->result_storage;
                 table->set_hash(hash);
             }
+            tree_node->result = &tree_node->result_storage;
         }
         template<class TreeNode>
         static double get_ratio(TetrisAI &ai)
@@ -879,7 +885,25 @@ namespace m_tetris
             {
                 bool operator()(TetrisTreeNode *left, TetrisTreeNode *right) const
                 {
-                    return left->status.get() < right->status.get();
+                    if (left->status.get() < right->status.get())
+                    {
+                        return true;
+                    }
+                    if (right->status.get() < left->status.get())
+                    {
+                        return false;
+                    }
+                    size_t const left_index = left->identity->index_filtered;
+                    size_t const right_index = right->identity->index_filtered;
+                    if (left_index != right_index)
+                    {
+                        return left_index < right_index;
+                    }
+                    if (left->order_key != right->order_key)
+                    {
+                        return left->order_key < right->order_key;
+                    }
+                    return left->level < right->level;
                 }
             };
             template<class, class>
@@ -1009,6 +1033,7 @@ namespace m_tetris
                     }
                     TetrisTreeNode *dst = dst_bump++;
                     *dst = *src;
+                    dst->result = &dst->result_storage;
                     dst->parent = dst_parent;
                     TetrisTreeNode *prev = nullptr;
                     for (TetrisTreeNode *c = src->children; c != nullptr; c = c->children_next)
@@ -1169,7 +1194,7 @@ namespace m_tetris
             }
         };
         using next_t = typename Context::next_t;
-        TetrisTreeNode() : node(' '), hold(' '), level(1), flag(), version(-1), identity(), parent(), children()
+        TetrisTreeNode() : node(' '), hold(' '), level(1), flag(), version(-1), order_key(0), identity(), parent(), children()
         {
         }
         union
@@ -1193,8 +1218,10 @@ namespace m_tetris
             };
         };
         size_t version;
+        uint64_t order_key;
         TetrisMap map;
         typename Core::LandPoint identity;
+        typename Core::Result result_storage = {};
         typename Core::Result const *result = nullptr;
         size_t clear;
         TreeNodeStatus<TetrisAI, std::bool_constant<AIHasIterate<TetrisAI>>> status;
@@ -1213,18 +1240,27 @@ namespace m_tetris
                 return this;
             }
             TetrisTreeNode *new_root = nullptr;
-            for (TetrisTreeNode *it = children, *last = nullptr; it != nullptr; last = it, it = it->children_next)
+            for (TetrisTreeNode *it = children; it != nullptr; it = it->children_next)
             {
-                if (it->map == _map)
+                if (it->map == _map && (new_root == nullptr || it->identity->index_filtered < new_root->identity->index_filtered))
                 {
                     new_root = it;
-                    (last == nullptr ? children : last->children_next) = it->children_next;
-                    --num_children;
-                    if (it->children_next == nullptr)
+                }
+            }
+            if (new_root != nullptr)
+            {
+                for (TetrisTreeNode *it = children, *last = nullptr; it != nullptr; last = it, it = it->children_next)
+                {
+                    if (it == new_root)
                     {
-                        children_tail = last;
+                        (last == nullptr ? children : last->children_next) = it->children_next;
+                        --num_children;
+                        if (it->children_next == nullptr)
+                        {
+                            children_tail = last;
+                        }
+                        break;
                     }
-                    break;
                 }
             }
             if (new_root == nullptr)

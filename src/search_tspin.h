@@ -83,6 +83,14 @@ namespace search_tspin
         {
             return bitboard_t_;
         }
+        void cross_check(bool value)
+        {
+            cross_check_ = value;
+        }
+        void canonical_order(bool value)
+        {
+            canonical_order_ = value;
+        }
     private:
         struct KickOffset
         {
@@ -107,6 +115,9 @@ namespace search_tspin
         Config const *config_;
         m_tetris::TetrisContext const *context_;
         bool bitboard_t_ = false;
+        bool cross_check_ = false;
+        bool canonical_order_ = false;
+        std::vector<TetrisNodeWithTSpinType> cross_check_buffer_;
         bool t_tables_ready_ = false;
         bool t_tables_valid_ = false;
         m_tetris::TetrisNode const *t_box_[4][m_tetris::max_height][32] = {};

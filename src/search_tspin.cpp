@@ -474,7 +474,54 @@ namespace search_tspin
         node_search_.clear();
         if (node->status.t == 'T')
         {
-            return bitboard_t_ ? search_t_bitboard(map, node, depth) : search_t(map, node, depth);
+            if (!bitboard_t_ && canonical_order_)
+            {
+                search_t(map, node, depth);
+                std::sort(land_point_cache_.begin(), land_point_cache_.end(),
+                    [](TetrisNodeWithTSpinType const &left, TetrisNodeWithTSpinType const &right)
+                    {
+                        return left->index_filtered < right->index_filtered;
+                    });
+                return &land_point_cache_;
+            }
+            if (bitboard_t_)
+            {
+                return search_t_bitboard(map, node, depth);
+            }
+            if (cross_check_ && t_tables_ready_)
+            {
+                search_t_bitboard(map, node, depth);
+                cross_check_buffer_.clear();
+                cross_check_buffer_.insert(cross_check_buffer_.end(), land_point_cache_.begin(), land_point_cache_.end());
+                land_point_cache_.clear();
+                search_t(map, node, depth);
+                auto key = [](TetrisNodeWithTSpinType const &entry)
+                {
+                    return std::tuple(entry->index_filtered, static_cast<int>(entry.type), entry.flags, entry->status.t, entry->status.x, entry->status.y, entry->status.r);
+                };
+                std::vector<std::tuple<size_t, int, uint32_t, char, int, int, int>> left, right;
+                for (auto const &entry : cross_check_buffer_) left.push_back(key(entry));
+                for (auto const &entry : land_point_cache_) right.push_back(key(entry));
+                std::sort(left.begin(), left.end());
+                std::sort(right.begin(), right.end());
+                if (left != right)
+                {
+                    std::fprintf(stderr, "CROSS_CHECK MISMATCH: bitboard %zu landings, bfs %zu landings\n", left.size(), right.size());
+                    for (size_t i = 0; i < std::max(left.size(), right.size()); ++i)
+                    {
+                        auto const &l = i < left.size() ? left[i] : std::tuple<size_t, int, uint32_t, char, int, int, int>{};
+                        auto const &r = i < right.size() ? right[i] : std::tuple<size_t, int, uint32_t, char, int, int, int>{};
+                        if (l != r)
+                        {
+                            std::fprintf(stderr, "  first diff at %zu: bb(idx %zu type %d flags %u) vs bfs(idx %zu type %d flags %u)\n",
+                                i, std::get<0>(l), std::get<1>(l), std::get<2>(l), std::get<0>(r), std::get<1>(r), std::get<2>(r));
+                            break;
+                        }
+                    }
+                    std::abort();
+                }
+            }
+            return search_t(map, node, depth);
         }
         if (!is_20g && node->land_point != nullptr && node->low >= map.roof && !allow_nont_d)
         {
@@ -1406,6 +1453,14 @@ namespace search_tspin
             }
         }
 
+        if (canonical_order_)
+        {
+            std::sort(land_point_cache_.begin(), land_point_cache_.end(),
+                [](TetrisNodeWithTSpinType const &left, TetrisNodeWithTSpinType const &right)
+                {
+                    return left->index_filtered < right->index_filtered;
+                });
+        }
         for (int r = 0; r < 4; ++r)
         {
             uint64_t const *const usable = t_usable_c_[r];
@@ -1440,12 +1495,22 @@ namespace search_tspin
                     node_ex.last = last;
                     node_ex.is_check = true;
                     bool const was_rotated = ((rotated[x] >> y) & 1) != 0;
-                    node_ex.is_last_rotate = was_rotated || (last == nullptr && depth == 0 && config_->last_rotate);
+                    bool const is_start = r == start_r && y == start_y && x == start_x;
+                    node_ex.is_last_rotate = was_rotated || is_start;
+                    (void)depth;
                     node_ex.is_ready = check_ready(map, landing);
                     node_ex.is_mini_ready = check_mini_ready(snap, node_ex);
                     land_point_cache_.push_back(node_ex);
                 }
             }
+        }
+        if (canonical_order_)
+        {
+            std::sort(land_point_cache_.begin(), land_point_cache_.end(),
+                [](TetrisNodeWithTSpinType const &left, TetrisNodeWithTSpinType const &right)
+                {
+                    return left->index_filtered < right->index_filtered;
+                });
         }
         return &land_point_cache_;
     }

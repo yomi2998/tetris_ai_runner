@@ -29,6 +29,7 @@ namespace
         uint32_t seed = 1;
         size_t maxdepth = 6;
         size_t synthetic = 32;
+        size_t tall = 0;
         size_t synthetic_seed = 12345;
         std::string corpus_out;
         std::string corpus_in;
@@ -87,6 +88,7 @@ namespace
             else if (a == "--seed") opt.seed = static_cast<uint32_t>(std::strtoul(next(a).c_str(), nullptr, 10));
             else if (a == "--maxdepth") opt.maxdepth = std::strtoull(next(a).c_str(), nullptr, 10);
             else if (a == "--synthetic") opt.synthetic = std::strtoull(next(a).c_str(), nullptr, 10);
+            else if (a == "--tall") opt.tall = std::strtoull(next(a).c_str(), nullptr, 10);
             else if (a == "--depth")
             {
                 opt.depths.clear();
@@ -242,10 +244,10 @@ namespace
     {
         std::vector<CorpusMap> corpus;
         std::mt19937 rng(static_cast<uint32_t>(opt.synthetic_seed));
-        for (size_t i = 0; i < opt.synthetic; ++i)
+        for (size_t i = 0; i < opt.synthetic + opt.tall; ++i)
         {
             Map map(10, 40);
-            int fill = static_cast<int>(rng() % 9) + 2;
+            int fill = i < opt.synthetic ? static_cast<int>(rng() % 9) + 2 : 18 + static_cast<int>(rng() % 4);
             for (int y = 0; y < fill; ++y)
             {
                 uint32_t row = static_cast<uint32_t>(rng() & 0x3ffu);

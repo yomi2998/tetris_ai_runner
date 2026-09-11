@@ -103,6 +103,9 @@ namespace
         std::string param_file;
         bool quiet = false;
         bool bitboard_t = false;
+        bool trace = false;
+        bool cross_check = false;
+        bool canonical_order = false;
         size_t iters = 0;   // >0 => iteration-based deterministic search
     };
 
@@ -130,6 +133,9 @@ namespace
             else if (a == "--param-file") opt.param_file = next(a);
             else if (a == "--iters") opt.iters = std::strtoull(next(a).c_str(), nullptr, 10);
             else if (a == "--bitboard-t") opt.bitboard_t = true;
+            else if (a == "--trace") opt.trace = true;
+            else if (a == "--cross-check") opt.cross_check = true;
+            else if (a == "--canonical-order") opt.canonical_order = true;
             else if (a == "--quiet") opt.quiet = true;
             else
             {
@@ -184,6 +190,8 @@ int main(int argc, char **argv)
     engine.search_config()->is_20g = false;
     engine.search_config()->last_rotate = false;
     engine.search()->use_bitboard_t(opt.bitboard_t);
+    engine.search()->cross_check(opt.cross_check);
+    engine.search()->canonical_order(opt.canonical_order);
 
     engine.ai_config()->table = combo_table;
     engine.ai_config()->table_max = combo_table_max;
@@ -206,6 +214,7 @@ int main(int argc, char **argv)
     size_t moves_done = 0;
     size_t dead_moves = 0;
 
+    uint64_t game_digest = 1469598103934665603ull;
     std::vector<double> move_ms;
     std::vector<size_t> move_evals, move_gets, move_searches, move_nodes;
 
@@ -246,6 +255,24 @@ int main(int argc, char **argv)
             : engine.run_hold(map, engine.context()->generate(current), hold, true, next.data() + 1, opt.maxdepth, budget_ms);
         steady_clock::time_point t1 = steady_clock::now();
         double elapsed_ms = duration<double, std::milli>(t1 - t0).count();
+        if (opt.trace)
+        {
+            uint64_t trace_hash = 1469598103934665603ull;
+            auto mix = [&trace_hash](uint64_t value)
+            {
+                trace_hash ^= value;
+                trace_hash *= 1099511628211ull;
+            };
+            for (int y = 0; y < map.height; ++y)
+            {
+                mix(map.row[y]);
+            }
+            char const *target_piece = result.target != nullptr ? "?" : "none";
+            std::println("move {} maphash {:016x} hold {} evals {} gets {} searches {} target {}",
+                moves_done, trace_hash, hold == ' ' ? '_' : hold,
+                ProfiledTOJ::evals, ProfiledTOJ::gets, ProfiledSearch::searches,
+                target_piece);
+        }
         size_t nodes_alloc = engine.memory_usage() - mem_before;
         move_ms.push_back(elapsed_ms);
         move_evals.push_back(ProfiledTOJ::evals);
@@ -307,6 +334,23 @@ int main(int argc, char **argv)
             total_attack += attack;
         }
 
+        {
+            uint64_t fingerprint = 1469598103934665603ull;
+            auto mix = [&fingerprint](uint64_t value)
+            {
+                fingerprint ^= value;
+                fingerprint *= 1099511628211ull;
+            };
+            for (int y = 0; y < map.height; ++y)
+            {
+                mix(map.row[y]);
+            }
+            mix(static_cast<uint64_t>(static_cast<unsigned char>(hold)));
+            mix(static_cast<uint64_t>(combo));
+            mix(static_cast<uint64_t>(b2b));
+            game_digest ^= fingerprint + 0x9E3779B97F4A7C15ull + (game_digest << 6) + (game_digest >> 2);
+        }
+
         if (dead)
         {
             ++dead_moves;
@@ -365,5 +409,6 @@ int main(int argc, char **argv)
         engine.memory_usage(), engine.memory_usage() / (1024.0 * 1024.0));
     std::println("game stats: clears {}, attack {}, final roof {}, b2b {}, combo {}",
         total_clear, total_attack, map.roof, b2b, combo);
+    std::println("game digest: {:016x}", game_digest);
     return 0;
 }
