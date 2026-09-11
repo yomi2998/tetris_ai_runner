@@ -1080,7 +1080,7 @@ namespace m_tetris
                     node_slabs.push_back(std::move(spare_slabs[i]));
                 }
                 spare_slabs.erase(spare_slabs.begin(), spare_slabs.begin() + used_slabs);
-                bump = node_slabs.back().get() + spare_offset;
+                bump = node_slabs.back().get() + (spare_offset == 0 ? slab_size : spare_offset);
                 bump_end = node_slabs.back().get() + slab_size;
                 live_count = copied;
                 return dst_root;

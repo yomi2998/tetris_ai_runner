@@ -267,11 +267,20 @@ int main(int argc, char **argv)
             {
                 mix(map.row[y]);
             }
-            char const *target_piece = result.target != nullptr ? "?" : "none";
-            std::println("move {} maphash {:016x} hold {} evals {} gets {} searches {} target {}",
-                moves_done, trace_hash, hold == ' ' ? '_' : hold,
-                ProfiledTOJ::evals, ProfiledTOJ::gets, ProfiledSearch::searches,
-                target_piece);
+            if (result.target != nullptr)
+            {
+                std::println("move {} maphash {:016x} hold {} evals {} gets {} searches {} target {} {} {} {} type {} flags {}",
+                    moves_done, trace_hash, hold == ' ' ? '_' : hold,
+                    ProfiledTOJ::evals, ProfiledTOJ::gets, ProfiledSearch::searches,
+                    result.target->status.t, result.target->status.x, result.target->status.y,
+                    result.target->status.r, static_cast<int>(result.target.type), result.target.flags);
+            }
+            else
+            {
+                std::println("move {} maphash {:016x} hold {} evals {} gets {} searches {} target none",
+                    moves_done, trace_hash, hold == ' ' ? '_' : hold,
+                    ProfiledTOJ::evals, ProfiledTOJ::gets, ProfiledSearch::searches);
+            }
         }
         size_t nodes_alloc = engine.memory_usage() - mem_before;
         move_ms.push_back(elapsed_ms);
