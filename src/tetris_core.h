@@ -2187,6 +2187,10 @@ namespace m_tetris
         {
             return &ai_;
         }
+        TetrisSearch *search()
+        {
+            return &search_;
+        }
         //update!强制刷新上下文
         void update()
         {

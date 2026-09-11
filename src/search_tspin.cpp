@@ -474,7 +474,7 @@ namespace search_tspin
         node_search_.clear();
         if (node->status.t == 'T')
         {
-            return search_t(map, node, depth);
+            return bitboard_t_ ? search_t_bitboard(map, node, depth) : search_t(map, node, depth);
         }
         if (!is_20g && node->land_point != nullptr && node->low >= map.roof && !allow_nont_d)
         {
@@ -1146,5 +1146,307 @@ namespace search_tspin
             }
         }
         return TSpinType::None;
+    }
+}
+
+namespace search_tspin
+{
+    void Search::build_t_bitboard_tables()
+    {
+        t_tables_ready_ = true;
+        t_tables_valid_ = false;
+        int const width = context_->width();
+        int const height = context_->height();
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int y = 0; y < m_tetris::max_height; ++y)
+            {
+                for (int x = 0; x < 32; ++x)
+                {
+                    t_box_[r][y][x] = nullptr;
+                }
+            }
+            for (int d = 0; d < 3; ++d)
+            {
+                t_kick_count_[r][d] = 0;
+            }
+        }
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int sx = -4; sx <= width + 4; ++sx)
+            {
+                for (int sy = -4; sy <= height + 4; ++sy)
+                {
+                    TetrisNode const *entry = context_->get('T', static_cast<int8_t>(sx), static_cast<int8_t>(sy), static_cast<uint8_t>(r));
+                    if (entry == nullptr)
+                    {
+                        continue;
+                    }
+                    int const col = entry->col;
+                    int const row = entry->row;
+                    if (col < 0 || col >= 32 || row < 0 || row >= m_tetris::max_height)
+                    {
+                        continue;
+                    }
+                    t_box_[r][row][col] = entry;
+                }
+            }
+        }
+        for (int r = 0; r < 4; ++r)
+        {
+            TetrisNode const *best = nullptr;
+            size_t best_count = 0;
+            for (int y = 0; y < height; ++y)
+            {
+                for (int x = 0; x < width; ++x)
+                {
+                    TetrisNode const *candidate = t_box_[r][y][x];
+                    if (candidate == nullptr)
+                    {
+                        continue;
+                    }
+                    size_t count = 0;
+                    while (count < max_wall_kick && candidate->wall_kick_counterclockwise[count] != nullptr)
+                    {
+                        ++count;
+                    }
+                    if (count > best_count)
+                    {
+                        best_count = count;
+                        best = candidate;
+                    }
+                }
+            }
+            if (best == nullptr || best_count == 0)
+            {
+                return;
+            }
+            TetrisNode const *const *tables[3] = { best->wall_kick_counterclockwise, best->wall_kick_clockwise, best->wall_kick_opposite };
+            for (int d = 0; d < 3; ++d)
+            {
+                size_t count = 0;
+                for (size_t i = 0; i < max_wall_kick; ++i)
+                {
+                    TetrisNode const *target = tables[d][i];
+                    if (target == nullptr)
+                    {
+                        break;
+                    }
+                    KickOffset &kick = t_kicks_[r][d][count];
+                    kick.dcol = static_cast<int8_t>(target->col - best->col);
+                    kick.drow = static_cast<int8_t>(target->row - best->row);
+                    kick.to = target->status.r;
+                    ++count;
+                }
+                t_kick_count_[r][d] = count;
+            }
+        }
+        t_tables_valid_ = true;
+    }
+
+    std::vector<Search::TetrisNodeWithTSpinType> const *Search::search_t_bitboard(TetrisMap const &map, TetrisNode const *node, size_t depth)
+    {
+        land_point_cache_.clear();
+        if (!t_tables_ready_)
+        {
+            build_t_bitboard_tables();
+        }
+        if (!t_tables_valid_)
+        {
+            return search_t(map, node, depth);
+        }
+        TetrisMapSnap snap;
+        node->build_snap(map, context_, snap);
+        if (config_->is_20g)
+        {
+            node = node->drop(map);
+        }
+        int const width = static_cast<int>(context_->width());
+        int const height = static_cast<int>(context_->height());
+        int const start_r = node->status.r < 4 ? node->status.r : 0;
+        int const start_y = node->row;
+        int const start_x = node->col;
+        if (start_y < 0 || start_y >= height || start_x < 0 || start_x >= width || t_box_[start_r][start_y][start_x] == nullptr)
+        {
+            return &land_point_cache_;
+        }
+        int const max_y = std::min(height, start_y + 5);
+        uint64_t const band = max_y >= 64 ? ~0ull : ((1ull << max_y) - 1);
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int x = 0; x < 32; ++x)
+            {
+                t_usable_c_[r][x] = 0;
+                t_reach_c_[r][x] = 0;
+                t_rot_c_[r][x] = 0;
+            }
+            for (int x = 0; x < width; ++x)
+            {
+                uint64_t mask = 0;
+                for (int y = 0; y < max_y; ++y)
+                {
+                    if (((snap.row[r][y] >> x) & 1) == 0)
+                    {
+                        mask |= 1ull << y;
+                    }
+                }
+                t_usable_c_[r][x] = mask;
+            }
+        }
+        uint64_t *const u0 = t_usable_c_[0];
+        (void)u0;
+        t_reach_c_[start_r][start_x] |= 1ull << start_y;
+
+        for (;;)
+        {
+            bool changed = false;
+            for (int r = 0; r < 4; ++r)
+            {
+                uint64_t *const usable = t_usable_c_[r];
+                uint64_t *const reach = t_reach_c_[r];
+                for (int x = 0; x < width; ++x)
+                {
+                    uint64_t seeds = reach[x] & ~(reach[x] << 1);
+                    while (seeds != 0)
+                    {
+                        int const y = std::countr_zero(seeds);
+                        seeds &= seeds - 1;
+                        uint64_t const below = (1ull << (y + 1)) - 1;
+                        uint64_t const blocked = ~usable[x] & below;
+                        uint64_t const low = (blocked == 0) ? 0 : (1ull << (64 - std::countl_zero(blocked)));
+                        uint64_t const run = ((low == 0 ? below : (below & ~(low - 1))) & usable[x]);
+                        if (run & ~reach[x])
+                        {
+                            reach[x] |= run;
+                            changed = true;
+                        }
+                    }
+                }
+                for (;;)
+                {
+                    bool moved = false;
+                    for (int x = 0; x < width; ++x)
+                    {
+                        uint64_t const add = ((x > 0 ? reach[x - 1] : 0) | (x + 1 < width ? reach[x + 1] : 0)) & usable[x];
+                        if (add & ~reach[x])
+                        {
+                            reach[x] |= add;
+                            moved = true;
+                            changed = true;
+                        }
+                    }
+                    if (!moved)
+                    {
+                        break;
+                    }
+                }
+            }
+            for (int r = 0; r < 4; ++r)
+            {
+                for (int d = 0; d < 3; ++d)
+                {
+                    size_t const kick_count = t_kick_count_[r][d];
+                    if (kick_count == 0)
+                    {
+                        continue;
+                    }
+                    for (int x = 0; x < width; ++x)
+                    {
+                        t_temp_c_[x] = t_reach_c_[r][x];
+                    }
+                    for (size_t i = 0; i < kick_count; ++i)
+                    {
+                        KickOffset const &kick = t_kicks_[r][d][i];
+                        int const to = kick.to < 4 ? kick.to : r;
+                        for (int x = 0; x < width; ++x)
+                        {
+                            uint64_t const src = t_temp_c_[x];
+                            if (src == 0)
+                            {
+                                continue;
+                            }
+                            int const tx = x + kick.dcol;
+                            if (tx < 0 || tx >= width)
+                            {
+                                continue;
+                            }
+                            uint64_t const moved = ((kick.drow >= 0 ? (src << kick.drow) : (src >> -kick.drow)) & band);
+                            uint64_t const arrived = moved & t_usable_c_[to][tx];
+                            if (arrived == 0)
+                            {
+                                continue;
+                            }
+                            t_rot_c_[to][tx] |= arrived;
+                            if (arrived & ~t_reach_c_[to][tx])
+                            {
+                                t_reach_c_[to][tx] |= arrived;
+                                changed = true;
+                            }
+                        }
+                        if (i + 1 < kick_count)
+                        {
+                            for (int x = 0; x < width; ++x)
+                            {
+                                int const bx = x + kick.dcol;
+                                uint64_t blocked = 0;
+                                if (bx >= 0 && bx < width)
+                                {
+                                    uint64_t const u = t_usable_c_[to][bx];
+                                    blocked = (kick.drow >= 0 ? (u >> kick.drow) : (u << -kick.drow)) & band;
+                                }
+                                t_temp_c_[x] &= ~blocked;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!changed)
+            {
+                break;
+            }
+        }
+
+        for (int r = 0; r < 4; ++r)
+        {
+            uint64_t const *const usable = t_usable_c_[r];
+            uint64_t const *const reach = t_reach_c_[r];
+            uint64_t const *const rotated = t_rot_c_[r];
+            for (int x = 0; x < width; ++x)
+            {
+                uint64_t rest = reach[x] & ~(usable[x] << 1);
+                while (rest != 0)
+                {
+                    int const y = std::countr_zero(rest);
+                    rest &= rest - 1;
+                    TetrisNode const *landing = t_box_[r][y][x];
+                    if (landing == nullptr)
+                    {
+                        continue;
+                    }
+                    TetrisNode const *last = nullptr;
+                    if (y + 1 < max_y && ((reach[x] >> (y + 1)) & 1))
+                    {
+                        last = t_box_[r][y + 1][x];
+                    }
+                    else if (x + 1 < width && ((reach[x + 1] >> y) & 1))
+                    {
+                        last = t_box_[r][y][x + 1];
+                    }
+                    else if (x > 0 && ((reach[x - 1] >> y) & 1))
+                    {
+                        last = t_box_[r][y][x - 1];
+                    }
+                    TetrisNodeWithTSpinType node_ex(landing);
+                    node_ex.last = last;
+                    node_ex.is_check = true;
+                    bool const was_rotated = ((rotated[x] >> y) & 1) != 0;
+                    node_ex.is_last_rotate = was_rotated || (last == nullptr && depth == 0 && config_->last_rotate);
+                    node_ex.is_ready = check_ready(map, landing);
+                    node_ex.is_mini_ready = check_mini_ready(snap, node_ex);
+                    land_point_cache_.push_back(node_ex);
+                }
+            }
+        }
+        return &land_point_cache_;
     }
 }

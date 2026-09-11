@@ -75,9 +75,25 @@ namespace search_tspin
         std::vector<char> make_path(m_tetris::TetrisNode const *node, TetrisNodeWithTSpinType const &land_point, m_tetris::TetrisMap const &map);
         std::vector<TetrisNodeWithTSpinType> const *search(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth);
         TSpinType classify(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, bool last_rotate, size_t clear);
+        void use_bitboard_t(bool value)
+        {
+            bitboard_t_ = value;
+        }
+        bool bitboard_t() const
+        {
+            return bitboard_t_;
+        }
     private:
+        struct KickOffset
+        {
+            int8_t dcol;
+            int8_t drow;
+            uint8_t to;
+        };
         std::vector<char> make_path_20g(m_tetris::TetrisNode const *node, TetrisNodeWithTSpinType const &land_point, m_tetris::TetrisMap const &map);
         std::vector<TetrisNodeWithTSpinType> const *search_t(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth);
+        std::vector<TetrisNodeWithTSpinType> const *search_t_bitboard(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth);
+        void build_t_bitboard_tables();
         bool check_ready(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node);
         bool check_mini_ready(m_tetris::TetrisMapSnap const &snap, TetrisNodeWithTSpinType const &node);
         std::vector<TetrisNodeWithTSpinType> land_point_cache_;
@@ -90,5 +106,15 @@ namespace search_tspin
         int x_diff_, y_diff_;
         Config const *config_;
         m_tetris::TetrisContext const *context_;
+        bool bitboard_t_ = false;
+        bool t_tables_ready_ = false;
+        bool t_tables_valid_ = false;
+        m_tetris::TetrisNode const *t_box_[4][m_tetris::max_height][32] = {};
+        uint64_t t_usable_c_[4][32] = {};
+        uint64_t t_reach_c_[4][32] = {};
+        uint64_t t_rot_c_[4][32] = {};
+        uint64_t t_temp_c_[32] = {};
+        KickOffset t_kicks_[4][3][m_tetris::max_wall_kick] = {};
+        size_t t_kick_count_[4][3] = {};
     };
 }

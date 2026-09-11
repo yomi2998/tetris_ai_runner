@@ -102,6 +102,7 @@ namespace
         bool hold = true;
         std::string param_file;
         bool quiet = false;
+        bool bitboard_t = false;
         size_t iters = 0;   // >0 => iteration-based deterministic search
     };
 
@@ -128,6 +129,7 @@ namespace
             else if (a == "--no-hold") opt.hold = false;
             else if (a == "--param-file") opt.param_file = next(a);
             else if (a == "--iters") opt.iters = std::strtoull(next(a).c_str(), nullptr, 10);
+            else if (a == "--bitboard-t") opt.bitboard_t = true;
             else if (a == "--quiet") opt.quiet = true;
             else
             {
@@ -181,6 +183,7 @@ int main(int argc, char **argv)
     engine.search_config()->allow_d = true;
     engine.search_config()->is_20g = false;
     engine.search_config()->last_rotate = false;
+    engine.search()->use_bitboard_t(opt.bitboard_t);
 
     engine.ai_config()->table = combo_table;
     engine.ai_config()->table_max = combo_table_max;
