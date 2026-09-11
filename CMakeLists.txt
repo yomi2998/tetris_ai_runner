@@ -101,3 +101,14 @@ add_executable(tuner
     src/random.cpp
 )
 target_include_directories(tuner PRIVATE src)
+
+add_executable(movegen_probe
+    src/movegen_probe.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/integer_utils.cpp
+    src/random.cpp
+)
+target_include_directories(movegen_probe PRIVATE src)
