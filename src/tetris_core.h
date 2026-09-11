@@ -600,9 +600,7 @@ namespace m_tetris
         class LocalContext : public TreeContext, public AIConfig<TetrisAI, std::bool_constant<HasConfig<TetrisAI>>>::AIConfigHolder, public SearchConfig<TetrisSearch, std::bool_constant<HasConfig<TetrisSearch>>>::SearchConfigHolder
         {
         public:
-            LocalContext(std::deque<TreeNode> *node_storage) : TreeContext(node_storage)
-            {
-            }
+            LocalContext() = default;
         };
 
     private:
@@ -934,7 +932,7 @@ namespace m_tetris
             };
             using next_t = TetrisNext<TetrisAI, std::bool_constant<AIHasIterate<TetrisAI>>>;
         public:
-            Context(std::deque<TetrisTreeNode> *_node_storage) : version(), is_complete(), is_open_hold(), node_storage(_node_storage), free_list(nullptr), free_count(0), width(), total(), avg()
+            Context() : version(), is_complete(), is_open_hold(), width(), total(), avg()
             {
             }
         public:
@@ -956,9 +954,11 @@ namespace m_tetris
             bool unused_bool;
             size_t max_length;
             size_t width;
-            std::deque<TetrisTreeNode> *node_storage;
-            TetrisTreeNode* free_list;
-            size_t free_count;
+            std::vector<std::unique_ptr<TetrisTreeNode[]>> node_slabs;
+            TetrisTreeNode *bump = nullptr;
+            TetrisTreeNode *bump_end = nullptr;
+            size_t live_count = 0;
+            static constexpr size_t slab_size = 4096;
             std::vector<Status const *> iterate_cache;
             TetrisNode virtual_flag;
             TetrisNode const *current;
@@ -970,41 +970,64 @@ namespace m_tetris
         public:
             TetrisTreeNode *alloc(TetrisTreeNode *parent)
             {
-                TetrisTreeNode *node;
-                if (free_list != nullptr)
+                if (bump == bump_end)
                 {
-                    node = free_list;
-                    free_list = node->children_next;
-                    --free_count;
-                    TetrisTreeNode *subtree = node->children;
-                    if (subtree != nullptr)
-                    {
-                        node->children_tail->children_next = free_list;
-                        free_list = subtree;
-                        node->children = nullptr;
-                        free_count += node->num_children;
-                        node->num_children = 0;
-                    }
-                    node->node_flag.clear();
-                    node->node = ' ';
-                    node->hold = ' ';
-                    node->level = 1;
-                    node->flag = 0;
-                    node->version = version - 1;
+                    node_slabs.push_back(std::make_unique<TetrisTreeNode[]>(slab_size));
+                    bump = node_slabs.back().get();
+                    bump_end = bump + slab_size;
                 }
-                else
-                {
-                    node_storage->emplace_back();
-                    node = &node_storage->back();
-                }
+                TetrisTreeNode *node = new (bump++) TetrisTreeNode();
                 node->parent = parent;
+                ++live_count;
                 return node;
             }
             void dealloc(TetrisTreeNode *node)
             {
-                node->children_next = free_list;
-                free_list = node;
-                ++free_count;
+                --live_count;
+            }
+            TetrisTreeNode *compact(TetrisTreeNode *src_root)
+            {
+                if (src_root == nullptr)
+                {
+                    node_slabs.clear();
+                    bump = nullptr;
+                    bump_end = nullptr;
+                    live_count = 0;
+                    return nullptr;
+                }
+                std::vector<std::unique_ptr<TetrisTreeNode[]>> dst_slabs;
+                TetrisTreeNode *dst_bump = nullptr;
+                TetrisTreeNode *dst_end = nullptr;
+                size_t copied = 0;
+                auto copy_subtree = [&](auto &&self, TetrisTreeNode *src, TetrisTreeNode *dst_parent) -> TetrisTreeNode *
+                {
+                    if (dst_bump == dst_end)
+                    {
+                        dst_slabs.push_back(std::make_unique<TetrisTreeNode[]>(slab_size));
+                        dst_bump = dst_slabs.back().get();
+                        dst_end = dst_bump + slab_size;
+                    }
+                    TetrisTreeNode *dst = dst_bump++;
+                    *dst = *src;
+                    dst->parent = dst_parent;
+                    TetrisTreeNode *prev = nullptr;
+                    for (TetrisTreeNode *c = src->children; c != nullptr; c = c->children_next)
+                    {
+                        TetrisTreeNode *cd = self(self, c, dst);
+                        if (prev == nullptr) dst->children = cd;
+                        else prev->children_next = cd;
+                        prev = cd;
+                    }
+                    if (prev != nullptr) dst->children_tail = prev;
+                    ++copied;
+                    return dst;
+                };
+                TetrisTreeNode *dst_root = copy_subtree(copy_subtree, src_root, nullptr);
+                node_slabs = std::move(dst_slabs);
+                bump = dst_bump;
+                bump_end = dst_end;
+                live_count = copied;
+                return dst_root;
             }
             //确保转置表的大小和分配
             void ensure_tt()
@@ -1207,6 +1230,7 @@ namespace m_tetris
             if (new_root == nullptr)
             {
                 context->reset_tt();
+                context->compact(nullptr);
                 new_root = context->alloc(nullptr);
                 new_root->map = _map;
             }
@@ -1215,8 +1239,8 @@ namespace m_tetris
                 context->rotate_tt();
                 new_root->parent = nullptr;
                 new_root->node_flag.clear();
+                new_root = context->compact(new_root);
             }
-            context->dealloc(this);
             return new_root;
         }
         void update_version(Context *context)
@@ -2019,7 +2043,6 @@ namespace m_tetris
         using LandPoint = typename Core::LandPoint;
 
     private:
-        std::deque<TreeNode> node_storage_;
         std::shared_ptr<TetrisContext> shared_context_;
         typename ContextBuilder::template LocalContext<TreeNode> local_context_;
         TreeNode *root_;
@@ -2051,15 +2074,13 @@ namespace m_tetris
         };
 
     public:
-        TetrisEngine() : shared_context_(), local_context_(&node_storage_), ai_(), root_(nullptr), status_(), memory_limit_(128ull << 20)
+        TetrisEngine() : shared_context_(), local_context_(), ai_(), root_(nullptr), status_(), memory_limit_(128ull << 20)
         {
-            node_storage_.emplace_back();
-            root_ = &node_storage_.back();
+            root_ = local_context_.alloc(nullptr);
         }
-        TetrisEngine(std::shared_ptr<TetrisContext> context) : shared_context_(context), local_context_(&node_storage_), ai_(), root_(nullptr), status_(), memory_limit_(128ull << 20)
+        TetrisEngine(std::shared_ptr<TetrisContext> context) : shared_context_(context), local_context_(), ai_(), root_(nullptr), status_(), memory_limit_(128ull << 20)
         {
-            node_storage_.emplace_back();
-            root_ = &node_storage_.back();
+            root_ = local_context_.alloc(nullptr);
             local_context_.engine = shared_context_.get();
             local_context_.ai = &ai_;
             local_context_.search = &search_;
@@ -2131,7 +2152,7 @@ namespace m_tetris
         }
         uint64_t memory_usage() const
         {
-            return shared_context_->node_storage_.size() * sizeof(TetrisNode) + (local_context_.node_storage->size() - local_context_.free_count) * sizeof(TreeNode);
+            return shared_context_->node_storage_.size() * sizeof(TetrisNode) + local_context_.live_count * sizeof(TreeNode);
         }
         //AI名称
         std::string ai_name() const
