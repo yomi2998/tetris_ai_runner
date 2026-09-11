@@ -37,6 +37,8 @@ namespace
         bool allow_180 = true;
         bool allow_d = true;
         bool is_20g = false;
+        bool allow_nont_d = false;
+        size_t sample = 4;
     };
 
     struct CorpusMap
@@ -100,6 +102,8 @@ namespace
             else if (a == "--no-180") opt.allow_180 = false;
             else if (a == "--no-d") opt.allow_d = false;
             else if (a == "--20g") opt.is_20g = true;
+            else if (a == "--nont-d") opt.allow_nont_d = true;
+            else if (a == "--sample") opt.sample = std::max<size_t>(1, std::strtoull(next(a).c_str(), nullptr, 10));
             else
             {
                 std::println(stderr, "unknown option: {}", a);
@@ -224,7 +228,7 @@ namespace
             }
             result.target->attach(engine.context().get(), map);
             ++moves_done;
-            if (moves_done % 4 == 0)
+            if (moves_done % opt.sample == 0)
             {
                 corpus.push_back({ map, 'p', moves_done });
             }
@@ -297,6 +301,7 @@ int main(int argc, char **argv)
     engine.search_config()->allow_180 = opt.allow_180;
     engine.search_config()->allow_d = opt.allow_d;
     engine.search_config()->is_20g = opt.is_20g;
+    engine.search_config()->allow_nont_d = opt.allow_nont_d;
     engine.search_config()->last_rotate = false;
 
     int const combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };
@@ -315,8 +320,7 @@ int main(int argc, char **argv)
     probe.init(engine.context().get(), &config);
 
     std::vector<CorpusMap> corpus;
-    if (!opt.corpus_in.empty())
-    {
+    if (!opt.corpus_in.empty())    {
         corpus = read_corpus(opt.corpus_in);
         std::println(stderr, "loaded {} maps from {}", corpus.size(), opt.corpus_in);
     }
@@ -343,8 +347,7 @@ int main(int argc, char **argv)
         }
     }
 
-    FILE *out = stdout;
-    if (!opt.out.empty())
+    FILE *out = stdout;    if (!opt.out.empty())
     {
         out = std::fopen(opt.out.c_str(), "wb");
         if (out == nullptr)
@@ -451,5 +454,17 @@ int main(int argc, char **argv)
     report_route("precomputed", route_precomputed, ns_precomputed);
     report_route("full bfs", route_bfs, ns_bfs);
     report_route("T search", route_t, ns_t);
+    if (!corpus.empty())
+    {
+        std::vector<int> roofs;
+        roofs.reserve(corpus.size());
+        for (auto const &entry : corpus)
+        {
+            roofs.push_back(entry.map.roof);
+        }
+        std::sort(roofs.begin(), roofs.end());
+        std::println(stderr, "corpus roofs: min {} median {} max {} ({} maps)",
+            roofs.front(), roofs[roofs.size() / 2], roofs.back(), roofs.size());
+    }
     return 0;
 }
