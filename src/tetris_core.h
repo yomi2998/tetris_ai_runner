@@ -642,13 +642,28 @@ namespace m_tetris
     };
 
     //转置表,缓存eval的结果
-    template<class Result>
+#ifndef TETRIS_TT_BITS
+#define TETRIS_TT_BITS 16
+#endif
+#ifdef TETRIS_TT_STATS
+    inline struct TetrisTtGlobalStats
+    {
+        size_t probes = 0;
+        size_t hits = 0;
+        size_t stores = 0;
+        size_t replacements = 0;
+        size_t compacted_nodes = 0;
+        size_t compacted_max = 0;
+        size_t compactions = 0;
+    } tt_global_stats;
+#endif
+    template<class Result, int Bits = 16>
     class TranspositionTable
     {
     public:
         enum
         {
-            max_count = 1 << 16
+            max_count = 1 << Bits
         };
         struct Entry
         {
@@ -668,16 +683,35 @@ namespace m_tetris
         }
         std::pair<bool, Result *> find(uint64_t hash)
         {
+#ifdef TETRIS_TT_STATS
+            ++tt_global_stats.probes;
+#endif
             Entry &e = entries_[hash & mask_];
-            return { hash != 0 && e.hash == hash, &e.result };
+            bool const hit = hash != 0 && e.hash == hash;
+#ifdef TETRIS_TT_STATS
+            if (hit)
+            {
+                ++tt_global_stats.hits;
+            }
+#endif
+            return { hit, &e.result };
         }
         void set_hash(uint64_t hash)
         {
             if (hash != 0)
             {
-                entries_[hash & mask_].hash = hash;
+                Entry &e = entries_[hash & mask_];
+#ifdef TETRIS_TT_STATS
+                ++tt_global_stats.stores;
+                if (e.hash != 0 && e.hash != hash)
+                {
+                    ++tt_global_stats.replacements;
+                }
+#endif
+                e.hash = hash;
             }
         }
+
     private:
         Entry entries_[max_count];
         size_t mask_;
@@ -960,7 +994,15 @@ namespace m_tetris
             {
             }
         public:
-            using value_heap_t = std::priority_queue<TetrisTreeNode *, std::vector<TetrisTreeNode *>, ValueHeapCompare>;
+            struct ValueHeap : std::priority_queue<TetrisTreeNode *, std::vector<TetrisTreeNode *>, ValueHeapCompare>
+            {
+                using std::priority_queue<TetrisTreeNode *, std::vector<TetrisTreeNode *>, ValueHeapCompare>::priority_queue;
+                void clear_heap()
+                {
+                    this->c.clear();
+                }
+            };
+            using value_heap_t = ValueHeap;
             using children_map_t = chash_map<TetrisBlockStatus, TetrisTreeNode *, TetrisBlockStatusHash, TetrisBlockStatusEqual>;
             using identity_set_t = chash_set<TetrisBlockStatus, TetrisBlockStatusHash, TetrisBlockStatusEqual>;
             size_t version;
@@ -969,7 +1011,7 @@ namespace m_tetris
             TetrisSearch *search;
             std::vector<value_heap_t> sort;
             std::vector<value_heap_t> wait;
-            std::vector<std::unique_ptr<TranspositionTable<typename Core::Result>>> tt;
+            std::vector<std::unique_ptr<TranspositionTable<typename Core::Result, TETRIS_TT_BITS>>> tt;
             children_map_t old;
             identity_set_t uniq;
             bool is_complete;
@@ -1083,12 +1125,19 @@ namespace m_tetris
                 bump = node_slabs.back().get() + (spare_offset == 0 ? slab_size : spare_offset);
                 bump_end = node_slabs.back().get() + slab_size;
                 live_count = copied;
+#ifdef TETRIS_TT_STATS
+                tt_global_stats.compactions++;
+                if (copied > tt_global_stats.compacted_max)
+                {
+                    tt_global_stats.compacted_max = copied;
+                }
+#endif
                 return dst_root;
             }
             //确保转置表的大小和分配
             void ensure_tt()
             {
-                using Table = TranspositionTable<typename Core::Result>;
+                using Table = TranspositionTable<typename Core::Result, TETRIS_TT_BITS>;
                 size_t n = max_length + 1;
                 if (tt.size() != n)
                 {
@@ -1105,7 +1154,7 @@ namespace m_tetris
             //树平移,根换成子节点:转置表向下旋转,重置最后一个深度
             void rotate_tt()
             {
-                using Table = TranspositionTable<typename Core::Result>;
+                using Table = TranspositionTable<typename Core::Result, TETRIS_TT_BITS>;
                 if (tt.empty())
                 {
                     return;
@@ -1316,10 +1365,23 @@ namespace m_tetris
             context->total += context->width;
             context->avg = context->total / context->version;
             context->width = 0;
-            context->wait.clear();
-            context->sort.clear();
-            context->wait.resize(context->max_length + 1);
-            context->sort.resize(context->max_length + 1);
+            auto reset_heaps = [](std::vector<typename Context::value_heap_t> &heaps, size_t length)
+            {
+                if (heaps.size() != length + 1)
+                {
+                    heaps.clear();
+                    heaps.resize(length + 1);
+                }
+                else
+                {
+                    for (auto &heap : heaps)
+                    {
+                        heap.clear_heap();
+                    }
+                }
+            };
+            reset_heaps(context->wait, context->max_length);
+            reset_heaps(context->sort, context->max_length);
             context->ensure_tt();
         }
         static std::vector<next_t> process_next(char const *_next, size_t _next_length, TetrisNode const *_node)
@@ -2221,6 +2283,27 @@ namespace m_tetris
         {
             return shared_context_->node_storage_.size() * sizeof(TetrisNode) + local_context_.live_count * sizeof(TreeNode);
         }
+        size_t tree_node_count() const
+        {
+            size_t count = 0;
+            std::vector<TreeNode const *> stack { root_ };
+            while (!stack.empty())
+            {
+                TreeNode const *n = stack.back();
+                stack.pop_back();
+                if (n == nullptr)
+                {
+                    continue;
+                }
+                ++count;
+                for (TreeNode const *c = n->children; c != nullptr; c = c->children_next)
+                {
+                    stack.push_back(c);
+                }
+            }
+            return count;
+        }
+
         //AI名称
         std::string ai_name() const
         {
@@ -2514,6 +2597,14 @@ namespace m_tetris
         auto ai_config()->decltype(engine_.ai_config())
         {
             return ai_config_.get();
+        }
+        TetrisSearch *search()
+        {
+            return engine_.search();
+        }
+        TetrisSearch const *search() const
+        {
+            return engine_.search();
         }
         auto search_config() const->decltype(engine_.search_config())
         {

@@ -9,6 +9,10 @@ namespace search_tspin
     {
         context_ = context;
         config_ = config;
+        t_tables_ready_ = false;
+        t_tables_valid_ = false;
+        cross_check_warned_ = false;
+        cross_check_count_ = 0;
         node_mark_.init(context->node_max());
         node_mark_filtered_.init(context->node_max());
         block_data_ = std::span(block_data_buffer_);
@@ -474,22 +478,34 @@ namespace search_tspin
         node_search_.clear();
         if (node->status.t == 'T')
         {
-            if (!bitboard_t_ && canonical_order_)
+            if (is_20g)
             {
-                search_t(map, node, depth);
-                std::sort(land_point_cache_.begin(), land_point_cache_.end(),
-                    [](TetrisNodeWithTSpinType const &left, TetrisNodeWithTSpinType const &right)
+                return search_t(map, node, depth);
+            }
+            if (cross_check_)
+            {
+                if (!t_tables_ready_)
+                {
+                    build_t_bitboard_tables();
+                }
+                if (!t_tables_valid_)
+                {
+                    if (!cross_check_warned_)
                     {
-                        return left->index_filtered < right->index_filtered;
-                    });
-                return &land_point_cache_;
-            }
-            if (bitboard_t_)
-            {
-                return search_t_bitboard(map, node, depth);
-            }
-            if (cross_check_ && t_tables_ready_)
-            {
+                        std::fprintf(stderr, "CROSS_CHECK unavailable: bitboard tables invalid for this context\n");
+                        cross_check_warned_ = true;
+                    }
+                }
+                else if (config_->is_20g)
+                {
+                    if (!cross_check_warned_)
+                    {
+                        std::fprintf(stderr, "CROSS_CHECK unavailable: bitboard 20G route not supported\n");
+                        cross_check_warned_ = true;
+                    }
+                }
+                else
+                {
                 search_t_bitboard(map, node, depth);
                 cross_check_buffer_.clear();
                 cross_check_buffer_.insert(cross_check_buffer_.end(), land_point_cache_.begin(), land_point_cache_.end());
@@ -504,6 +520,7 @@ namespace search_tspin
                 for (auto const &entry : land_point_cache_) right.push_back(key(entry));
                 std::sort(left.begin(), left.end());
                 std::sort(right.begin(), right.end());
+                ++cross_check_count_;
                 if (left != right)
                 {
                     std::fprintf(stderr, "CROSS_CHECK MISMATCH: bitboard %zu landings, bfs %zu landings\n", left.size(), right.size());
@@ -520,8 +537,9 @@ namespace search_tspin
                     }
                     std::abort();
                 }
+                }
             }
-            return search_t(map, node, depth);
+            return search_t_bitboard(map, node, depth);
         }
         if (!is_20g && node->land_point != nullptr && node->low >= map.roof && !allow_nont_d)
         {
@@ -1076,7 +1094,7 @@ namespace search_tspin
                         {
                             if (wall_kick_node->check(snap))
                             {
-                                if (node_mark_.cover_if(wall_kick_node, node, ' ', 'x'))
+                                                                if (node_mark_.cover_if(wall_kick_node, node, ' ', 'x'))
                                 {
                                     node_search_.push_back(wall_kick_node);
                                 }
@@ -1241,51 +1259,54 @@ namespace search_tspin
         }
         for (int r = 0; r < 4; ++r)
         {
-            TetrisNode const *best = nullptr;
-            size_t best_count = 0;
-            for (int y = 0; y < height; ++y)
-            {
-                for (int x = 0; x < width; ++x)
-                {
-                    TetrisNode const *candidate = t_box_[r][y][x];
-                    if (candidate == nullptr)
-                    {
-                        continue;
-                    }
-                    size_t count = 0;
-                    while (count < max_wall_kick && candidate->wall_kick_counterclockwise[count] != nullptr)
-                    {
-                        ++count;
-                    }
-                    if (count > best_count)
-                    {
-                        best_count = count;
-                        best = candidate;
-                    }
-                }
-            }
-            if (best == nullptr || best_count == 0)
+            TetrisOpertion const op = context_->get_opertion('T', static_cast<uint8_t>(r));
+            TetrisNode const *src_ref = context_->get('T', static_cast<int8_t>(width / 2), static_cast<int8_t>(height / 2), static_cast<uint8_t>(r));
+            if (src_ref == nullptr)
             {
                 return;
             }
-            TetrisNode const *const *tables[3] = { best->wall_kick_counterclockwise, best->wall_kick_clockwise, best->wall_kick_opposite };
+            bool (*rot_ops[3])(TetrisNode &, TetrisContext const *) = { op.rotate_counterclockwise, op.rotate_clockwise, op.rotate_opposite };
+            TetrisWallKickOpertion const *tables[3] = { &op.wall_kick_counterclockwise, &op.wall_kick_clockwise, &op.wall_kick_opposite };
+            uint8_t to_r[3] = { static_cast<uint8_t>(r), static_cast<uint8_t>(r), static_cast<uint8_t>(r) };
             for (int d = 0; d < 3; ++d)
             {
-                size_t count = 0;
-                for (size_t i = 0; i < max_wall_kick; ++i)
+                if (rot_ops[d] != nullptr)
                 {
-                    TetrisNode const *target = tables[d][i];
-                    if (target == nullptr)
+                    TetrisNode copy = *context_->generate('T');
+                    if (rot_ops[d](copy, context_))
                     {
-                        break;
+                        to_r[d] = copy.status.r;
                     }
-                    KickOffset &kick = t_kicks_[r][d][count];
-                    kick.dcol = static_cast<int8_t>(target->col - best->col);
-                    kick.drow = static_cast<int8_t>(target->row - best->row);
-                    kick.to = target->status.r;
-                    ++count;
                 }
-                t_kick_count_[r][d] = count;
+            }
+            for (int d = 0; d < 3; ++d)
+            {
+                size_t index = 0;
+                if (rot_ops[d] != nullptr)
+                {
+                    TetrisNode const *dst_ref = context_->get('T', static_cast<int8_t>(width / 2), static_cast<int8_t>(height / 2), to_r[d]);
+                    if (dst_ref == nullptr)
+                    {
+                        return;
+                    }
+                    t_kicks_[r][d][index].dcol = static_cast<int8_t>(dst_ref->col - src_ref->col);
+                    t_kicks_[r][d][index].drow = static_cast<int8_t>(dst_ref->row - src_ref->row);
+                    t_kicks_[r][d][index].to = to_r[d];
+                    ++index;
+                }
+                for (size_t i = 0; i < tables[d]->length && index < max_wall_kick; ++i)
+                {
+                    TetrisNode const *dst_ref = context_->get('T', static_cast<int8_t>(width / 2 + tables[d]->data[i].x), static_cast<int8_t>(height / 2 + tables[d]->data[i].y), to_r[d]);
+                    if (dst_ref == nullptr)
+                    {
+                        continue;
+                    }
+                    t_kicks_[r][d][index].dcol = static_cast<int8_t>(dst_ref->col - src_ref->col);
+                    t_kicks_[r][d][index].drow = static_cast<int8_t>(dst_ref->row - src_ref->row);
+                    t_kicks_[r][d][index].to = to_r[d];
+                    ++index;
+                }
+                t_kick_count_[r][d] = index;
             }
         }
         t_tables_valid_ = true;
@@ -1293,6 +1314,7 @@ namespace search_tspin
 
     std::vector<Search::TetrisNodeWithTSpinType> const *Search::search_t_bitboard(TetrisMap const &map, TetrisNode const *node, size_t depth)
     {
+        ++bitboard_executions_;
         land_point_cache_.clear();
         if (!t_tables_ready_)
         {
@@ -1317,7 +1339,7 @@ namespace search_tspin
         {
             return &land_point_cache_;
         }
-        int const max_y = std::min(height, start_y + 5);
+        int const max_y = height;
         uint64_t const band = max_y >= 64 ? ~0ull : ((1ull << max_y) - 1);
         for (int r = 0; r < 4; ++r)
         {
@@ -1390,7 +1412,8 @@ namespace search_tspin
             }
             for (int r = 0; r < 4; ++r)
             {
-                for (int d = 0; d < 3; ++d)
+                int const d_max = config_->allow_180 ? 3 : 2;
+                for (int d = 0; d < d_max; ++d)
                 {
                     size_t const kick_count = t_kick_count_[r][d];
                     if (kick_count == 0)
@@ -1423,7 +1446,18 @@ namespace search_tspin
                             {
                                 continue;
                             }
-                            t_rot_c_[to][tx] |= arrived;
+                            {
+                                uint64_t newly = arrived & ~t_rot_c_[to][tx];
+                                t_rot_c_[to][tx] |= arrived;
+                                while (newly != 0)
+                                {
+                                    int const ty = std::countr_zero(newly);
+                                    newly &= newly - 1;
+                                    t_rot_src_r_[to][tx][ty] = static_cast<uint8_t>(r);
+                                    t_rot_src_x_[to][tx][ty] = static_cast<uint8_t>(x);
+                                    t_rot_src_y_[to][tx][ty] = static_cast<uint8_t>(ty - kick.drow);
+                                }
+                            }
                             if (arrived & ~t_reach_c_[to][tx])
                             {
                                 t_reach_c_[to][tx] |= arrived;
@@ -1453,14 +1487,6 @@ namespace search_tspin
             }
         }
 
-        if (canonical_order_)
-        {
-            std::sort(land_point_cache_.begin(), land_point_cache_.end(),
-                [](TetrisNodeWithTSpinType const &left, TetrisNodeWithTSpinType const &right)
-                {
-                    return left->index_filtered < right->index_filtered;
-                });
-        }
         for (int r = 0; r < 4; ++r)
         {
             uint64_t const *const usable = t_usable_c_[r];
@@ -1479,39 +1505,48 @@ namespace search_tspin
                         continue;
                     }
                     TetrisNode const *last = nullptr;
-                    if (y + 1 < max_y && ((reach[x] >> (y + 1)) & 1))
+                    bool const was_rotated = ((rotated[x] >> y) & 1) != 0;
+                    if (was_rotated)
                     {
-                        last = t_box_[r][y + 1][x];
+                        uint8_t const src_r = t_rot_src_r_[r][x][y];
+                        uint8_t const src_x = t_rot_src_x_[r][x][y];
+                        uint8_t const src_y = t_rot_src_y_[r][x][y];
+                        if (src_y < m_tetris::max_height && src_x < 32)
+                        {
+                            last = t_box_[src_r][src_y][src_x];
+                        }
                     }
-                    else if (x + 1 < width && ((reach[x + 1] >> y) & 1))
+                    if (last == nullptr)
                     {
-                        last = t_box_[r][y][x + 1];
+                        if (y + 1 < max_y && ((reach[x] >> (y + 1)) & 1))
+                        {
+                            last = t_box_[r][y + 1][x];
+                        }
+                        else if (x + 1 < width && ((reach[x + 1] >> y) & 1))
+                        {
+                            last = t_box_[r][y][x + 1];
+                        }
+                        else if (x > 0 && ((reach[x - 1] >> y) & 1))
+                        {
+                            last = t_box_[r][y][x - 1];
+                        }
                     }
-                    else if (x > 0 && ((reach[x - 1] >> y) & 1))
-                    {
-                        last = t_box_[r][y][x - 1];
-                    }
+                    bool const is_start = r == start_r && y == start_y && x == start_x;
                     TetrisNodeWithTSpinType node_ex(landing);
                     node_ex.last = last;
                     node_ex.is_check = true;
-                    bool const was_rotated = ((rotated[x] >> y) & 1) != 0;
-                    bool const is_start = r == start_r && y == start_y && x == start_x;
-                    node_ex.is_last_rotate = was_rotated || is_start;
-                    (void)depth;
+                    node_ex.is_last_rotate = was_rotated || (is_start && depth == 0 && config_->last_rotate);
                     node_ex.is_ready = check_ready(map, landing);
                     node_ex.is_mini_ready = check_mini_ready(snap, node_ex);
                     land_point_cache_.push_back(node_ex);
                 }
             }
         }
-        if (canonical_order_)
-        {
-            std::sort(land_point_cache_.begin(), land_point_cache_.end(),
-                [](TetrisNodeWithTSpinType const &left, TetrisNodeWithTSpinType const &right)
-                {
-                    return left->index_filtered < right->index_filtered;
-                });
-        }
+        std::sort(land_point_cache_.begin(), land_point_cache_.end(),
+            [](TetrisNodeWithTSpinType const &left, TetrisNodeWithTSpinType const &right)
+            {
+                return left->index_filtered < right->index_filtered;
+            });
         return &land_point_cache_;
     }
 }

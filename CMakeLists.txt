@@ -112,3 +112,19 @@ add_executable(movegen_probe
     src/random.cpp
 )
 target_include_directories(movegen_probe PRIVATE src)
+
+add_executable(attach_test
+    src/attach_test.cpp
+    src/tetris_core.cpp
+    src/rule_toj.cpp
+    src/search_tspin.cpp
+    src/ai_zzz.cpp
+    src/integer_utils.cpp
+    src/random.cpp
+)
+target_include_directories(attach_test PRIVATE src)
+
+enable_testing()
+
+add_test(NAME attach_test COMMAND attach_test)
+add_test(NAME tetris_profile_cross_check COMMAND tetris_profile --moves 5 --iters 100 --seed 1 --maxdepth 6 --cross-check)

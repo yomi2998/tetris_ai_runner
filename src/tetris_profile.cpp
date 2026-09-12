@@ -26,10 +26,16 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <numeric>
 #include <print>
 #include <random>
 #include <string>
 #include <vector>
+
+#ifndef _WIN32
+#include <sys/resource.h>
+#define TETRIS_HAS_RUSAGE
+#endif
 
 namespace
 {
@@ -102,10 +108,9 @@ namespace
         bool hold = true;
         std::string param_file;
         bool quiet = false;
-        bool bitboard_t = false;
         bool trace = false;
         bool cross_check = false;
-        bool canonical_order = false;
+        bool tree_nodes = false;
         size_t iters = 0;   // >0 => iteration-based deterministic search
     };
 
@@ -132,10 +137,9 @@ namespace
             else if (a == "--no-hold") opt.hold = false;
             else if (a == "--param-file") opt.param_file = next(a);
             else if (a == "--iters") opt.iters = std::strtoull(next(a).c_str(), nullptr, 10);
-            else if (a == "--bitboard-t") opt.bitboard_t = true;
             else if (a == "--trace") opt.trace = true;
             else if (a == "--cross-check") opt.cross_check = true;
-            else if (a == "--canonical-order") opt.canonical_order = true;
+            else if (a == "--tree-nodes") opt.tree_nodes = true;
             else if (a == "--quiet") opt.quiet = true;
             else
             {
@@ -189,9 +193,7 @@ int main(int argc, char **argv)
     engine.search_config()->allow_d = true;
     engine.search_config()->is_20g = false;
     engine.search_config()->last_rotate = false;
-    engine.search()->use_bitboard_t(opt.bitboard_t);
     engine.search()->cross_check(opt.cross_check);
-    engine.search()->canonical_order(opt.canonical_order);
 
     engine.ai_config()->table = combo_table;
     engine.ai_config()->table_max = combo_table_max;
@@ -217,6 +219,7 @@ int main(int argc, char **argv)
     uint64_t game_digest = 1469598103934665603ull;
     std::vector<double> move_ms;
     std::vector<size_t> move_evals, move_gets, move_searches, move_nodes;
+    std::vector<size_t> move_treenodes;
 
     steady_clock::time_point t_total0 = steady_clock::now();
 
@@ -250,9 +253,13 @@ int main(int argc, char **argv)
         ProfiledSearch::reset();
 
         steady_clock::time_point t0 = steady_clock::now();
-        auto result = opt.iters > 0
-            ? engine.run_hold(map, engine.context()->generate(current), hold, true, next.data() + 1, opt.maxdepth, m_tetris::SearchBudget::by_iterations(opt.iters))
-            : engine.run_hold(map, engine.context()->generate(current), hold, true, next.data() + 1, opt.maxdepth, budget_ms);
+        auto result = opt.hold
+            ? (opt.iters > 0
+                ? engine.run_hold(map, engine.context()->generate(current), hold, true, next.data() + 1, opt.maxdepth, m_tetris::SearchBudget::by_iterations(opt.iters))
+                : engine.run_hold(map, engine.context()->generate(current), hold, true, next.data() + 1, opt.maxdepth, budget_ms))
+            : (opt.iters > 0
+                ? engine.run(map, engine.context()->generate(current), next.data() + 1, opt.maxdepth, m_tetris::SearchBudget::by_iterations(opt.iters))
+                : engine.run(map, engine.context()->generate(current), next.data() + 1, opt.maxdepth, budget_ms));
         steady_clock::time_point t1 = steady_clock::now();
         double elapsed_ms = duration<double, std::milli>(t1 - t0).count();
         if (opt.trace)
@@ -288,6 +295,10 @@ int main(int argc, char **argv)
         move_gets.push_back(ProfiledTOJ::gets);
         move_searches.push_back(ProfiledSearch::searches);
         move_nodes.push_back(nodes_alloc);
+        if (opt.tree_nodes)
+        {
+            move_treenodes.push_back(engine.tree_node_count());
+        }
 
         bool dead = false;
         size_t clear = 0;
@@ -382,6 +393,17 @@ int main(int argc, char **argv)
         total_searches += move_searches[i];
     }
 
+    if (opt.cross_check)
+    {
+        size_t comparisons = engine.search()->cross_check_count();
+        std::println("cross-check comparisons: {}", comparisons);
+        if (comparisons == 0)
+        {
+            std::println(stderr, "cross-check performed no comparisons");
+            return 1;
+        }
+    }
+
     if (opt.quiet)
     {
         std::println("{} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {} {} {} {} {:.0f} {:.0f} {:.0f} {}",
@@ -414,8 +436,32 @@ int main(int argc, char **argv)
     size_t node_sum = 0;
     for (size_t n : move_nodes) node_sum += n;
     std::println("tree node pool growth (new allocs): total {} | per move avg {:.1f}", node_sum, double(node_sum) / std::max<size_t>(1, move_nodes.size()));
+    if (opt.tree_nodes)
+    {
+        std::println("tree nodes: final {} | per move avg {:.1f} | max {}",
+            move_treenodes.empty() ? 0 : move_treenodes.back(),
+            double(std::accumulate(move_treenodes.begin(), move_treenodes.end(), size_t { 0 })) / std::max<size_t>(1, move_treenodes.size()),
+            move_treenodes.empty() ? 0 : *std::max_element(move_treenodes.begin(), move_treenodes.end()));
+    }
     std::println("engine memory usage: {} bytes ({:.1f} MB)",
         engine.memory_usage(), engine.memory_usage() / (1024.0 * 1024.0));
+#ifdef TETRIS_HAS_RUSAGE
+    struct rusage rss;
+    if (getrusage(RUSAGE_SELF, &rss) == 0)
+    {
+        std::println("process peak RSS: {} KB", rss.ru_maxrss);
+        std::println("page faults: minor {} major {}", rss.ru_minflt, rss.ru_majflt);
+    }
+#endif
+#ifdef TETRIS_TT_STATS
+    {
+        auto const &s = m_tetris::tt_global_stats;
+        std::println("TT probes {} hits {} ({:.1f}%) stores {} replacements {} ({:.1f}%)",
+            s.probes, s.hits, s.probes ? 100.0 * s.hits / s.probes : 0.0,
+            s.stores, s.replacements, s.stores ? 100.0 * s.replacements / s.stores : 0.0);
+        std::println("compactions {} max-copied {} tree-node-size {} B", s.compactions, s.compacted_max, sizeof(m_tetris::TetrisTreeNode<ai_zzz::TOJ::Status, ProfiledTOJ, ProfiledSearch>));
+    }
+#endif
     std::println("game stats: clears {}, attack {}, final roof {}, b2b {}, combo {}",
         total_clear, total_attack, map.roof, b2b, combo);
     std::println("game digest: {:016x}", game_digest);

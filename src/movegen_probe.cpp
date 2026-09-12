@@ -40,7 +40,6 @@ namespace
         bool is_20g = false;
         bool allow_nont_d = false;
         size_t sample = 4;
-        bool impl_bb = false;
     };
 
     struct CorpusMap
@@ -107,7 +106,6 @@ namespace
             else if (a == "--20g") opt.is_20g = true;
             else if (a == "--nont-d") opt.allow_nont_d = true;
             else if (a == "--sample") opt.sample = std::max<size_t>(1, std::strtoull(next(a).c_str(), nullptr, 10));
-            else if (a == "--impl-bb") opt.impl_bb = true;
             else
             {
                 std::println(stderr, "unknown option: {}", a);
@@ -322,7 +320,6 @@ int main(int argc, char **argv)
     search_tspin::Search probe;
     search_tspin::Search::Config config = *engine.search_config();
     probe.init(engine.context().get(), &config);
-    probe.use_bitboard_t(opt.impl_bb);
 
     std::vector<CorpusMap> corpus;
     if (!opt.corpus_in.empty())    {
@@ -443,6 +440,8 @@ int main(int argc, char **argv)
         std::fclose(out);
     }
 
+    std::println(stderr, "bitboard executions {} | bitboard T coverage {:.1f}% of {} T-route calls",
+        probe.bitboard_executions(), route_t != 0 ? 100.0 * probe.bitboard_executions() / route_t : 0.0, route_t);
     std::println(stderr, "calls {} | precomputed route {} ({:.1f}%) | bfs route {} ({:.1f}%) | T route {} ({:.1f}%) | empty results {}",
         calls,
         route_precomputed, 100.0 * double(route_precomputed) / double(calls),

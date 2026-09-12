@@ -82,7 +82,7 @@ namespace m_tetris
         {
             if(map.row[row + i - 1] == context->full())
             {
-                memmove(&map.row[row + i - 1], &map.row[row + i], (map.height - i) * sizeof(int));
+                memmove(&map.row[row + i - 1], &map.row[row + i], (map.height - row - i) * sizeof(int));
                 map.row[map.height - 1] = 0;
                 ++clear;
             }

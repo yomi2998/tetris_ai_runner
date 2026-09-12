@@ -75,21 +75,17 @@ namespace search_tspin
         std::vector<char> make_path(m_tetris::TetrisNode const *node, TetrisNodeWithTSpinType const &land_point, m_tetris::TetrisMap const &map);
         std::vector<TetrisNodeWithTSpinType> const *search(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth);
         TSpinType classify(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, bool last_rotate, size_t clear);
-        void use_bitboard_t(bool value)
-        {
-            bitboard_t_ = value;
-        }
-        bool bitboard_t() const
-        {
-            return bitboard_t_;
-        }
         void cross_check(bool value)
         {
             cross_check_ = value;
         }
-        void canonical_order(bool value)
+        size_t cross_check_count() const
         {
-            canonical_order_ = value;
+            return cross_check_count_;
+        }
+        size_t bitboard_executions() const
+        {
+            return bitboard_executions_;
         }
     private:
         struct KickOffset
@@ -114,9 +110,10 @@ namespace search_tspin
         int x_diff_, y_diff_;
         Config const *config_;
         m_tetris::TetrisContext const *context_;
-        bool bitboard_t_ = false;
         bool cross_check_ = false;
-        bool canonical_order_ = false;
+        bool cross_check_warned_ = false;
+        size_t cross_check_count_ = 0;
+        size_t bitboard_executions_ = 0;
         std::vector<TetrisNodeWithTSpinType> cross_check_buffer_;
         bool t_tables_ready_ = false;
         bool t_tables_valid_ = false;
@@ -124,6 +121,9 @@ namespace search_tspin
         uint64_t t_usable_c_[4][32] = {};
         uint64_t t_reach_c_[4][32] = {};
         uint64_t t_rot_c_[4][32] = {};
+        uint8_t t_rot_src_r_[4][32][m_tetris::max_height] = {};
+        uint8_t t_rot_src_x_[4][32][m_tetris::max_height] = {};
+        uint8_t t_rot_src_y_[4][32][m_tetris::max_height] = {};
         uint64_t t_temp_c_[32] = {};
         KickOffset t_kicks_[4][3][m_tetris::max_wall_kick] = {};
         size_t t_kick_count_[4][3] = {};
