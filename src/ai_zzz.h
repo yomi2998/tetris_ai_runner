@@ -225,15 +225,51 @@ namespace ai_zzz
             double tspin_3 = 4;
             double combo = 80;
             double ratio = 0;
+            double cover = 2;
+            double bump = 0.5;
+            double bump_sq = 0.15;
+            double well = 3;
+            std::array<double, 10> well_col = {
+                -0.03, -0.05, 0, 0.03, 0.06,
+                0.06, 0.03, 0, -0.05, -0.03,
+            };
+            std::array<double, 10> col_height = {
+                0.05, 0.05, 0, -0.05, -0.1,
+                -0.1, -0.05, 0, 0.05, 0.05,
+            };
+            double height_max = 0.2;
+            double height_half = 0.5;
+            double height_quarter = 1;
+            double parity = 0.05;
+            double well_use = 0.05;
+            double b2b_hold = 0.5;
+            double pc_like = 999;
+            double pc_attack = 6;
+            double cheese = 1;
+            double garb_dig = 0.5;
+            double garb_cancel = 1;
+            double v08_hole = 0;
+            double v08_well = 0;
+            double hole_high = 0.5;
+            double debt_ratio = 0.5;
+            double feed = 0.5;
+            double b2b_chain = 4;
+            double pc_next = 2;
         };
 
-        static constexpr size_t NUM_PARAMS = 29;
+        static constexpr size_t NUM_PARAMS = 71;
         static constexpr double kProductionDefaultTheta[NUM_PARAMS] = {
-            10.507166148, 7.539860726, 13.048099725, 13.388476179, 6.728747539, 9.476881786,
-            0.258534525, -0.108269503, 4.394241496, -4.892359035, 0.049148374, 1.586714505,
-            8.885878229, -0.006001836, -0.004336234, -2.021765056, -0.951446468, -1.145468832,
-            -1.515758227, -0.612910192, -0.476031978, 0.009596827, -0.399212013, -0.855819915,
-            -0.418779377, -0.454784178, -1.417493065, 1.050941751, 0.756272086,
+            10.443970269485416, 9.373513186121711, 12.962439145401284, 13.574406638200236, 6.476214003643634, 13.127765811816161,
+            0.2356306477456177, 0.031172098101847057, 8.24986828703141, -4.52407485928385, 0.010288919706495387, 2.861876469543665,
+            9.588034381093166, -0.005917958537625091, -0.0047953938693461205, -2.241064566608737, -0.7071617981714383, -0.9394139606084821,
+            -1.0261488540315091, -0.6841360238910571, 0.02525647680792852, 0.005775522207892112, -0.4211018147090898, -0.8037881582329601,
+            -0.7588763429975817, -0.5514266626147901, -0.9527062962470468, 1.5388267376187479, -0.11955543708991323,
+            2, 0.5, 0.15, 3,
+            -0.03, -0.05, 0, 0.03, 0.06, 0.06, 0.03, 0, -0.05, -0.03,
+            0.05, 0.05, 0, -0.05, -0.1, -0.1, -0.05, 0, 0.05, 0.05,
+            0.2, 0.5, 1, 0.05, 0.05, 0.5, 999, 6,
+            1, 0.5, 1, 0, 0,
+            0.5, 0.5, 0.5, 4, 2,
         };
 
         static void production_default_theta(double *out)
@@ -261,6 +297,24 @@ namespace ai_zzz
             out[24] = p.tspin_1;     out[25] = p.tspin_2;
             out[26] = p.tspin_3;     out[27] = p.combo;
             out[28] = p.ratio;
+            out[29] = p.cover;       out[30] = p.bump;
+            out[31] = p.bump_sq;     out[32] = p.well;
+            for (size_t i = 0; i < 10; ++i)
+            {
+                out[33 + i] = p.well_col[i];
+                out[43 + i] = p.col_height[i];
+            }
+            out[53] = p.height_max;  out[54] = p.height_half;
+            out[55] = p.height_quarter;
+            out[56] = p.parity;      out[57] = p.well_use;
+            out[58] = p.b2b_hold;    out[59] = p.pc_like;
+            out[60] = p.pc_attack;
+            out[61] = p.cheese;      out[62] = p.garb_dig;
+            out[63] = p.garb_cancel;
+            out[64] = p.v08_hole;    out[65] = p.v08_well;
+            out[66] = p.hole_high;   out[67] = p.debt_ratio;
+            out[68] = p.feed;        out[69] = p.b2b_chain;
+            out[70] = p.pc_next;
         }
 
         static void theta_to_param(double const *in, Param &p)
@@ -280,6 +334,24 @@ namespace ai_zzz
             p.tspin_1 = in[24];      p.tspin_2 = in[25];
             p.tspin_3 = in[26];      p.combo = in[27];
             p.ratio = in[28];
+            p.cover = in[29];        p.bump = in[30];
+            p.bump_sq = in[31];      p.well = in[32];
+            for (size_t i = 0; i < 10; ++i)
+            {
+                p.well_col[i] = in[33 + i];
+                p.col_height[i] = in[43 + i];
+            }
+            p.height_max = in[53];   p.height_half = in[54];
+            p.height_quarter = in[55];
+            p.parity = in[56];       p.well_use = in[57];
+            p.b2b_hold = in[58];     p.pc_like = in[59];
+            p.pc_attack = in[60];
+            p.cheese = in[61];       p.garb_dig = in[62];
+            p.garb_cancel = in[63];
+            p.v08_hole = in[64];     p.v08_well = in[65];
+            p.hole_high = in[66];    p.debt_ratio = in[67];
+            p.feed = in[68];         p.b2b_chain = in[69];
+            p.pc_next = in[70];
         }
 
         static void struct_defaults_theta(double *out)
@@ -315,6 +387,7 @@ namespace ai_zzz
             double value;
             int16_t t2_value;
             int16_t t3_value;
+            int16_t well_depth;
         };
         struct Status
         {
@@ -323,8 +396,11 @@ namespace ai_zzz
             int8_t under_attack;
             int8_t map_rise;
             int8_t b2b;
+            int8_t just_attacked = 0;
+            int8_t b2b_chain = 0;
             int16_t t2_value;
             int16_t t3_value;
+            double combo_debt = 0;
             double acc_value;
             double like;
             double value;

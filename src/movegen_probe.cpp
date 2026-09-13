@@ -203,6 +203,9 @@ namespace
             engine.status()->combo = 0;
             engine.status()->under_attack = 0;
             engine.status()->map_rise = 0;
+            engine.status()->combo_debt = 0;
+            engine.status()->just_attacked = 0;
+            engine.status()->b2b_chain = 0;
             engine.status()->b2b = 0;
             engine.status()->acc_value = 0;
             engine.status()->like = 0;

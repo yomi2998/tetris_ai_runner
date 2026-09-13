@@ -235,6 +235,9 @@ struct test_ai
         ai.status()->combo = combo;
         ai.status()->under_attack = recv_attack;
         ai.status()->map_rise = 0;
+        ai.status()->combo_debt = 0;
+        ai.status()->just_attacked = 0;
+        ai.status()->b2b_chain = 0;
         ai.status()->b2b = !!b2b;
         ai.status()->acc_value = 0;
         ai.status()->like = 0;

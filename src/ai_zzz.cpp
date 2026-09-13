@@ -547,7 +547,7 @@ namespace ai_zzz
 
     std::string TOJ::ai_name() const
     {
-        return "ZZZ TOJ v0.12";
+        return "ZZZ TOJ v0.13f";
     }
 
     void TOJ::Status::init_t_value(m_tetris::TetrisMap const &m, int16_t &t2_value_ref, int16_t &t3_value_ref, m_tetris::TetrisMap *out_map)
@@ -866,11 +866,53 @@ namespace ai_zzz
         } v;
         std::memset(&v, 0, sizeof v);
         int WideCount = t_map.width - 1;
+        uint32_t wmask = uint32_t(1 << t_map.width) - 1;
+        int cheese_v = 0;
+        int v08_hole_v = 0;
+        int v08_well_v = 0;
+        int hole_run[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        int well_run[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
         for (int y = t_map.roof - 1; y >= 0; --y)
         {
             v.LineCoverBits |= t_map.row[y];
             int LineHole = v.LineCoverBits ^ t_map.row[y];
+            uint32_t above = y + 1 < t_map.height ? t_map.row[y + 1] : 0;
+            uint32_t below = y > 0 ? t_map.row[y - 1] : wmask;
+            uint32_t enclosed = ~uint32_t(t_map.row[y]) & ((t_map.row[y] << 1) | 1u) & ((t_map.row[y] >> 1) | (wmask & ~(wmask >> 1))) & above & below & wmask;
+            cheese_v += zzz::BitCount(enclosed);
+            for (int x = 0; x < t_map.width; ++x)
+            {
+                if ((LineHole >> x) & 1)
+                {
+                    v08_hole_v += ++hole_run[x];
+                }
+                else
+                {
+                    hole_run[x] = 0;
+                }
+                bool well_now = false;
+                if (x == 0)
+                {
+                    well_now = (v.LineCoverBits & 3) == 2;
+                }
+                else if (x + 1 == t_map.width)
+                {
+                    well_now = ((v.LineCoverBits >> (t_map.width - 2)) & 3) == 1;
+                }
+                else
+                {
+                    well_now = ((v.LineCoverBits >> (x - 1)) & 7) == 5;
+                }
+                if (well_now)
+                {
+                    v08_well_v += ++well_run[x];
+                }
+                else
+                {
+                    well_run[x] = 0;
+                }
+            }
             if (LineHole != 0)
             {
                 v.HoleCount += zzz::BitCount(LineHole);
@@ -892,6 +934,88 @@ namespace ai_zzz
         }
         int side_roof = std::max({map.top[0], map.top[1], map.top[2], map.top[width_m1], map.top[width_m1 - 1], map.top[width_m1 - 2]});
         auto& p = config_->param;
+        int t_heights[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        for (int y = t_map.roof - 1; y >= 0; --y)
+        {
+            uint32_t bits = t_map.row[y];
+            while (bits != 0)
+            {
+                int x = std::countr_zero(bits);
+                bits &= bits - 1;
+                if (t_heights[x] == 0)
+                {
+                    t_heights[x] = y + 1;
+                }
+            }
+        }
+        int well_x = -1;
+        int well_depth = 0;
+        for (int x = 0; x < t_map.width; ++x)
+        {
+            int left = x == 0 ? t_map.height : t_heights[x - 1];
+            int right = x + 1 == t_map.width ? t_map.height : t_heights[x + 1];
+            if (t_heights[x] >= left || t_heights[x] >= right)
+            {
+                continue;
+            }
+            int depth = std::min(left, right) - t_heights[x];
+            if (depth > well_depth)
+            {
+                well_depth = std::min(depth, 15);
+                well_x = x;
+            }
+        }
+        int bump = 0;
+        int bump_sq = 0;
+        for (int x = 0; x + 1 < t_map.width; ++x)
+        {
+            if (x == well_x || x + 1 == well_x)
+            {
+                continue;
+            }
+            int diff = t_heights[x] - t_heights[x + 1];
+            bump += std::abs(diff);
+            bump_sq += diff * diff;
+        }
+        int covered = 0;
+        int hole_high_v = 0;
+        int min_h = t_heights[0];
+        for (int x = 1; x < t_map.width; ++x)
+        {
+            min_h = std::min(min_h, t_heights[x]);
+        }
+        for (int x = 0; x < t_map.width; ++x)
+        {
+            int filled = 0;
+            for (int y = t_heights[x] - 1; y >= 0; --y)
+            {
+                if ((t_map.row[y] >> x) & 1)
+                {
+                    ++filled;
+                }
+                else
+                {
+                    covered += std::min(6, filled);
+                    if (y >= min_h)
+                    {
+                        hole_high_v += y - min_h + 1;
+                    }
+                }
+            }
+        }
+        int parity_v = 0;
+        int height_max = 0;
+        double col_height_sum = 0;
+        for (int x = 0; x < t_map.width; ++x)
+        {
+            parity_v += x % 2 == 0 ? t_heights[x] : -t_heights[x];
+            height_max = std::max(height_max, t_heights[x]);
+            col_height_sum += t_heights[x] * p.col_height[x];
+        }
+        parity_v = std::abs(parity_v);
+        int height_excess_half = std::max(0, height_max - 10);
+        int height_excess_quarter = std::max(0, height_max - 15);
+        result.well_depth = static_cast<int16_t>(well_depth);
         result.value = (0.
             - side_roof * p.roof
             - ColTrans * p.col_trans
@@ -902,6 +1026,21 @@ namespace ai_zzz
             + v.Wide[2] * p.wide_2
             + v.Wide[3] * p.wide_3
             + v.Wide[4] * p.wide_4
+            - covered * p.cover
+            - bump * p.bump
+            - bump_sq * p.bump_sq
+            + well_depth * p.well
+            + (well_depth > 0 ? p.well_col[well_x] : 0.)
+            - height_max * p.height_max
+            - height_excess_half * p.height_half
+            - height_excess_quarter * p.height_quarter
+            - parity_v * p.parity
+            + col_height_sum
+            - cheese_v * p.cheese
+            - v08_hole_v * p.v08_hole
+            - v08_well_v * p.v08_well
+            - hole_high_v * p.hole_high
+            + (map.count % 10 == 6 && map.count <= 36 && map.roof <= 4 ? 10. * p.pc_next : 0.)
             );
         return result;
     }
@@ -952,6 +1091,15 @@ namespace ai_zzz
                 }
                 result.under_attack = 0;
             }
+            if (status.combo_debt != 0)
+            {
+                update_like(status.combo_debt);
+                result.combo_debt = 0;
+            }
+            if (status.just_attacked)
+            {
+                update_like(-p.feed);
+            }
             update_like((node->status.t == 'I') * p.waste_i);
             update_like((node->status.t == 'T') * p.waste_t);
             break;
@@ -971,10 +1119,16 @@ namespace ai_zzz
             {
                 update_like((node->status.t == 'I') * p.waste_i);
                 update_like((node->status.t == 'T') * p.waste_t);
-                update_like(p.clear_1);
+                update_like(p.clear_1 * (1 - p.debt_ratio));
+                result.combo_debt += p.clear_1 * p.debt_ratio;
+                result.b2b_chain = 0;
             }
             attack += get_combo_attack(++result.combo);
             result.b2b = node.type != TSpinType::None;
+            if (node.type != TSpinType::None)
+            {
+                result.b2b_chain = status.b2b ? status.b2b_chain + 1 : 1;
+            }
             break;
         case 2:
             if (node.type != TSpinType::None)
@@ -982,6 +1136,7 @@ namespace ai_zzz
                 attack += 4 + status.b2b;
                 result.b2b = true;
                 update_like(p.tspin_2);
+                result.b2b_chain = status.b2b ? status.b2b_chain + 1 : 1;
                 t_attack = 1;
             }
             else
@@ -990,7 +1145,9 @@ namespace ai_zzz
                 result.b2b = false;
                 update_like((node->status.t == 'I') * p.waste_i);
                 update_like((node->status.t == 'T') * p.waste_t);
-                update_like(p.clear_2);
+                update_like(p.clear_2 * (1 - p.debt_ratio));
+                result.combo_debt += p.clear_2 * p.debt_ratio;
+                result.b2b_chain = 0;
             }
             attack += get_combo_attack(++result.combo);
             break;
@@ -1000,6 +1157,7 @@ namespace ai_zzz
                 attack = 6 + status.b2b * 2;
                 result.b2b = true;
                 update_like(p.tspin_3);
+                result.b2b_chain = status.b2b ? status.b2b_chain + 1 : 1;
                 t_attack = 1;
             }
             else
@@ -1007,7 +1165,9 @@ namespace ai_zzz
                 attack += 2;
                 result.b2b = false;
                 update_like((node->status.t == 'I') * p.waste_i);
-                update_like(p.clear_3);
+                update_like(p.clear_3 * (1 - p.debt_ratio));
+                result.combo_debt += p.clear_3 * p.debt_ratio;
+                result.b2b_chain = 0;
             }
             attack += get_combo_attack(++result.combo);
             break;
@@ -1015,6 +1175,7 @@ namespace ai_zzz
             result.b2b = true;
             attack = get_combo_attack(++result.combo) + 4 + status.b2b;
             update_like(p.clear_4);
+            result.b2b_chain = status.b2b ? status.b2b_chain + 1 : 1;
             break;
         }
         result.under_attack = std::max(0, result.under_attack - attack);
@@ -1033,6 +1194,21 @@ namespace ai_zzz
                 }
             }
             return 13;
+        }();
+        int i_expect = [=]()->int
+        {
+            if (env.hold == 'I')
+            {
+                return 0;
+            }
+            for (size_t i = 0; i < env.length; ++i)
+            {
+                if (env.next[i] == 'I')
+                {
+                    return static_cast<int>(i);
+                }
+            }
+            return 6;
         }();
         switch (env.hold)
         {
@@ -1057,9 +1233,10 @@ namespace ai_zzz
         }
         if (map.count == 0 && result.map_rise == 0)
         {
-            like += 999;
-            attack += 6;
+            like += p.pc_like;
+            attack += static_cast<int>(p.pc_attack);
         }
+        result.just_attacked = attack > 0 ? 1 : 0;
         double field = eval_result.value * double(40 - config_safe) / 20;
         double t_like = 0;
         double t_dislike = 0;
@@ -1087,9 +1264,13 @@ namespace ai_zzz
         result.t2_value = eval_result.t2_value;
         result.t3_value = eval_result.t3_value;
         result.acc_value += (0
-            + attack * (config_safe + 16) * p.attack
+            + attack * (config_safe + 16) * p.attack * (status.under_attack > 0 ? p.garb_cancel : 1.)
             + get_combo_attack(result.combo) * result.combo * (100 - config_safe) * p.combo
             + (result.b2b - status.b2b) * (config_safe + 16) * p.b2b
+            + (clear == 0 && status.b2b ? double(config_safe + 8) * p.b2b_hold : 0.)
+            + (clear != 4 ? double(eval_result.well_depth) * std::max(0, 6 - i_expect) * double(config_safe + 8) * p.well_use : 0.)
+            + (result.map_rise > 0 && clear > 0 ? double(clear) * double(config_safe + 8) * p.garb_dig : 0.)
+            + (result.b2b_chain > 1 ? double(result.b2b_chain) * double(config_safe + 8) * p.b2b_chain : 0.)
             - t_dislike
             - dislike * config_safe * (config_safe + 4) * 4
             - result.death * 999999999.0
