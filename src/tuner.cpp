@@ -1292,7 +1292,7 @@ static void print_usage()
     std::println("  <step>             probe: mirrored step size in normalized coords (0.30)");
     std::println("");
     std::println("Files:");
-    std::println("  best_param.bin     validated incumbent / warm-start policy (29 doubles)");
+    std::println("  best_param.bin     validated incumbent / warm-start policy (71 doubles)");
     std::println("  current_param.bin  latest candidate, written every iteration");
     std::println("  tuner_data.bin     resumable ES checkpoint (with .bak)");
     std::println("");
