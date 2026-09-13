@@ -1,7 +1,6 @@
 
 #include <ctime>
 #include <cstring>
-#include <deque>
 #include <fstream>
 #include <thread>
 #include <iostream>
@@ -114,9 +113,10 @@ static double const CHALLENGE_PROMOTE_LB = 0.50;
 static double const CHALLENGE_ALPHA = 0.05;
 static int const CHALLENGE_TOTAL_LOOKS = CHALLENGE_MAX_PAIRS / CHALLENGE_PAIRS;
 
-static int const SIGNAL_WINDOW = 8;
-static double const SIGNAL_K = 0.75;
-static double const SIGNAL_EMA = 0.02;
+static int const SCOUT_AGE = 25;
+static int const RETRY_AGE = 38;
+static double const SCOUT_CONTINUE_P = 0.625;
+static double const SCOUT_RETRY_P = 0.5;
 
 static int const STALL_WINDOW = 200;
 static int const MAX_RESTART_LEVEL = 4;
@@ -1266,12 +1266,14 @@ static void print_usage()
     std::println("");
     std::println("Modes:");
     std::println("  (default)   Run the paired mirrored ES search from the current policy.");
-    std::println("              Iterates <iters> batches of <games> seat-swapped matches,");
-    std::println("              promoting to best_param.bin when a candidate clears the");
-    std::println("              incumbent challenge. A strong recent score window makes the");
-    std::println("              candidate challenge-eligible early; absent that signal the");
-    std::println("              challenge fires every 50 iterations. Checkpoints to");
-    std::println("              tuner_data.bin and resumes.");
+    std::println("              Iterates <iters> batches of <games> seat-swapped matches.");
+    std::println("              Each campaign (iteration span since promotion or restart)");
+    std::println("              runs a 4-pair scout challenge against the incumbent at age");
+    std::println("              25: a scout win rate of at least 0.625 continues into the");
+    std::println("              full promotion challenge (scout = look 1), a near miss");
+    std::println("              (at least 0.5) retries at age 38, and the regular fallback");
+    std::println("              challenge fires at age 50. Checkpoints to tuner_data.bin");
+    std::println("              and resumes.");
     std::println("  probe       Fixed-theta gradient probe: measures the parameter gradient at");
     std::println("              the current policy over <batches> batches of mirrored pairs.");
     std::println("  bench       Budget calibration: <pairs> seat-swapped pairs of iters-arm vs");
@@ -1573,9 +1575,7 @@ int main(int argc, char *argv[])
 
     auto start_time = std::chrono::steady_clock::now();
 
-    std::deque<double> signal_window;
-    double signal_mean = 0.0;
-    double signal_var = 0.0;
+    bool near_miss_pending = false;
 
     for (int k = resume_k; k < num_iters; ++k)
     {
@@ -1658,19 +1658,6 @@ int main(int argc, char *argv[])
         score /= q;
         avg_rounds /= 2 * q;
 
-        signal_window.push_back(score);
-        if (static_cast<int>(signal_window.size()) > SIGNAL_WINDOW)
-        {
-            signal_window.pop_front();
-        }
-        double const ema_prev = signal_mean;
-        signal_mean += SIGNAL_EMA * (score - signal_mean);
-        signal_var += SIGNAL_EMA * ((score - ema_prev) * (score - ema_prev) - signal_var);
-        if (signal_var < 0.0)
-        {
-            signal_var = 0.0;
-        }
-
         double dx[NUM_PARAMS] = { 0 };
         double grad_norm = 0;
         bool zero_gradient = true;
@@ -1712,40 +1699,27 @@ int main(int argc, char *argv[])
             theta[i] = x[i] * effective_scale[i];
         }
 
-        bool const due_challenge = (k + 1) % CHALLENGE_EVERY == 0;
-        bool early_challenge = false;
-        if (!due_challenge && static_cast<int>(signal_window.size()) >= SIGNAL_WINDOW && signal_var > 0.0)
+        int const campaign_age = restart_origin >= 0 ? k - restart_origin : k;
+        bool const fallback_challenge = campaign_age > 0 && campaign_age % CHALLENGE_EVERY == 0;
+        auto run_challenge_loop = [&](int start_pairs, double wins_equiv, int played, int start_look) -> bool
         {
-            double window_mean = 0.0;
-            for (double s : signal_window)
-            {
-                window_mean += s;
-            }
-            window_mean /= static_cast<double>(signal_window.size());
-            early_challenge = window_mean > signal_mean + SIGNAL_K * std::sqrt(signal_var / static_cast<double>(SIGNAL_WINDOW));
-        }
-        bool promoted = false;
-        if (due_challenge || early_challenge)
-        {
-            double wins_equiv = 0.0;
-            int played = 0;
-            int look = 0;
-            for (int pairs = 0; pairs < CHALLENGE_MAX_PAIRS; pairs += CHALLENGE_PAIRS)
+            int look = start_look;
+            for (int pairs = start_pairs; pairs < CHALLENGE_MAX_PAIRS; pairs += CHALLENGE_PAIRS)
             {
                 ++look;
-                double stage = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
-                                             view, view_mutex, view_index,
-                                             CHALLENGE_SEED_BASE
-                                                 + static_cast<uint64_t>(k + 1) * 0x9E3779B97F4A7C15ULL
-                                                 + static_cast<uint64_t>(pairs),
-                                             CHALLENGE_PAIRS);
+                double const stage = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
+                                                   view, view_mutex, view_index,
+                                                   CHALLENGE_SEED_BASE
+                                                       + static_cast<uint64_t>(k + 1) * 0x9E3779B97F4A7C15ULL
+                                                       + static_cast<uint64_t>(pairs),
+                                                   CHALLENGE_PAIRS);
                 wins_equiv += 2.0 * CHALLENGE_PAIRS * (1.0 + stage) / 2.0;
                 played += 2 * CHALLENGE_PAIRS;
                 double const z = stat_util::look_z(look, CHALLENGE_TOTAL_LOOKS - 1, CHALLENGE_ALPHA);
                 double const phat = wins_equiv / static_cast<double>(played);
                 double const p_lo = stat_util::wilson_lower_bound(wins_equiv, played, z);
-                std::println("[ES]   challenge{} @ iter {}: stage={:+.3f} (pairs {}..{}), games={}, win-equiv={:.1f}, win={:.1f}%, LB={:.1f}% (z={:.2f}, need > {:.0f}%)",
-                             early_challenge ? " (early)" : "", k, stage, pairs + 1, pairs + CHALLENGE_PAIRS, played,
+                std::println("[ES]   challenge look {} @ iter {}: stage={:+.3f} (pairs {}..{}), games={}, win-equiv={:.1f}, win={:.1f}%, LB={:.1f}% (z={:.2f}, need > {:.0f}%)",
+                             look, k, stage, pairs + 1, pairs + CHALLENGE_PAIRS, played,
                              wins_equiv, 100.0 * phat, 100.0 * p_lo, z, 100.0 * CHALLENGE_PROMOTE_LB);
                 if (p_lo > CHALLENGE_PROMOTE_LB)
                 {
@@ -1753,8 +1727,7 @@ int main(int argc, char *argv[])
                     durable_write_doubles("best_param.bin", best_theta, NUM_PARAMS);
                     std::println("[ES]   promoted candidate to best_param.bin ({} games, win={:.1f}%, LB={:.1f}%)",
                                  played, 100.0 * phat, 100.0 * p_lo);
-                    promoted = true;
-                    break;
+                    return true;
                 }
                 if (look < CHALLENGE_TOTAL_LOOKS)
                 {
@@ -1766,15 +1739,53 @@ int main(int argc, char *argv[])
                     {
                         std::println("[ES]   challenge stopped for futility after {} games (even winning all {} remaining games cannot promote)",
                                      played, remaining_games);
-                        break;
+                        return false;
                     }
                 }
             }
-            if (!promoted)
+            std::println("[ES]   challenge not promoted after {} games", played);
+            return false;
+        };
+        auto run_scout = [&](uint64_t scout_slot) -> double
+        {
+            double const stage = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
+                                               view, view_mutex, view_index,
+                                               CHALLENGE_SEED_BASE
+                                                   + static_cast<uint64_t>(k + 1) * 0x9E3779B97F4A7C15ULL
+                                                   + scout_slot,
+                                               CHALLENGE_PAIRS);
+            double const phat = (1.0 + stage) / 2.0;
+            std::println("[ES]   scout @ iter {} (age {}): win-equiv={:.1f}/{} -> {}",
+                         k, campaign_age, 8.0 * phat, 2 * CHALLENGE_PAIRS,
+                         phat >= SCOUT_CONTINUE_P ? "continue" : phat >= SCOUT_RETRY_P ? "near miss" : "stop");
+            return stage;
+        };
+        bool promoted = false;
+        if (fallback_challenge)
+        {
+            promoted = run_challenge_loop(0, 0.0, 0, 0);
+            near_miss_pending = false;
+        }
+        else if (campaign_age > 0 && campaign_age % CHALLENGE_EVERY == SCOUT_AGE)
+        {
+            double const scout_stage = run_scout(0);
+            if ((1.0 + scout_stage) / 2.0 >= SCOUT_CONTINUE_P)
             {
-                std::println("[ES]   challenge not promoted after {} games", played);
+                promoted = run_challenge_loop(CHALLENGE_PAIRS, 4.0 * (1.0 + scout_stage), 2 * CHALLENGE_PAIRS, 1);
             }
-            signal_window.clear();
+            else
+            {
+                near_miss_pending = (1.0 + scout_stage) / 2.0 >= SCOUT_RETRY_P;
+            }
+        }
+        else if (campaign_age > 0 && campaign_age % CHALLENGE_EVERY == RETRY_AGE && near_miss_pending)
+        {
+            near_miss_pending = false;
+            double const scout_stage = run_scout(0);
+            if ((1.0 + scout_stage) / 2.0 >= SCOUT_CONTINUE_P)
+            {
+                promoted = run_challenge_loop(CHALLENGE_PAIRS, 4.0 * (1.0 + scout_stage), 2 * CHALLENGE_PAIRS, 1);
+            }
         }
 
         if (promoted)
@@ -1782,6 +1793,7 @@ int main(int argc, char *argv[])
             stall_batches = 0;
             restarts = 0;
             restart_origin = k + 1;
+            near_miss_pending = false;
             compute_effective_scale(best_theta, effective_scale);
             for (size_t i = 0; i < NUM_PARAMS; ++i)
             {
@@ -1793,15 +1805,16 @@ int main(int argc, char *argv[])
             std::println("[ES]   new campaign: reset restart level, Adam, and schedule; sigma={:.3f}",
                          ES_PROMOTION_SIGMA);
         }
-        else if (due_challenge)
+        else if (fallback_challenge)
         {
             stall_batches += CHALLENGE_EVERY;
         }
-        if (!promoted && due_challenge
+        if (!promoted && fallback_challenge
             && stall_batches >= STALL_WINDOW)
         {
             restart_origin = k + 1;
             restarts = std::min(MAX_RESTART_LEVEL, restarts + 1);
+            near_miss_pending = false;
             compute_effective_scale(best_theta, effective_scale);
             for (size_t i = 0; i < NUM_PARAMS; ++i)
             {
@@ -1839,8 +1852,8 @@ int main(int argc, char *argv[])
 
         auto now = std::chrono::steady_clock::now();
         double sec = std::chrono::duration<double>(now - start_time).count();
-        std::println("[ES]   iter {:5d} | score={:+.3f} sd={:.3f} nz={}/{} | g={:.3f} dx={:.3f} | sigma={:.4f} | R={:.0f} D={} C={} CA={} | dInc={:.3f}/{:.4f} | {:.1f}s",
-                     k, score, reward_sd, nonzero_directions, q, grad_norm, dx_norm, es_sigma,
+        std::println("[ES]   iter {:5d} (age {}) | score={:+.3f} sd={:.3f} nz={}/{} | g={:.3f} dx={:.3f} | sigma={:.4f} | R={:.0f} D={} C={} CA={} | dInc={:.3f}/{:.4f} | {:.1f}s",
+                     k, campaign_age, score, reward_sd, nonzero_directions, q, grad_norm, dx_norm, es_sigma,
                      avg_rounds, deaths, capped_games, capped_apl_games,
                      dist_inc_norm, dist_inc_phys, sec);
         std::fflush(stdout);
