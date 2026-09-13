@@ -7,6 +7,9 @@
 #include <deque>
 #include <random>
 #include <thread>
+#include <atomic>
+#include <format>
+#include <semaphore>
 #include <fstream>
 #include <print>
 #include <nlohmann/json.hpp>
@@ -158,6 +161,7 @@ namespace
         int combo_table_max = 10;
         std::string telemetry_file;
         int big_attack_threshold = 4;
+        int threads = 0;         // concurrent games, 0 = hardware_concurrency
         std::string bot1, bot2;
     };
 
@@ -186,6 +190,7 @@ namespace
         cfg.seed = root.value("seed", cfg.seed);
         cfg.telemetry_file = root.value("telemetry", cfg.telemetry_file);
         cfg.big_attack_threshold = root.value("big_attack_threshold", cfg.big_attack_threshold);
+        cfg.threads = root.value("threads", cfg.threads);
         if (root.contains("view"))
         {
             nlohmann::json const &v = root["view"];
@@ -740,10 +745,14 @@ namespace
     }
 
     // ---------- match ----------
-    GameResult run_game(Player &p1, Player &p2, Config const &cfg)
+    GameResult run_game(Player &p1, Player &p2, Config const &cfg, std::counting_semaphore<> *permits = nullptr)
     {
         size_t round = 0;
         bool capped = false;
+        if (permits != nullptr)
+        {
+            permits->acquire();
+        }
         for (;;)
         {
             ++round;
@@ -773,6 +782,10 @@ namespace
             p2.send_attack -= min_attack;
             p1.under_attack(p2.send_attack);
             p2.under_attack(p1.send_attack);
+        }
+        if (permits != nullptr)
+        {
+            permits->release();
         }
         // winner: 1 = p1, 2 = p2, 0 = draw
         if (p1.dead && !p2.dead) return {2, WinnerReason::P2Survivor, capped, round};
@@ -804,11 +817,12 @@ namespace
             "p2_total_recovery_rounds,p2_max_recovery_rounds,p2_app,p2_apl\n");
     }
 
-    void write_telemetry_row(FILE *file, size_t game, GameResult const &result,
+    std::string write_telemetry_row(size_t game, GameResult const &result,
                              Player const &p1, Player const &p2, Bot const &bot1, Bot const &bot2,
                              Config const &cfg)
     {
-        std::fprintf(file,
+        char row[4096];
+        std::snprintf(row, sizeof row,
             "%zu,%u,%zu,%d,%d,%d,%d,%d,%s,%d,%zu,%s,%s,"
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%zu,%zu,%zu,%.17g,%.17g,"
             "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%zu,%zu,%zu,%.17g,%.17g\n",
@@ -823,6 +837,7 @@ namespace
             p2.total_receive_packets, p2.attack_packets, p2.big_attack_events, p2.big_attack_lines,
             p2.max_big_attack, p2.max_pending_attack, p2.recovery_completed, p2.incomplete_recovery_rounds(),
             p2.total_recovery_rounds, p2.max_recovery_rounds, p2.app(), p2.apl());
+        return row;
     }
 }
 
@@ -833,7 +848,7 @@ int main(int argc, char **argv)
         "  match <config>        - bots from player1/player2.dllplugin in config\n"
         "  match <bot1> <bot2>   - bots from args, config = match.cfg\n"
         "  match <bot1> <bot2> <config>\n"
-        "config (json): ft, delay, max_depth, pieces, seed, view, combo_table, telemetry, big_attack_threshold\n"
+        "config (json): ft, delay, max_depth, pieces, seed, view, combo_table, telemetry, big_attack_threshold, threads\n"
         "per-player (json): player1/player2 {{ dllplugin, level }}");
 
     Config cfg;
@@ -888,10 +903,10 @@ int main(int argc, char **argv)
     std::println("=== {} vs {} ===", bot1.name, bot2.name);
     std::println(
         "p1: {} level={}\np2: {} level={}\n"
-        "ft={} delay={} max_depth={} pieces={} seed={} view={}",
+        "ft={} delay={} max_depth={} pieces={} seed={} view={} threads={}",
         cfg.p1.plugin, cfg.p1.level,
         cfg.p2.plugin, cfg.p2.level,
-        cfg.ft, cfg.delay, cfg.max_depth, cfg.max_pieces, cfg.seed, static_cast<int>(cfg.view));
+        cfg.ft, cfg.delay, cfg.max_depth, cfg.max_pieces, cfg.seed, static_cast<int>(cfg.view), cfg.threads);
 
     FILE *telemetry = nullptr;
     if (!cfg.telemetry_file.empty())
@@ -913,39 +928,93 @@ int main(int argc, char **argv)
     }
     m_tetris::TetrisContext const *context = global_ai.context().get();
 
-    Player p1(&bot1, context, &cfg, cfg.p1, 0, cfg.seed);
-    Player p2(&bot2, context, &cfg, cfg.p2, 1, cfg.seed ^ 0x9e3779b9U);
+    int const hardware_threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    int threads = cfg.threads > 0 ? cfg.threads : hardware_threads;
+    if (cfg.view)
+    {
+        threads = 1;
+    }
+    size_t const max_in_flight = static_cast<size_t>(threads);
+    size_t const cpus = std::max(1u, std::thread::hardware_concurrency());
+    std::counting_semaphore<> permits(static_cast<int>(std::min<size_t>(cpus, 2 * max_in_flight)));
+
+    struct GameRecord
+    {
+        GameResult result;
+        std::string line;
+        std::string telemetry;
+    };
 
     int wins1 = 0, wins2 = 0, draws = 0, games = 0;
-    while (wins1 < cfg.ft && wins2 < cfg.ft)
+    size_t next_game_no = 1;
+    while (wins1 < cfg.ft && wins2 < cfg.ft && games < 10000)
     {
-        ++games;
-        p1.init();
-        p2.init();
-        GameResult const game_result = run_game(p1, p2, cfg);
-        if (telemetry != nullptr)
+        size_t const remaining = static_cast<size_t>(cfg.ft - wins1) + static_cast<size_t>(cfg.ft - wins2) - 1;
+        size_t const batch = std::min(max_in_flight, remaining);
+        size_t const first_game_no = next_game_no;
+        std::vector<GameRecord> records(batch);
+        std::atomic<size_t> next_job{ 0 };
+        auto worker = [&]()
         {
-            write_telemetry_row(telemetry, games, game_result, p1, p2, bot1, bot2, cfg);
-            std::fflush(telemetry);
-        }
-        std::println(
-            "game {}: {} vs {} -> {}  (pieces {}/{} lines {}/{} attack {}/{} apl {:.2f}/{:.2f} app {:.2f}/{:.2f})",
-            games, bot1.name, bot2.name,
-            game_result.winner == 1 ? "P1 WIN" : (game_result.winner == 2 ? "P2 WIN" : "draw"),
-            p1.total_block, p2.total_block, p1.total_clear, p2.total_clear,
-            p1.total_attack, p2.total_attack, p1.apl(), p2.apl(), p1.app(), p2.app());
-        if (game_result.winner == 1)
+            for (;;)
+            {
+                size_t const job = next_job.fetch_add(1);
+                if (job >= batch)
+                {
+                    return;
+                }
+                size_t const game_no = first_game_no + job;
+                unsigned const game_offset = 0x9E3779B9u * static_cast<unsigned>(game_no - 1);
+                Player p1(&bot1, context, &cfg, cfg.p1, static_cast<int>(2 * job), cfg.seed + game_offset);
+                Player p2(&bot2, context, &cfg, cfg.p2, static_cast<int>(2 * job + 1), (cfg.seed ^ 0x9e3779b9U) + game_offset);
+                p1.games_won = wins1;
+                p2.games_won = wins2;
+                GameResult const game_result = run_game(p1, p2, cfg, &permits);
+                auto &record = records[job];
+                record.result = game_result;
+                record.line = std::format(
+                    "game {}: {} vs {} -> {}  (pieces {}/{} lines {}/{} attack {}/{} apl {:.2f}/{:.2f} app {:.2f}/{:.2f})",
+                    game_no, bot1.name, bot2.name,
+                    game_result.winner == 1 ? "P1 WIN" : (game_result.winner == 2 ? "P2 WIN" : "draw"),
+                    p1.total_block, p2.total_block, p1.total_clear, p2.total_clear,
+                    p1.total_attack, p2.total_attack, p1.apl(), p2.apl(), p1.app(), p2.app());
+                if (telemetry != nullptr)
+                {
+                    record.telemetry = write_telemetry_row(game_no, game_result, p1, p2, bot1, bot2, cfg);
+                }
+            }
+        };
+        std::vector<std::thread> pool;
+        pool.reserve(batch);
+        for (size_t t = 0; t < batch; ++t)
         {
-            ++wins1;
-            ++p1.games_won;
+            pool.emplace_back(worker);
         }
-        else if (game_result.winner == 2)
+        for (auto &th : pool)
         {
-            ++wins2;
-            ++p2.games_won;
+            th.join();
         }
-        else ++draws;
-        if (games >= 10000) break;
+        for (size_t j = 0; j < batch && wins1 < cfg.ft && wins2 < cfg.ft; ++j)
+        {
+            ++games;
+            ++next_game_no;
+            GameRecord const &record = records[j];
+            std::println("{}", record.line);
+            if (telemetry != nullptr)
+            {
+                std::fputs(record.telemetry.c_str(), telemetry);
+                std::fflush(telemetry);
+            }
+            if (record.result.winner == 1)
+            {
+                ++wins1;
+            }
+            else if (record.result.winner == 2)
+            {
+                ++wins2;
+            }
+            else ++draws;
+        }
     }
 
     if (telemetry != nullptr)
