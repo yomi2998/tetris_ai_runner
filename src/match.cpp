@@ -745,10 +745,18 @@ namespace
     }
 
     // ---------- match ----------
+    struct RenderSlot
+    {
+        std::mutex lock;
+        bool claimed = false;
+    };
+    RenderSlot render_slot;
+
     GameResult run_game(Player &p1, Player &p2, Config const &cfg, std::counting_semaphore<> *permits = nullptr)
     {
         size_t round = 0;
         bool capped = false;
+        bool rendering = false;
         if (permits != nullptr)
         {
             permits->acquire();
@@ -762,7 +770,19 @@ namespace
             p2.prepare();
             if (cfg.view)
             {
-                view(p1, p2);
+                if (!rendering)
+                {
+                    std::lock_guard<std::mutex> guard(render_slot.lock);
+                    if (!render_slot.claimed)
+                    {
+                        render_slot.claimed = true;
+                        rendering = true;
+                    }
+                }
+                if (rendering)
+                {
+                    view(p1, p2);
+                }
             }
             std::thread t1([&p1] { p1.run(); });
             std::thread t2([&p2] { p2.run(); });
@@ -786,6 +806,11 @@ namespace
         if (permits != nullptr)
         {
             permits->release();
+        }
+        if (rendering)
+        {
+            std::lock_guard<std::mutex> guard(render_slot.lock);
+            render_slot.claimed = false;
         }
         // winner: 1 = p1, 2 = p2, 0 = draw
         if (p1.dead && !p2.dead) return {2, WinnerReason::P2Survivor, capped, round};
@@ -930,10 +955,6 @@ int main(int argc, char **argv)
 
     int const hardware_threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
     int threads = cfg.threads > 0 ? cfg.threads : hardware_threads;
-    if (cfg.view)
-    {
-        threads = 1;
-    }
     size_t const max_in_flight = static_cast<size_t>(threads);
     size_t const cpus = std::max(1u, std::thread::hardware_concurrency());
     std::counting_semaphore<> permits(static_cast<int>(std::min<size_t>(cpus, 2 * max_in_flight)));
