@@ -761,7 +761,7 @@ namespace m_tetris
         };
 
     public:
-        using LandPoint = typename element_traits<decltype(TetrisSearch().search(TetrisMap(), nullptr, 0))>::Element;
+        using LandPoint = typename element_traits<decltype(TetrisSearch().search(TetrisMap(), nullptr, 0, 0))>::Element;
         using Result = typename TetrisAIInfo<TetrisAI>::Result;
         using Status = typename TetrisAIInfo<TetrisAI>::Status;
     private:
@@ -1303,7 +1303,7 @@ namespace m_tetris
         typename Core::LandPoint identity;
         typename Core::Result result_storage = {};
         typename Core::Result const *result = nullptr;
-        size_t clear;
+        size_t clear = 0;
         TreeNodeStatus<TetrisAI, std::bool_constant<AIHasIterate<TetrisAI>>> status;
         TetrisTreeNode *parent;
         TetrisTreeNode *children;
@@ -1473,7 +1473,7 @@ namespace m_tetris
             if (node_flag.empty())
             {
                 node_flag.set(search_node);
-                for (auto land_point_node : *context->search->search(map, search_node, level))
+                for (auto land_point_node : *context->search->search(map, search_node, level, clear))
                 {
                     TetrisTreeNode *child = context->alloc(this);
                     Core::eval(context, map, land_point_node, child, level);
@@ -1494,7 +1494,7 @@ namespace m_tetris
                 }
                 children = nullptr;
                 num_children = 0;
-                for (auto land_point_node : *context->search->search(map, search_node, level))
+                for (auto land_point_node : *context->search->search(map, search_node, level, clear))
                 {
                     TetrisTreeNode *child;
                     auto find = old.find(land_point_node->status);
@@ -1533,7 +1533,7 @@ namespace m_tetris
                 {
                     node_flag.set(search_node, hold_node);
                     auto &uniq = context->uniq;
-                    for (auto land_point_node : *context->search->search(map, search_node, level))
+                    for (auto land_point_node : *context->search->search(map, search_node, level, clear))
                     {
                         TetrisTreeNode *child = context->alloc(this);
                         Core::eval(context, map, land_point_node, child, level);
@@ -1546,7 +1546,7 @@ namespace m_tetris
                     }
                     if (children != nullptr)
                     {
-                        for (auto land_point_node : *context->search->search(map, hold_node, level))
+                        for (auto land_point_node : *context->search->search(map, hold_node, level, clear))
                         {
                             if (uniq.find(land_point_node->status) != uniq.end())
                             {
@@ -1575,7 +1575,7 @@ namespace m_tetris
                     if (node_flag.check(hold_node, search_node))
                     {
                         node_flag.set(search_node, hold_node);
-                        for (auto land_point_node : *context->search->search(map, search_node, level))
+                        for (auto land_point_node : *context->search->search(map, search_node, level, clear))
                         {
                             auto find = old.find(land_point_node->status);
                             assert(find != old.end());
@@ -1611,7 +1611,7 @@ namespace m_tetris
                     {
                         node_flag.set(search_node, hold_node);
                         auto &uniq = context->uniq;
-                        for (auto land_point_node : *context->search->search(map, search_node, level))
+                        for (auto land_point_node : *context->search->search(map, search_node, level, clear))
                         {
                             TetrisTreeNode *child;
                             auto find = old.find(land_point_node->status);
@@ -1634,7 +1634,7 @@ namespace m_tetris
                         }
                         if (children != nullptr)
                         {
-                            for (auto land_point_node : *context->search->search(map, hold_node, level))
+                            for (auto land_point_node : *context->search->search(map, hold_node, level, clear))
                             {
                                 if (uniq.find(land_point_node->status) != uniq.end())
                                 {
@@ -1673,7 +1673,7 @@ namespace m_tetris
                 if (node_flag.empty())
                 {
                     node_flag.set(search_node, hold_node);
-                    for (auto land_point_node : *context->search->search(map, search_node, level))
+                    for (auto land_point_node : *context->search->search(map, search_node, level, clear))
                     {
                         TetrisTreeNode *child = context->alloc(this);
                         Core::eval(context, map, land_point_node, child, level);
@@ -1685,7 +1685,7 @@ namespace m_tetris
                     }
                     if (children != nullptr)
                     {
-                        for (auto land_point_node : *context->search->search(map, hold_node, level))
+                        for (auto land_point_node : *context->search->search(map, hold_node, level, clear))
                         {
                             TetrisTreeNode *child = context->alloc(this);
                             Core::eval(context, map, land_point_node, child, level);
@@ -1702,7 +1702,7 @@ namespace m_tetris
                     if (node_flag.check(hold_node, search_node))
                     {
                         node_flag.set(search_node, hold_node);
-                        if (!context->search->search(map, search_node, level)->empty())
+                        if (!context->search->search(map, search_node, level, clear)->empty())
                         {
                             for (auto it = children; it != nullptr; it = it->children_next)
                             {
@@ -1729,7 +1729,7 @@ namespace m_tetris
                         }
                         children = nullptr;
                         num_children = 0;
-                        for (auto land_point_node : *context->search->search(map, search_node, level))
+                        for (auto land_point_node : *context->search->search(map, search_node, level, clear))
                         {
                             TetrisTreeNode *child;
                             auto find = old.find(land_point_node->status);
@@ -1749,7 +1749,7 @@ namespace m_tetris
                             children = child;
                             ++num_children;
                         }
-                        for (auto land_point_node : *context->search->search(map, hold_node, level))
+                        for (auto land_point_node : *context->search->search(map, hold_node, level, clear))
                         {
                             TetrisTreeNode *child;
                             auto find = old.find(land_point_node->status);
@@ -1786,7 +1786,7 @@ namespace m_tetris
                 size_t max = context->engine->type_max();
                 for (size_t i = 0; i < max; ++i)
                 {
-                    for (auto land_point_node : *context->search->search(map, Core::template spawn_node<TetrisTreeNode>(context, context->engine->convert(i), clear, false, map, status.get_raw()), level))
+                    for (auto land_point_node : *context->search->search(map, Core::template spawn_node<TetrisTreeNode>(context, context->engine->convert(i), clear, false, map, status.get_raw()), level, clear))
                     {
                         TetrisTreeNode *child = context->alloc(this);
                         Core::eval(context, map, land_point_node, child, level);
@@ -1811,7 +1811,7 @@ namespace m_tetris
                 size_t max = context->engine->type_max();
                 for (size_t i = 0; i < max; ++i)
                 {
-                    for (auto land_point_node : *context->search->search(map, Core::template spawn_node<TetrisTreeNode>(context, context->engine->convert(i), clear, false, map, status.get_raw()), level))
+                    for (auto land_point_node : *context->search->search(map, Core::template spawn_node<TetrisTreeNode>(context, context->engine->convert(i), clear, false, map, status.get_raw()), level, clear))
                     {
                         TetrisTreeNode *child;
                         auto find = old.find(land_point_node->status);

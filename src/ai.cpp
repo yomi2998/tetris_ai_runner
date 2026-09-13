@@ -446,16 +446,16 @@ public:
             return std::vector<char>();
         }
     }
-    std::vector<m_tetris::TetrisNode const *> const *search(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth)
+    std::vector<m_tetris::TetrisNode const *> const *search(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth, size_t last_clear)
     {
         switch (*config_ptr)
         {
         case Config::Simple:
-            return simple_.search(map, node, depth);
+            return simple_.search(map, node, depth, last_clear);
         case Config::Simulate:
-            return simulate_.search(map, node, depth);
+            return simulate_.search(map, node, depth, last_clear);
         case Config::Path:
-            return path_.search(map, node, depth);
+            return path_.search(map, node, depth, last_clear);
         default:
             empty_.resize(1);
             empty_.front() = node->drop(map);

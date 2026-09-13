@@ -68,10 +68,10 @@ namespace
         {
             searches = 0;
         }
-        std::vector<TetrisNodeWithTSpinType> const *search(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth)
+        std::vector<TetrisNodeWithTSpinType> const *search(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth, size_t last_clear)
         {
             ++searches;
-            return search_tspin::Search::search(map, node, depth);
+            return search_tspin::Search::search(map, node, depth, last_clear);
         }
     };
     size_t ProfiledSearch::searches = 0;

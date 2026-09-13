@@ -73,7 +73,7 @@ namespace search_tspin
         };
         void init(m_tetris::TetrisContext const *context, Config const *config);
         std::vector<char> make_path(m_tetris::TetrisNode const *node, TetrisNodeWithTSpinType const &land_point, m_tetris::TetrisMap const &map);
-        std::vector<TetrisNodeWithTSpinType> const *search(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth);
+        std::vector<TetrisNodeWithTSpinType> const *search(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, size_t depth, size_t last_clear);
         TSpinType classify(m_tetris::TetrisMap const &map, m_tetris::TetrisNode const *node, bool last_rotate, size_t clear);
         void cross_check(bool value)
         {

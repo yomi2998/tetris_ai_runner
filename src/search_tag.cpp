@@ -159,7 +159,7 @@ namespace search_tag
         return std::vector<char>();
     }
 
-    std::vector<Search::TetrisNodeWithTSpinType> const *Search::search(TetrisMap const &map, TetrisNode const *node, size_t depth)
+    std::vector<Search::TetrisNodeWithTSpinType> const *Search::search(TetrisMap const &map, TetrisNode const *node, size_t depth, size_t)
     {
         land_point_cache_.clear();
         if(!node->check(map))

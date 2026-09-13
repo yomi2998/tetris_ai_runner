@@ -384,7 +384,7 @@ int main(int argc, char **argv)
                 bool const is_t = node->status.t == 'T';
                 bool const precomputed = !config.is_20g && node->land_point != nullptr && node->low >= map.roof && !config.allow_nont_d;
                 auto const t0 = std::chrono::steady_clock::now();
-                auto const *result = probe.search(map, node, depth);
+                auto const *result = probe.search(map, node, depth, 0);
                 auto const t1 = std::chrono::steady_clock::now();
                 double const ns = std::chrono::duration<double, std::nano>(t1 - t0).count();
                 if (is_t)

@@ -458,7 +458,7 @@ namespace search_tspin
         return std::vector<char>();
     }
 
-    std::vector<Search::TetrisNodeWithTSpinType> const *Search::search(TetrisMap const &map, TetrisNode const *node, size_t depth)
+    std::vector<Search::TetrisNodeWithTSpinType> const *Search::search(TetrisMap const &map, TetrisNode const *node, size_t depth, size_t last_clear)
     {
         land_point_cache_.clear();
         if (!node->check(map))
@@ -541,7 +541,7 @@ namespace search_tspin
             }
             return search_t_bitboard(map, node, depth);
         }
-        if (!is_20g && node->land_point != nullptr && node->low >= map.roof && !allow_nont_d)
+        if (!is_20g && node->land_point != nullptr && node->low >= map.roof && !allow_nont_d && last_clear == 0)
         {
             for (auto const *land_point_node : *node->land_point)
             {
