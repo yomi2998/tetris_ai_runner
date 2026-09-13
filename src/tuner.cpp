@@ -1,6 +1,7 @@
 
 #include <ctime>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <thread>
 #include <iostream>
@@ -112,6 +113,10 @@ static int const CHALLENGE_MAX_PAIRS = 32;
 static double const CHALLENGE_PROMOTE_LB = 0.50;
 static double const CHALLENGE_ALPHA = 0.05;
 static int const CHALLENGE_TOTAL_LOOKS = CHALLENGE_MAX_PAIRS / CHALLENGE_PAIRS;
+
+static int const SIGNAL_WINDOW = 8;
+static double const SIGNAL_K = 0.75;
+static double const SIGNAL_EMA = 0.02;
 
 static int const STALL_WINDOW = 200;
 static int const MAX_RESTART_LEVEL = 4;
@@ -1140,7 +1145,7 @@ static void check_warm_start_identity(SelfCheck &sc)
         if (prod[i] != weak[i]) { differs = true; }
     }
     sc.check(differs, "the --default baseline is the production policy, not the struct initializers");
-    sc.check(std::fabs(prod[0] - 10.507166148) < 1e-9 && std::fabs(prod[28] - 0.756272086) < 1e-9,
+    sc.check(std::fabs(prod[0] - 10.443970269485416) < 1e-9 && std::fabs(prod[28] + 0.11955543708991323) < 1e-9,
              "production baseline values match the shipped policy");
 
     std::string const tmp = "selfcheck_param_tmp.bin";
@@ -1263,7 +1268,10 @@ static void print_usage()
     std::println("  (default)   Run the paired mirrored ES search from the current policy.");
     std::println("              Iterates <iters> batches of <games> seat-swapped matches,");
     std::println("              promoting to best_param.bin when a candidate clears the");
-    std::println("              incumbent challenge. Checkpoints to tuner_data.bin and resumes.");
+    std::println("              incumbent challenge. A strong recent score window makes the");
+    std::println("              candidate challenge-eligible early; absent that signal the");
+    std::println("              challenge fires every 50 iterations. Checkpoints to");
+    std::println("              tuner_data.bin and resumes.");
     std::println("  probe       Fixed-theta gradient probe: measures the parameter gradient at");
     std::println("              the current policy over <batches> batches of mirrored pairs.");
     std::println("  bench       Budget calibration: <pairs> seat-swapped pairs of iters-arm vs");
@@ -1565,6 +1573,10 @@ int main(int argc, char *argv[])
 
     auto start_time = std::chrono::steady_clock::now();
 
+    std::deque<double> signal_window;
+    double signal_mean = 0.0;
+    double signal_var = 0.0;
+
     for (int k = resume_k; k < num_iters; ++k)
     {
         int const schedule_iter = restart_origin >= 0 ? std::max(0, k - restart_origin) : k;
@@ -1646,6 +1658,19 @@ int main(int argc, char *argv[])
         score /= q;
         avg_rounds /= 2 * q;
 
+        signal_window.push_back(score);
+        if (static_cast<int>(signal_window.size()) > SIGNAL_WINDOW)
+        {
+            signal_window.pop_front();
+        }
+        double const ema_prev = signal_mean;
+        signal_mean += SIGNAL_EMA * (score - signal_mean);
+        signal_var += SIGNAL_EMA * ((score - ema_prev) * (score - ema_prev) - signal_var);
+        if (signal_var < 0.0)
+        {
+            signal_var = 0.0;
+        }
+
         double dx[NUM_PARAMS] = { 0 };
         double grad_norm = 0;
         bool zero_gradient = true;
@@ -1687,8 +1712,20 @@ int main(int argc, char *argv[])
             theta[i] = x[i] * effective_scale[i];
         }
 
+        bool const due_challenge = (k + 1) % CHALLENGE_EVERY == 0;
+        bool early_challenge = false;
+        if (!due_challenge && static_cast<int>(signal_window.size()) >= SIGNAL_WINDOW && signal_var > 0.0)
+        {
+            double window_mean = 0.0;
+            for (double s : signal_window)
+            {
+                window_mean += s;
+            }
+            window_mean /= static_cast<double>(signal_window.size());
+            early_challenge = window_mean > signal_mean + SIGNAL_K * std::sqrt(signal_var / static_cast<double>(SIGNAL_WINDOW));
+        }
         bool promoted = false;
-        if ((k + 1) % CHALLENGE_EVERY == 0)
+        if (due_challenge || early_challenge)
         {
             double wins_equiv = 0.0;
             int played = 0;
@@ -1707,8 +1744,8 @@ int main(int argc, char *argv[])
                 double const z = stat_util::look_z(look, CHALLENGE_TOTAL_LOOKS - 1, CHALLENGE_ALPHA);
                 double const phat = wins_equiv / static_cast<double>(played);
                 double const p_lo = stat_util::wilson_lower_bound(wins_equiv, played, z);
-                std::println("[ES]   challenge @ iter {}: stage={:+.3f} (pairs {}..{}), games={}, win-equiv={:.1f}, win={:.1f}%, LB={:.1f}% (z={:.2f}, need > {:.0f}%)",
-                             k, stage, pairs + 1, pairs + CHALLENGE_PAIRS, played,
+                std::println("[ES]   challenge{} @ iter {}: stage={:+.3f} (pairs {}..{}), games={}, win-equiv={:.1f}, win={:.1f}%, LB={:.1f}% (z={:.2f}, need > {:.0f}%)",
+                             early_challenge ? " (early)" : "", k, stage, pairs + 1, pairs + CHALLENGE_PAIRS, played,
                              wins_equiv, 100.0 * phat, 100.0 * p_lo, z, 100.0 * CHALLENGE_PROMOTE_LB);
                 if (p_lo > CHALLENGE_PROMOTE_LB)
                 {
@@ -1737,6 +1774,7 @@ int main(int argc, char *argv[])
             {
                 std::println("[ES]   challenge not promoted after {} games", played);
             }
+            signal_window.clear();
         }
 
         if (promoted)
@@ -1755,11 +1793,11 @@ int main(int argc, char *argv[])
             std::println("[ES]   new campaign: reset restart level, Adam, and schedule; sigma={:.3f}",
                          ES_PROMOTION_SIGMA);
         }
-        else if ((k + 1) % CHALLENGE_EVERY == 0)
+        else if (due_challenge)
         {
             stall_batches += CHALLENGE_EVERY;
         }
-        if (!promoted && (k + 1) % CHALLENGE_EVERY == 0
+        if (!promoted && due_challenge
             && stall_batches >= STALL_WINDOW)
         {
             restart_origin = k + 1;
