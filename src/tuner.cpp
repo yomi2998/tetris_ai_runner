@@ -46,21 +46,6 @@ namespace stat_util
         return 0.5 * (lo + hi);
     }
 
-    inline double wilson_lower_bound(double wins_equiv, int games, double z)
-    {
-        if (games <= 0 || wins_equiv < 0.0)
-        {
-            return 0.0;
-        }
-        double const n = static_cast<double>(games);
-        double const phat = std::min(1.0, std::max(0.0, wins_equiv / n));
-        double const denom = 1.0 + z * z / n;
-        double const mid = phat + z * z / (2.0 * n);
-        double const margin = z * std::sqrt(std::max(0.0, phat * (1.0 - phat)) / n
-                                            + z * z / (4.0 * n * n));
-        return (mid - margin) / denom;
-    }
-
     inline void wilson_interval(double wins_equiv, int games, double z, double &lo, double &hi)
     {
         lo = 0.0;
@@ -79,14 +64,20 @@ namespace stat_util
         hi = std::min(1.0, (mid + margin) / denom);
     }
 
-    inline double look_z(int look_index, int looks_before_final, double alpha_final)
+    inline double t95_multiplier(int df)
     {
-        constexpr double z_interim = 3.0;
-        if (look_index > looks_before_final)
+        switch (df)
         {
-            return normal_quantile_upper(alpha_final);
+        case 3: return 2.353;
+        case 7: return 1.895;
+        case 11: return 1.796;
+        case 15: return 1.753;
+        case 19: return 1.729;
+        case 23: return 1.714;
+        case 27: return 1.703;
+        case 31: return 1.696;
+        default: return Z_ONE_SIDED_95;
         }
-        return z_interim;
     }
 }
 
@@ -270,11 +261,18 @@ static void adam_update(double const *grad, int q, double es_sigma, int k, int s
     }
 }
 
-static double run_challenge(double const *candidate, double const *incumbent, int threads,
-                           int search_ms, int max_rounds,
-                           std::atomic<bool> &view, std::mutex &view_mutex,
-                           std::atomic<uint32_t> &view_index,
-                           uint64_t challenge_seed, int pairs)
+struct ChallengePairs
+{
+    int pairs = 0;
+    double sum = 0.0;
+    double sumsq = 0.0;
+};
+
+static ChallengePairs run_challenge(double const *candidate, double const *incumbent, int threads,
+                                    int search_ms, int max_rounds,
+                                    std::atomic<bool> &view, std::mutex &view_mutex,
+                                    std::atomic<uint32_t> &view_index,
+                                    uint64_t challenge_seed, int pairs)
 {
     std::vector<MatchJob> jobs;
     jobs.reserve(2 * pairs);
@@ -299,12 +297,27 @@ static double run_challenge(double const *candidate, double const *incumbent, in
         jobs.push_back(b);
     }
     auto out = run_batch(jobs, threads, search_ms, max_rounds, view, view_mutex, view_index);
-    double score = 0;
+    ChallengePairs result;
+    result.pairs = pairs;
     for (int j = 0; j < pairs; ++j)
     {
-        score += paired_reward(out[2 * j], out[2 * j + 1]);
+        double const v = 0.5 * (1.0 + paired_reward(out[2 * j], out[2 * j + 1]));
+        result.sum += v;
+        result.sumsq += v * v;
     }
-    return score / pairs;
+    return result;
+}
+
+static double challenge_lower_bound(int pairs, double sum, double sumsq, bool final_look)
+{
+    if (pairs < 2)
+    {
+        return 0.0;
+    }
+    double const mean = sum / pairs;
+    double const var = std::max(0.0, (sumsq - sum * sum / pairs) / (pairs - 1));
+    double const mult = final_look ? stat_util::t95_multiplier(pairs - 1) : 3.0;
+    return mean - mult * std::sqrt(var / pairs);
 }
 
 static uint64_t checkpoint_checksum(void const *data, size_t bytes)
@@ -966,32 +979,42 @@ struct SelfCheck
 
 static void check_promotion_statistics(SelfCheck &sc)
 {
-    double const z_final = stat_util::normal_quantile_upper(CHALLENGE_ALPHA);
-    sc.check(std::fabs(z_final - stat_util::Z_ONE_SIDED_95) < 1e-4,
-             "final-look z equals the one-sided 95% quantile");
-    sc.check(stat_util::look_z(1, CHALLENGE_TOTAL_LOOKS - 1, CHALLENGE_ALPHA) > z_final,
+    sc.check(stat_util::t95_multiplier(3) > stat_util::t95_multiplier(31)
+                 && stat_util::t95_multiplier(31) > stat_util::Z_ONE_SIDED_95,
+             "t multipliers shrink toward the normal quantile as pairs grow");
+
+    ChallengePairs const sweep{4, 4.0, 4.0};
+    double const lb_sweep = challenge_lower_bound(sweep.pairs, sweep.sum, sweep.sumsq, true);
+    sc.check(lb_sweep > CHALLENGE_PROMOTE_LB,
+             "a clean 4-pair sweep clears the promotion bar (zero variance)");
+
+    ChallengePairs const all_splits{4, 2.0, 1.0};
+    double const lb_splits = challenge_lower_bound(all_splits.pairs, all_splits.sum, all_splits.sumsq, true);
+    sc.check(lb_splits <= CHALLENGE_PROMOTE_LB,
+             "an all-split challenge is exactly even and does not promote");
+
+    ChallengePairs const noisy_even{4, 2.0, 1.5};
+    double const lb_noisy = challenge_lower_bound(noisy_even.pairs, noisy_even.sum, noisy_even.sumsq, true);
+    sc.check(lb_noisy < CHALLENGE_PROMOTE_LB,
+             "a noisy even record does not promote");
+
+    ChallengePairs const doubled_noisy_even{8, 4.0, 3.0};
+    double const lb_doubled = challenge_lower_bound(doubled_noisy_even.pairs, doubled_noisy_even.sum, doubled_noisy_even.sumsq, true);
+    double const lb_interim = challenge_lower_bound(doubled_noisy_even.pairs, doubled_noisy_even.sum, doubled_noisy_even.sumsq, false);
+    sc.check(lb_doubled < CHALLENGE_PROMOTE_LB,
+             "a noisy even record at 8 pairs does not promote");
+    sc.check(lb_interim < lb_doubled,
              "interim looks are stricter than the final look");
-    sc.check(stat_util::look_z(CHALLENGE_TOTAL_LOOKS, CHALLENGE_TOTAL_LOOKS - 1, CHALLENGE_ALPHA) == z_final,
-             "final look uses the nominal alpha");
 
-    double const lb_perfect = stat_util::wilson_lower_bound(64, 64, z_final);
-    double const lb_63 = stat_util::wilson_lower_bound(63, 64, z_final);
-    double const lb_coin = stat_util::wilson_lower_bound(32, 64, z_final);
-    sc.check(lb_63 < 0.95, "a 63-1 record really cannot clear a 95% bound (the old rule)");
-    sc.check(lb_perfect > CHALLENGE_PROMOTE_LB && lb_63 > CHALLENGE_PROMOTE_LB,
-             "dominant candidates clear the 50% promotion bar at the budget ceiling");
-    sc.check(lb_coin < CHALLENGE_PROMOTE_LB, "an exactly-equal candidate is not promoted at the ceiling");
+    ChallengePairs const dominant{8, 7.0, 6.5};
+    double const lb_dominant = challenge_lower_bound(dominant.pairs, dominant.sum, dominant.sumsq, true);
+    sc.check(lb_dominant > CHALLENGE_PROMOTE_LB,
+             "a dominant record with one split at 8 pairs promotes");
 
-    double const lb_interim = stat_util::wilson_lower_bound(8, 8, stat_util::look_z(1, 7, CHALLENGE_ALPHA));
-    sc.check(lb_interim < CHALLENGE_PROMOTE_LB, "8-0 at the first interim look does not promote");
-    double const lb_interim2 = stat_util::wilson_lower_bound(15.5, 16, stat_util::look_z(2, 7, CHALLENGE_ALPHA));
-    sc.check(lb_interim2 > CHALLENGE_PROMOTE_LB, "a 15.5-0.5 interim lead does promote");
-    sc.check(stat_util::wilson_lower_bound(0, 0, z_final) == 0.0, "zero-game bound is degenerate-safe");
-
-    double const impossible_final = stat_util::wilson_lower_bound(18 + 0, 64, z_final);
-    double const still_possible = stat_util::wilson_lower_bound(4 + 56, 64, z_final);
-    sc.check(impossible_final < CHALLENGE_PROMOTE_LB && still_possible > CHALLENGE_PROMOTE_LB,
-             "challenge futility bound distinguishes impossible and recoverable records");
+    sc.check(challenge_lower_bound(32, 10.0, 100.0 / 32.0, true) <= CHALLENGE_PROMOTE_LB,
+             "a hopeless record cannot be rescued by playing on");
+    sc.check(challenge_lower_bound(32, 28.5, 28.5 * 28.5 / 32.0, true) > CHALLENGE_PROMOTE_LB,
+             "a trailing candidate can still promote by sweeping the remainder");
 }
 
 static void check_crn_event_scope(SelfCheck &sc)
@@ -1701,90 +1724,92 @@ int main(int argc, char *argv[])
 
         int const campaign_age = restart_origin >= 0 ? k - restart_origin : k;
         bool const fallback_challenge = campaign_age > 0 && campaign_age % CHALLENGE_EVERY == 0;
-        auto run_challenge_loop = [&](int start_pairs, double wins_equiv, int played, int start_look) -> bool
+        auto run_challenge_loop = [&](int start_pairs, ChallengePairs acc) -> bool
         {
-            int look = start_look;
+            int look = start_pairs / CHALLENGE_PAIRS;
             for (int pairs = start_pairs; pairs < CHALLENGE_MAX_PAIRS; pairs += CHALLENGE_PAIRS)
             {
                 ++look;
-                double const stage = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
-                                                   view, view_mutex, view_index,
-                                                   CHALLENGE_SEED_BASE
-                                                       + static_cast<uint64_t>(k + 1) * 0x9E3779B97F4A7C15ULL
-                                                       + static_cast<uint64_t>(pairs),
-                                                   CHALLENGE_PAIRS);
-                wins_equiv += 2.0 * CHALLENGE_PAIRS * (1.0 + stage) / 2.0;
-                played += 2 * CHALLENGE_PAIRS;
-                double const z = stat_util::look_z(look, CHALLENGE_TOTAL_LOOKS - 1, CHALLENGE_ALPHA);
-                double const phat = wins_equiv / static_cast<double>(played);
-                double const p_lo = stat_util::wilson_lower_bound(wins_equiv, played, z);
-                std::println("[ES]   challenge look {} @ iter {}: stage={:+.3f} (pairs {}..{}), games={}, win-equiv={:.1f}, win={:.1f}%, LB={:.1f}% (z={:.2f}, need > {:.0f}%)",
-                             look, k, stage, pairs + 1, pairs + CHALLENGE_PAIRS, played,
-                             wins_equiv, 100.0 * phat, 100.0 * p_lo, z, 100.0 * CHALLENGE_PROMOTE_LB);
-                if (p_lo > CHALLENGE_PROMOTE_LB)
+                ChallengePairs const st = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
+                                                        view, view_mutex, view_index,
+                                                        CHALLENGE_SEED_BASE
+                                                            + static_cast<uint64_t>(k + 1) * 0x9E3779B97F4A7C15ULL
+                                                            + static_cast<uint64_t>(pairs),
+                                                        CHALLENGE_PAIRS);
+                acc.pairs += st.pairs;
+                acc.sum += st.sum;
+                acc.sumsq += st.sumsq;
+                bool const final_look = look >= CHALLENGE_TOTAL_LOOKS;
+                double const mean = acc.sum / acc.pairs;
+                double const lb = challenge_lower_bound(acc.pairs, acc.sum, acc.sumsq, final_look);
+                std::println("[ES]   challenge look {} @ iter {}: pairs {}/{} ({} games), pair-mean={:.1f}%, LB={:.1f}% (need > {:.0f}%{})",
+                             look, k, acc.pairs, CHALLENGE_MAX_PAIRS, 2 * acc.pairs,
+                             100.0 * mean, 100.0 * lb, 100.0 * CHALLENGE_PROMOTE_LB,
+                             final_look ? ", final look" : ", interim");
+                if (lb > CHALLENGE_PROMOTE_LB)
                 {
                     std::memcpy(best_theta, theta, sizeof(best_theta));
                     durable_write_doubles("best_param.bin", best_theta, NUM_PARAMS);
-                    std::println("[ES]   promoted candidate to best_param.bin ({} games, win={:.1f}%, LB={:.1f}%)",
-                                 played, 100.0 * phat, 100.0 * p_lo);
+                    std::println("[ES]   promoted candidate to best_param.bin ({} pairs, {} games, win={:.1f}%, LB={:.1f}%)",
+                                 acc.pairs, 2 * acc.pairs, 100.0 * mean, 100.0 * lb);
                     return true;
                 }
-                if (look < CHALLENGE_TOTAL_LOOKS)
+                if (!final_look)
                 {
-                    int const remaining_games = 2 * (CHALLENGE_MAX_PAIRS - pairs - CHALLENGE_PAIRS);
-                    double const max_final_lb = stat_util::wilson_lower_bound(
-                        wins_equiv + remaining_games, played + remaining_games,
-                        stat_util::normal_quantile_upper(CHALLENGE_ALPHA));
-                    if (max_final_lb <= CHALLENGE_PROMOTE_LB)
+                    int const remaining_pairs = CHALLENGE_MAX_PAIRS - acc.pairs;
+                    int const all_pairs = acc.pairs + remaining_pairs;
+                    double const best_sum = acc.sum + remaining_pairs;
+                    double const best_lb = challenge_lower_bound(all_pairs, best_sum, best_sum * best_sum / all_pairs, true);
+                    if (best_lb <= CHALLENGE_PROMOTE_LB)
                     {
-                        std::println("[ES]   challenge stopped for futility after {} games (even winning all {} remaining games cannot promote)",
-                                     played, remaining_games);
+                        std::println("[ES]   challenge stopped for futility after {} pairs ({} games): even winning every remaining pair cannot promote",
+                                     acc.pairs, 2 * acc.pairs);
                         return false;
                     }
                 }
             }
-            std::println("[ES]   challenge not promoted after {} games", played);
+            std::println("[ES]   challenge not promoted after {} pairs ({} games)", acc.pairs, 2 * acc.pairs);
             return false;
         };
-        auto run_scout = [&](uint64_t scout_slot) -> double
+        auto run_scout = [&](ChallengePairs &acc) -> void
         {
-            double const stage = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
-                                               view, view_mutex, view_index,
-                                               CHALLENGE_SEED_BASE
-                                                   + static_cast<uint64_t>(k + 1) * 0x9E3779B97F4A7C15ULL
-                                                   + scout_slot,
-                                               CHALLENGE_PAIRS);
-            double const phat = (1.0 + stage) / 2.0;
+            acc = run_challenge(theta, best_theta, threads, search_ms, max_rounds,
+                                view, view_mutex, view_index,
+                                CHALLENGE_SEED_BASE
+                                    + static_cast<uint64_t>(k + 1) * 0x9E3779B97F4A7C15ULL,
+                                CHALLENGE_PAIRS);
             std::println("[ES]   scout @ iter {} (age {}): win-equiv={:.1f}/{} -> {}",
-                         k, campaign_age, 8.0 * phat, 2 * CHALLENGE_PAIRS,
-                         phat >= SCOUT_CONTINUE_P ? "continue" : phat >= SCOUT_RETRY_P ? "near miss" : "stop");
-            return stage;
+                         k, campaign_age, 2.0 * acc.sum, 2 * acc.pairs,
+                         acc.sum / acc.pairs >= SCOUT_CONTINUE_P ? "continue"
+                             : acc.sum / acc.pairs >= SCOUT_RETRY_P ? "near miss" : "stop");
         };
         bool promoted = false;
         if (fallback_challenge)
         {
-            promoted = run_challenge_loop(0, 0.0, 0, 0);
+            promoted = run_challenge_loop(0, ChallengePairs{});
             near_miss_pending = false;
         }
         else if (campaign_age > 0 && campaign_age % CHALLENGE_EVERY == SCOUT_AGE)
         {
-            double const scout_stage = run_scout(0);
-            if ((1.0 + scout_stage) / 2.0 >= SCOUT_CONTINUE_P)
+            ChallengePairs scout_stats;
+            run_scout(scout_stats);
+            if (scout_stats.sum / scout_stats.pairs >= SCOUT_CONTINUE_P)
             {
-                promoted = run_challenge_loop(CHALLENGE_PAIRS, 4.0 * (1.0 + scout_stage), 2 * CHALLENGE_PAIRS, 1);
+                promoted = run_challenge_loop(CHALLENGE_PAIRS, scout_stats);
             }
             else
             {
-                near_miss_pending = (1.0 + scout_stage) / 2.0 >= SCOUT_RETRY_P;
+                near_miss_pending = scout_stats.sum / scout_stats.pairs >= SCOUT_RETRY_P;
             }
         }
         else if (campaign_age > 0 && campaign_age % CHALLENGE_EVERY == RETRY_AGE && near_miss_pending)
         {
             near_miss_pending = false;
-            double const scout_stage = run_scout(0);
-            if ((1.0 + scout_stage) / 2.0 >= SCOUT_CONTINUE_P)
+            ChallengePairs scout_stats;
+            run_scout(scout_stats);
+            if (scout_stats.sum / scout_stats.pairs >= SCOUT_CONTINUE_P)
             {
-                promoted = run_challenge_loop(CHALLENGE_PAIRS, 4.0 * (1.0 + scout_stage), 2 * CHALLENGE_PAIRS, 1);
+                promoted = run_challenge_loop(CHALLENGE_PAIRS, scout_stats);
             }
         }
 
