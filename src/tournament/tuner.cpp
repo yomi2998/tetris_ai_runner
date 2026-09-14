@@ -201,6 +201,7 @@ namespace tournament_tuner
         std::println("  {} [generations] [iters_per_move] [seed] [threads] [max_rounds] [pairs] [data_file]", program);
         std::println("  {} selfcheck", program);
         std::println("  {} smoke", program);
+        std::println("  {} status [data_file]", program);
         std::println("  {} help", program);
         std::println("");
         std::println("Defaults: generations 10, iters_per_move 50, seed 555, threads 0 (auto), max_rounds 3600, pairs 32, data tournament_data.bin");
@@ -211,6 +212,65 @@ namespace tournament_tuner
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
         std::println("Outputs: tournament_incumbent.bin anchor, tournament_current.bin latest champion");
         std::println("Existing tuner files are not touched");
+    }
+
+    int run_status(std::string const &data_file)
+    {
+        auto loaded = tournament_checkpoint::load_with_backup(data_file, make_identity());
+        if (loaded.status == tournament_checkpoint::LoadStatus::Missing)
+        {
+            std::println("no checkpoint at {}", data_file);
+            return 1;
+        }
+        if (loaded.status != tournament_checkpoint::LoadStatus::Ok)
+        {
+            std::println(stderr, "checkpoint load failed: {}", loaded.detail);
+            return 1;
+        }
+        nlohmann::json const &payload = loaded.envelope.payload;
+        try
+        {
+            std::println("data {} backup {} generation {} root_seed {}",
+                data_file, loaded.backup_used ? 1 : 0,
+                loaded.envelope.generation, loaded.envelope.root_seed);
+            std::println("config dimension {} lambda {} iters {} rounds {} pairs {} cma_seed {} sigma {:.4f}",
+                payload.at("dimension").get<int>(), payload.at("lambda").get<int>(),
+                payload.at("iters_per_move").get<std::size_t>(), payload.at("max_rounds").get<int>(),
+                payload.at("pairs").get<int>(), payload.at("cma_seed").get<std::uint64_t>(),
+                payload.at("cma_sigma").get<double>());
+            std::println("last champion {} games {} draws {} waves {} checksum {} promoted {} mean {:.3f} lb {:.3f}",
+                payload.at("champion").get<std::uint64_t>(),
+                payload.at("games").get<std::int64_t>(), payload.at("draws").get<std::int64_t>(),
+                payload.at("waves").get<int>(), payload.at("checksum").get<std::uint64_t>(),
+                payload.at("promoted").get<bool>() ? 1 : 0,
+                payload.at("promotion_mean").get<double>(), payload.at("promotion_lb").get<double>());
+            std::string order;
+            for (auto const &id : payload.at("standings"))
+            {
+                if (!order.empty())
+                {
+                    order += " ";
+                }
+                order += std::to_string(id.get<std::uint64_t>());
+            }
+            std::println("standings {}", order);
+            int rank = 0;
+            for (auto const &entry : payload.at("ratings"))
+            {
+                std::println("  rank {} id {} rating {:.4f} se {:.4f} exprank {:.2f} games {} w {} d {} l {}",
+                    ++rank, entry.at("candidate").get<std::uint64_t>(),
+                    entry.at("rating").get<double>(), entry.at("std_error").get<double>(),
+                    entry.at("expected_rank").get<double>(), entry.at("games").get<std::int64_t>(),
+                    entry.at("wins").get<std::int64_t>(), entry.at("draws").get<std::int64_t>(),
+                    entry.at("losses").get<std::int64_t>());
+            }
+        }
+        catch (std::exception const &error)
+        {
+            std::println(stderr, "checkpoint payload is malformed: {}", error.what());
+            return 1;
+        }
+        return 0;
     }
 
     int run_selfcheck()
@@ -859,6 +919,15 @@ int main(int argc, char *argv[])
         if (first == "smoke")
         {
             return tournament_tuner::run_smoke();
+        }
+        if (first == "status")
+        {
+            std::string data_file = "tournament_data.bin";
+            if (argc > 2)
+            {
+                data_file = argv[2];
+            }
+            return tournament_tuner::run_status(data_file);
         }
         if (first == "view")
         {
