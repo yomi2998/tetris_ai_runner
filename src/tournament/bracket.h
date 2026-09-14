@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -137,6 +138,7 @@ namespace tournament_bracket
         struct State;
 
         std::unique_ptr<State> state_;
+        mutable std::mutex mutex_;
 
         Bracket() = default;
     };

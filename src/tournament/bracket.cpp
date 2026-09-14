@@ -518,37 +518,57 @@ namespace tournament_bracket
 
     Bracket::~Bracket() = default;
 
-    Bracket::Bracket(Bracket &&other) noexcept = default;
+    Bracket::Bracket(Bracket &&other) noexcept
+    {
+        std::lock_guard<std::mutex> lock(other.mutex_);
+        state_ = std::move(other.state_);
+    }
 
-    Bracket &Bracket::operator=(Bracket &&other) noexcept = default;
+    Bracket &Bracket::operator=(Bracket &&other) noexcept
+    {
+        if (this != &other)
+        {
+            std::lock(mutex_, other.mutex_);
+            std::lock_guard<std::mutex> own(mutex_, std::adopt_lock);
+            std::lock_guard<std::mutex> peer(other.mutex_, std::adopt_lock);
+            state_ = std::move(other.state_);
+        }
+        return *this;
+    }
 
     bool Bracket::valid() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr && state_->valid;
     }
 
     int Bracket::entrant_count() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr ? state_->entrants : 0;
     }
 
     int Bracket::slot_count() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr ? state_->slots : 0;
     }
 
     int Bracket::bye_count() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr ? state_->byes : 0;
     }
 
     int Bracket::series_count() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr ? static_cast<int>(state_->nodes.size()) : 0;
     }
 
     SeriesView Bracket::series(int id) const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (state_ == nullptr || id < 0 || id >= static_cast<int>(state_->nodes.size()))
         {
             return SeriesView{};
@@ -558,6 +578,7 @@ namespace tournament_bracket
 
     std::vector<int> Bracket::ready_series() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         std::vector<int> ready;
         if (state_ == nullptr)
         {
@@ -575,6 +596,7 @@ namespace tournament_bracket
 
     ReportStatus Bracket::report_game(int series_id, int game_index, GameWinner winner)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (state_ == nullptr || !state_->valid || series_id < 0
             || series_id >= static_cast<int>(state_->nodes.size()))
         {
@@ -629,21 +651,25 @@ namespace tournament_bracket
 
     bool Bracket::complete() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr && state_->champion != kNoCandidate;
     }
 
     CandidateId Bracket::champion() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr ? state_->champion : kNoCandidate;
     }
 
     int Bracket::losses(CandidateId candidate) const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr ? state_->loss_count(candidate) : 0;
     }
 
     std::vector<CandidateId> Bracket::standings() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         std::vector<CandidateId> ordered;
         if (state_ == nullptr || !state_->valid)
         {
@@ -673,16 +699,19 @@ namespace tournament_bracket
     std::vector<CandidateId> const &Bracket::seed_order() const
     {
         static std::vector<CandidateId> const empty;
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr ? state_->seed_order_entries : empty;
     }
 
     CreateStatus Bracket::create_status() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return state_ != nullptr ? state_->status : CreateStatus::EmptyRoster;
     }
 
     std::vector<ReplayEntry> Bracket::replay_entries() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (state_ == nullptr || !state_->valid)
         {
             return {};

@@ -1027,9 +1027,14 @@ namespace tournament_tuner
             std::println(stderr, "cannot prepare shared TOJ context");
             return 1;
         }
+        struct LiveBracket
+        {
+            std::mutex mutex;
+            Runner const *runner = nullptr;
+        };
         auto view_state = std::make_shared<tuning::EngineViewState>();
-        auto dump_bracket = std::make_shared<std::atomic<bool>>(false);
-        std::thread stdin_thread([view_state, dump_bracket]()
+        auto live = std::make_shared<LiveBracket>();
+        std::thread stdin_thread([view_state, live]()
         {
             std::string line;
             while (std::getline(std::cin, line))
@@ -1047,8 +1052,14 @@ namespace tournament_tuner
                 }
                 else if (line == "bracket" || line == "status")
                 {
-                    dump_bracket->store(true, std::memory_order_relaxed);
-                    std::println("bracket dump queued, prints after the current wave");
+                    std::lock_guard<std::mutex> live_lock(live->mutex);
+                    if (live->runner == nullptr)
+                    {
+                        std::println("no live tournament right now");
+                        continue;
+                    }
+                    std::lock_guard<std::mutex> view_lock(view_state->mutex);
+                    print_bracket(*live->runner);
                 }
             }
         });
@@ -1104,6 +1115,10 @@ namespace tournament_tuner
             backend.set_view_state(view_state);
             std::uint64_t generation_seed = generation_seed_for(root_seed, generation);
             Runner runner(backend, roster_entries, generation_seed, run_config, limits, std::move(prior));
+            {
+                std::lock_guard<std::mutex> live_lock(live->mutex);
+                live->runner = &runner;
+            }
             if (!runner.ok())
             {
                 std::println(stderr, "gen {} ledger replay failed: {}", generation, runner.error().detail);
@@ -1144,10 +1159,6 @@ namespace tournament_tuner
                 std::println("gen {} wave {} games {} draws {} ready {} {}",
                     generation, ledger_waves, ledger_games, ledger_draws,
                     runner.bracket().ready_series().size(), active);
-                if (dump_bracket->exchange(false))
-                {
-                    print_bracket(runner);
-                }
                 if (!step.complete)
                 {
                     std::string save_error;
@@ -1329,6 +1340,10 @@ namespace tournament_tuner
                 std::println("  rank {} id {} rating {:.4f} se {:.4f} exprank {:.2f} games {} w {} d {} l {}",
                     i + 1, entry.candidate, entry.rating, entry.std_error, entry.expected_rank,
                     entry.games, entry.wins, entry.draws, entry.losses);
+            }
+            {
+                std::lock_guard<std::mutex> live_lock(live->mutex);
+                live->runner = nullptr;
             }
         }
         return 0;
