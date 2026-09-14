@@ -76,6 +76,38 @@ namespace stat_util
         case 23: return 1.714;
         case 27: return 1.703;
         case 31: return 1.696;
+        case 35: return 1.690;
+        case 39: return 1.685;
+        case 43: return 1.681;
+        case 47: return 1.678;
+        case 51: return 1.675;
+        case 55: return 1.673;
+        case 59: return 1.671;
+        case 63: return 1.669;
+        case 67: return 1.668;
+        case 71: return 1.667;
+        case 75: return 1.665;
+        case 79: return 1.664;
+        case 83: return 1.663;
+        case 87: return 1.663;
+        case 91: return 1.662;
+        case 95: return 1.661;
+        case 99: return 1.660;
+        case 103: return 1.660;
+        case 107: return 1.659;
+        case 111: return 1.659;
+        case 115: return 1.658;
+        case 119: return 1.658;
+        case 123: return 1.657;
+        case 127: return 1.657;
+        case 131: return 1.657;
+        case 135: return 1.656;
+        case 139: return 1.656;
+        case 143: return 1.655;
+        case 147: return 1.655;
+        case 151: return 1.654;
+        case 155: return 1.654;
+        case 159: return 1.654;
         default: return Z_ONE_SIDED_95;
         }
     }
@@ -99,7 +131,7 @@ static double const ES_RELATIVE_PARAM_SCALE = 0.025;
 static uint64_t const CHALLENGE_SEED_BASE = 0x123456789ABCDEF0ULL;
 static int const CHALLENGE_EVERY = 50;
 static int const CHALLENGE_PAIRS = 4;
-static int const CHALLENGE_MAX_PAIRS = 32;
+static int const CHALLENGE_MAX_PAIRS = 160;
 static double const CHALLENGE_PROMOTE_LB = 0.50;
 static double const CHALLENGE_ALPHA = 0.05;
 static int const CHALLENGE_TOTAL_LOOKS = CHALLENGE_MAX_PAIRS / CHALLENGE_PAIRS;
@@ -979,41 +1011,41 @@ struct SelfCheck
 
 static void check_promotion_statistics(SelfCheck &sc)
 {
-    sc.check(stat_util::t95_multiplier(3) > stat_util::t95_multiplier(31)
-                 && stat_util::t95_multiplier(31) > stat_util::Z_ONE_SIDED_95,
+    sc.check(stat_util::t95_multiplier(3) > stat_util::t95_multiplier(159)
+                 && stat_util::t95_multiplier(159) > stat_util::Z_ONE_SIDED_95,
              "t multipliers shrink toward the normal quantile as pairs grow");
 
-    ChallengePairs const sweep{4, 4.0, 4.0};
+    ChallengePairs const sweep{160, 160.0, 160.0};
     double const lb_sweep = challenge_lower_bound(sweep.pairs, sweep.sum, sweep.sumsq, true);
     sc.check(lb_sweep > CHALLENGE_PROMOTE_LB,
-             "a clean 4-pair sweep clears the promotion bar (zero variance)");
+             "a full 160-pair sweep clears the promotion bar (zero variance)");
 
-    ChallengePairs const all_splits{4, 2.0, 1.0};
+    ChallengePairs const all_splits{160, 80.0, 40.0};
     double const lb_splits = challenge_lower_bound(all_splits.pairs, all_splits.sum, all_splits.sumsq, true);
     sc.check(lb_splits <= CHALLENGE_PROMOTE_LB,
              "an all-split challenge is exactly even and does not promote");
 
-    ChallengePairs const noisy_even{4, 2.0, 1.5};
+    ChallengePairs const noisy_even{160, 80.0, 60.0};
     double const lb_noisy = challenge_lower_bound(noisy_even.pairs, noisy_even.sum, noisy_even.sumsq, true);
     sc.check(lb_noisy < CHALLENGE_PROMOTE_LB,
              "a noisy even record does not promote");
-
-    ChallengePairs const doubled_noisy_even{8, 4.0, 3.0};
-    double const lb_doubled = challenge_lower_bound(doubled_noisy_even.pairs, doubled_noisy_even.sum, doubled_noisy_even.sumsq, true);
-    double const lb_interim = challenge_lower_bound(doubled_noisy_even.pairs, doubled_noisy_even.sum, doubled_noisy_even.sumsq, false);
-    sc.check(lb_doubled < CHALLENGE_PROMOTE_LB,
-             "a noisy even record at 8 pairs does not promote");
-    sc.check(lb_interim < lb_doubled,
+    double const lb_noisy_interim = challenge_lower_bound(noisy_even.pairs, noisy_even.sum, noisy_even.sumsq, false);
+    sc.check(lb_noisy_interim < lb_noisy,
              "interim looks are stricter than the final look");
 
-    ChallengePairs const dominant{8, 7.0, 6.5};
-    double const lb_dominant = challenge_lower_bound(dominant.pairs, dominant.sum, dominant.sumsq, true);
-    sc.check(lb_dominant > CHALLENGE_PROMOTE_LB,
-             "a dominant record with one split at 8 pairs promotes");
+    ChallengePairs const moderate{160, 91.2, 71.6};
+    double const lb_moderate = challenge_lower_bound(moderate.pairs, moderate.sum, moderate.sumsq, true);
+    sc.check(lb_moderate > CHALLENGE_PROMOTE_LB,
+             "a true ~57% candidate at 160 pairs promotes (80% power design point)");
 
-    sc.check(challenge_lower_bound(32, 10.0, 100.0 / 32.0, true) <= CHALLENGE_PROMOTE_LB,
+    ChallengePairs const small{32, 18.0, 13.5};
+    double const lb_small = challenge_lower_bound(small.pairs, small.sum, small.sumsq, true);
+    sc.check(lb_small <= CHALLENGE_PROMOTE_LB,
+             "a ~57% candidate at 32 pairs does not promote (underpowered)");
+
+    sc.check(challenge_lower_bound(160, 60.0, 3600.0 / 160.0, true) <= CHALLENGE_PROMOTE_LB,
              "a hopeless record cannot be rescued by playing on");
-    sc.check(challenge_lower_bound(32, 28.5, 28.5 * 28.5 / 32.0, true) > CHALLENGE_PROMOTE_LB,
+    sc.check(challenge_lower_bound(160, 100.0, 100.0 * 100.0 / 160.0, true) > CHALLENGE_PROMOTE_LB,
              "a trailing candidate can still promote by sweeping the remainder");
 }
 
@@ -1538,8 +1570,8 @@ int main(int argc, char *argv[])
     }
     else
     {
-        std::memcpy(best_theta, theta, sizeof(best_theta));
-        std::println("[TUNER] No incumbent; best_param.bin will be written after the first successful challenge");
+        default_params(best_theta);
+        std::println("[TUNER] No incumbent; comparator is the production default policy until the first successful challenge");
     }
 
     double effective_scale[NUM_PARAMS];
@@ -1742,11 +1774,11 @@ int main(int argc, char *argv[])
                 bool const final_look = look >= CHALLENGE_TOTAL_LOOKS;
                 double const mean = acc.sum / acc.pairs;
                 double const lb = challenge_lower_bound(acc.pairs, acc.sum, acc.sumsq, final_look);
-                std::println("[ES]   challenge look {} @ iter {}: pairs {}/{} ({} games), pair-mean={:.1f}%, LB={:.1f}% (need > {:.0f}%{})",
+                std::println("[ES]   challenge look {} @ iter {}: pairs {}/{} ({} games), pair-mean={:.1f}%, LB={:.1f}%{}",
                              look, k, acc.pairs, CHALLENGE_MAX_PAIRS, 2 * acc.pairs,
-                             100.0 * mean, 100.0 * lb, 100.0 * CHALLENGE_PROMOTE_LB,
-                             final_look ? ", final look" : ", interim");
-                if (lb > CHALLENGE_PROMOTE_LB)
+                             100.0 * mean, 100.0 * lb,
+                             final_look ? ", final look (need > 50%)" : ", interim");
+                if (final_look && lb > CHALLENGE_PROMOTE_LB)
                 {
                     std::memcpy(best_theta, theta, sizeof(best_theta));
                     durable_write_doubles("best_param.bin", best_theta, NUM_PARAMS);
