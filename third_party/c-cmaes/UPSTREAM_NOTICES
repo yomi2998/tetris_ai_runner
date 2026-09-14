@@ -1,0 +1,81 @@
+=====================================================================
+Upstream attribution and license notices removed by comment stripping
+=====================================================================
+
+Repository: https://github.com/CMA-ES/c-cmaes
+Pin: commit 4450d3deccf2aacb6aa955d8216cfc4461699c60
+
+The vendored sources under src/ are comment-stripped from that pin. This
+file reproduces, byte for byte, the complete copyright, license, and
+attribution notice comment blocks removed from the three pinned source
+headers. The full dual license text is retained separately in the
+LICENSE file.
+
+=====================================================================
+From: src/cmaes.c
+=====================================================================
+/* --------------------------------------------------------- */
+/* --- File: cmaes.c  -------- Author: Nikolaus Hansen   --- */
+/* --------------------------------------------------------- */
+/*   
+    CMA-ES for non-linear function minimization. 
+
+    Copyright 1996, 2003, 2007, 2013 Nikolaus Hansen
+    e-mail: hansen .AT. lri.fr
+
+    SOURCE: 
+        https://github.com/cma-es/c-cma-es
+        https://github.com/cma-es/c-cma-es/blob/master/src/cmaes.c
+
+    LICENSE: this library is free/open software and may be used 
+    either under the
+        
+        Apache License 2.0
+
+    or under the
+   
+        GNU Lesser General Public License 2.1 or later
+        
+    whichever suits best. 
+    
+    See also the LICENSE file
+    https://github.com/cma-es/c-cma-es/blob/master/LICENSE 
+*/
+
+=====================================================================
+From: src/cmaes.h
+=====================================================================
+/* --------------------------------------------------------- */
+/* --- File: cmaes.h ----------- Author: Nikolaus Hansen --- */
+/* ---------------------- last modified: IX 2010         --- */
+/* --------------------------------- by: Nikolaus Hansen --- */
+/* --------------------------------------------------------- */
+/*   
+     CMA-ES for non-linear function minimization. 
+
+     Copyright (C) 1996, 2003-2010  Nikolaus Hansen. 
+     e-mail: nikolaus.hansen (you know what) inria.fr
+      
+     License: see file cmaes.c
+   
+*/
+
+=====================================================================
+From: src/cmaes_interface.h
+=====================================================================
+/* --------------------------------------------------------- */
+/* --- File: cmaes_interface.h - Author: Nikolaus Hansen --- */
+/* ---------------------- last modified:  IV 2007        --- */
+/* --------------------------------- by: Nikolaus Hansen --- */
+/* --------------------------------------------------------- */
+/*   
+     CMA-ES for non-linear function minimization. 
+
+     Copyright (C) 1996, 2003, 2007 Nikolaus Hansen. 
+     e-mail: hansen AT lri.fr
+     
+     Documentation: see file docfunctions.txt
+     
+     License: see file cmaes.c
+*/
+

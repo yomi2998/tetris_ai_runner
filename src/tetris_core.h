@@ -2385,7 +2385,7 @@ namespace m_tetris
             root_ = root_->update(&local_context_, map, status_, node, next, next_length);
             do
             {
-                if (root_->template run<false>(&local_context_))
+                if (memory_usage() >= memory_limit_ || root_->template run<false>(&local_context_))
                 {
                     break;
                 }
@@ -2408,7 +2408,7 @@ namespace m_tetris
             root_ = root_->update(&local_context_, map, status_, node, hold, !hold_free, next, next_length);
             do
             {
-                if (root_->template run<true>(&local_context_))
+                if (memory_usage() >= memory_limit_ || root_->template run<true>(&local_context_))
                 {
                     break;
                 }
