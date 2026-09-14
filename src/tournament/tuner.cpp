@@ -55,7 +55,7 @@ namespace tournament_tuner
         std::string current_file = "tournament_current.bin";
     };
 
-    int workers_for(int threads_arg)
+    int thread_budget_for(int threads_arg)
     {
         if (threads_arg > 0)
         {
@@ -67,6 +67,11 @@ namespace tournament_tuner
             return static_cast<int>(hw - 1);
         }
         return 1;
+    }
+
+    int game_workers_for(int budget)
+    {
+        return std::max(1, budget / 2);
     }
 
     int roster_size_for(int workers)
@@ -195,6 +200,185 @@ namespace tournament_tuner
         return true;
     }
 
+    nlohmann::json ledger_to_json(std::vector<tournament_runner::GameRecord> const &ledger)
+    {
+        nlohmann::json array = nlohmann::json::array();
+        for (auto const &record : ledger)
+        {
+            nlohmann::json seat;
+            seat["side_a"] = record.seat.side_a;
+            seat["side_b"] = record.seat.side_b;
+            seat["side_a_is_player_one"] = record.seat.side_a_is_player_one;
+            nlohmann::json item;
+            item["game_id"] = record.game_id;
+            item["series_id"] = record.series_id;
+            item["game_index"] = record.game_index;
+            item["seat"] = seat;
+            item["seed_player_one"] = record.seed_player_one;
+            item["seed_player_two"] = record.seed_player_two;
+            item["winner"] = static_cast<int>(record.winner);
+            item["reason"] = static_cast<int>(record.reason);
+            item["rounds"] = record.rounds;
+            array.push_back(item);
+        }
+        return array;
+    }
+
+    bool json_get_u64(nlohmann::json const &json, std::uint64_t &out)
+    {
+        if (json.is_number_unsigned())
+        {
+            out = json.get<std::uint64_t>();
+            return true;
+        }
+        if (json.is_number_integer())
+        {
+            std::int64_t value = json.get<std::int64_t>();
+            if (value >= 0)
+            {
+                out = static_cast<std::uint64_t>(value);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool json_get_int(nlohmann::json const &json, int &out)
+    {
+        if (!json.is_number_integer())
+        {
+            return false;
+        }
+        std::int64_t value = json.get<std::int64_t>();
+        if (value < 0 || value > std::numeric_limits<int>::max())
+        {
+            return false;
+        }
+        out = static_cast<int>(value);
+        return true;
+    }
+
+    bool json_to_ledger(nlohmann::json const &json, std::vector<tournament_runner::GameRecord> &ledger)
+    {
+        if (!json.is_array())
+        {
+            return false;
+        }
+        std::vector<tournament_runner::GameRecord> records;
+        records.reserve(json.size());
+        for (auto const &item : json)
+        {
+            if (!item.is_object() || !item.contains("seat") || !item.at("seat").is_object())
+            {
+                return false;
+            }
+            tournament_runner::GameRecord record;
+            nlohmann::json const &seat = item.at("seat");
+            if (!json_get_u64(item.at("game_id"), record.game_id)
+                || !json_get_int(item.at("series_id"), record.series_id)
+                || !json_get_int(item.at("game_index"), record.game_index)
+                || !json_get_u64(seat.at("side_a"), record.seat.side_a)
+                || !json_get_u64(seat.at("side_b"), record.seat.side_b)
+                || !seat.at("side_a_is_player_one").is_boolean()
+                || !json_get_u64(item.at("seed_player_one"), record.seed_player_one)
+                || !json_get_u64(item.at("seed_player_two"), record.seed_player_two))
+            {
+                return false;
+            }
+            record.seat.side_a_is_player_one = seat.at("side_a_is_player_one").get<bool>();
+            int winner = -1;
+            int reason = -1;
+            int rounds = -1;
+            if (!json_get_int(item.at("winner"), winner) || winner < 0 || winner > 2
+                || !json_get_int(item.at("reason"), reason) || reason < 0 || reason > 8
+                || !json_get_int(item.at("rounds"), rounds))
+            {
+                return false;
+            }
+            record.winner = static_cast<tournament_bracket::GameWinner>(winner);
+            record.reason = static_cast<tuning::WinReason>(reason);
+            record.rounds = rounds;
+            records.push_back(record);
+        }
+        ledger = std::move(records);
+        return true;
+    }
+
+    nlohmann::json roster_to_json(std::vector<tournament_runner::RosterEntry> const &roster)
+    {
+        nlohmann::json ids = nlohmann::json::array();
+        nlohmann::json thetas = nlohmann::json::array();
+        for (auto const &entry : roster)
+        {
+            ids.push_back(entry.id);
+            thetas.push_back(theta_to_json(entry.theta));
+        }
+        nlohmann::json json;
+        json["ids"] = ids;
+        json["thetas"] = thetas;
+        return json;
+    }
+
+    bool json_to_roster(nlohmann::json const &json, std::vector<tournament_runner::RosterEntry> &roster)
+    {
+        if (!json.is_object() || !json.contains("ids") || !json.contains("thetas"))
+        {
+            return false;
+        }
+        nlohmann::json const &ids = json.at("ids");
+        nlohmann::json const &thetas = json.at("thetas");
+        if (!ids.is_array() || !thetas.is_array() || ids.size() != thetas.size() || ids.empty())
+        {
+            return false;
+        }
+        std::vector<tournament_runner::RosterEntry> entries;
+        entries.reserve(ids.size());
+        for (std::size_t i = 0; i < ids.size(); ++i)
+        {
+            std::uint64_t id = 0;
+            std::vector<double> theta;
+            if (!json_get_u64(ids[i], id) || !json_to_theta(thetas[i], theta))
+            {
+                return false;
+            }
+            entries.push_back({id, theta});
+        }
+        roster = std::move(entries);
+        return true;
+    }
+
+    bool save_progress(std::string const &data_file, tournament_checkpoint::Identity const &identity,
+                       std::uint64_t generation, std::uint64_t root_seed, TunerConfig const &cli,
+                       tournament_cmaes::Configuration const &cma_config, std::string const &blob_hex,
+                       std::vector<double> const &incumbent,
+                       std::vector<tournament_runner::RosterEntry> const &roster,
+                       std::vector<tournament_runner::GameRecord> const &ledger, std::int64_t waves,
+                       std::string &error)
+    {
+        tournament_checkpoint::Envelope envelope;
+        envelope.identity = identity;
+        envelope.generation = generation;
+        envelope.root_seed = root_seed;
+        nlohmann::json payload;
+        payload["stage"] = "progress";
+        payload["dimension"] = cma_config.dimension;
+        payload["lambda"] = cma_config.lambda;
+        payload["iters_per_move"] = cli.iters_per_move;
+        payload["max_rounds"] = cli.max_rounds;
+        payload["pairs"] = cli.pairs;
+        payload["threshold"] = cli.threshold;
+        payload["cma_seed"] = cma_config.seed;
+        payload["cma_mean"] = theta_to_json(cma_config.mean);
+        payload["cma_scales"] = theta_to_json(cma_config.coordinate_scales);
+        payload["cma_blob_hex"] = blob_hex;
+        payload["incumbent"] = theta_to_json(incumbent);
+        payload["roster"] = roster_to_json(roster);
+        payload["ledger"] = ledger_to_json(ledger);
+        payload["waves"] = waves;
+        envelope.payload = payload;
+        return tournament_checkpoint::save(data_file, envelope, error);
+    }
+
     void print_usage(char const *program)
     {
         std::println("Usage:");
@@ -207,7 +391,7 @@ namespace tournament_tuner
         std::println("Defaults: generations 10, iters_per_move 50, seed 555, threads 0 (auto), max_rounds 3600, pairs 32, data tournament_data.bin");
         std::println("  {} view [seed] [iters] [max_rounds]", program);
         std::println("View defaults: seed 0 (time-based, printed for replay), iters 50, max_rounds 3600");
-        std::println("Threading: workers = threads if given else hardware_threads - 1, roster = 2 * workers, lambda = roster - 1");
+        std::println("Threading: budget = threads if given else hardware_threads - 1, game workers = budget / 2, helpers = game workers, roster = 2 * game workers, lambda = roster - 1");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
         std::println("During runs: type view and Enter for one live game per wave, empty line to stop, bracket for live standings");
@@ -231,6 +415,21 @@ namespace tournament_tuner
         nlohmann::json const &payload = loaded.envelope.payload;
         try
         {
+            std::string stage = "complete";
+            if (payload.contains("stage") && payload.at("stage").is_string())
+            {
+                stage = payload.at("stage").get<std::string>();
+            }
+            if (stage == "progress")
+            {
+                std::println("data {} backup {} generation {} in progress root_seed {}",
+                    data_file, loaded.backup_used ? 1 : 0,
+                    loaded.envelope.generation, loaded.envelope.root_seed);
+                std::println("ledger games {} roster {} waves {}",
+                    payload.at("ledger").size(), payload.at("roster").at("ids").size(),
+                    payload.at("waves").get<std::int64_t>());
+                return 0;
+            }
             std::println("data {} backup {} generation {} root_seed {}",
                 data_file, loaded.backup_used ? 1 : 0,
                 loaded.envelope.generation, loaded.envelope.root_seed);
@@ -355,9 +554,11 @@ namespace tournament_tuner
                 ++failures;
             }
         };
-        check(workers_for(0) >= 1, "workers_for auto is at least one");
-        check(workers_for(4) == 4, "workers_for respects explicit threads");
-        check(roster_size_for(15) == 30, "roster is twice workers");
+        check(thread_budget_for(0) >= 1, "thread budget auto is at least one");
+        check(thread_budget_for(4) == 4, "thread budget respects explicit threads");
+        check(game_workers_for(15) == 7, "game workers split the budget with helper threads");
+        check(game_workers_for(1) == 1, "game workers clamp to at least one");
+        check(roster_size_for(7) == 14, "roster is twice game workers");
         check(lambda_for(30) == 29, "lambda is roster minus one");
         check(lambda_for(2) == 2, "lambda clamps to at least two");
         check(cma_seed_for(555) >= 1 && cma_seed_for(555) <= 2147483647ULL, "cma seed is in library range");
@@ -638,12 +839,15 @@ namespace tournament_tuner
 
     int run_tournament(TunerConfig const &cli)
     {
-        int const workers = workers_for(cli.threads);
-        int const roster_size = roster_size_for(workers);
+        int const budget = thread_budget_for(cli.threads);
+        int const game_workers = game_workers_for(budget);
+        int const roster_size = roster_size_for(game_workers);
         int const lambda = lambda_for(roster_size);
         int const dimension = static_cast<int>(tuning_toj::TojAdapter::param_count());
         tuning::RunConfig run_config;
-        run_config.threads = workers;
+        run_config.threads = game_workers;
+        std::println("thread budget {} game workers {} helpers {} roster {} lambda {}",
+            budget, game_workers, game_workers, roster_size, lambda);
         run_config.iterations_per_move = cli.iters_per_move;
         run_config.max_rounds = cli.max_rounds;
         if (!tuning::valid_run_config(run_config))
@@ -667,6 +871,10 @@ namespace tournament_tuner
         cma_config.seed = cma_seed_for(root_seed);
         std::vector<std::uint8_t> cma_blob;
         bool have_checkpoint = false;
+        bool resume_progress = false;
+        std::vector<tournament_runner::RosterEntry> resume_roster;
+        std::vector<tournament_runner::GameRecord> resume_ledger;
+        std::int64_t resume_waves = 0;
         auto loaded = tournament_checkpoint::load_with_backup(cli.data_file, identity);
         if (loaded.status == tournament_checkpoint::LoadStatus::Ok)
         {
@@ -704,11 +912,47 @@ namespace tournament_tuner
                     std::println(stderr, "checkpoint has an invalid cma blob");
                     return 1;
                 }
+                std::string stage = "complete";
+                if (payload.contains("stage"))
+                {
+                    if (!payload.at("stage").is_string())
+                    {
+                        std::println(stderr, "checkpoint has an invalid stage");
+                        return 1;
+                    }
+                    stage = payload.at("stage").get<std::string>();
+                    if (stage != "complete" && stage != "progress")
+                    {
+                        std::println(stderr, "checkpoint has an unknown stage");
+                        return 1;
+                    }
+                }
                 if (saved_dimension != dimension || saved_lambda != lambda
                     || saved_iters != cli.iters_per_move || saved_rounds != cli.max_rounds)
                 {
                     std::println(stderr, "checkpoint configuration mismatch, delete {} for a fresh run", cli.data_file);
                     return 1;
+                }
+                if (stage == "progress")
+                {
+                    if (!json_to_roster(payload.at("roster"), resume_roster))
+                    {
+                        std::println(stderr, "checkpoint has an invalid roster");
+                        return 1;
+                    }
+                    if (!json_to_ledger(payload.at("ledger"), resume_ledger))
+                    {
+                        std::println(stderr, "checkpoint has an invalid ledger");
+                        return 1;
+                    }
+                    if (!payload.at("waves").is_number_integer()
+                        || payload.at("waves").get<std::int64_t>() < 0)
+                    {
+                        std::println(stderr, "checkpoint has an invalid wave count");
+                        return 1;
+                    }
+                    resume_waves = payload.at("waves").get<std::int64_t>();
+                    resume_progress = true;
                 }
                 root_seed = saved_root;
                 start_generation = saved_generation;
@@ -718,7 +962,15 @@ namespace tournament_tuner
                 cma_config.seed = payload.at("cma_seed").get<std::uint64_t>();
                 cma_blob = std::move(*blob);
                 have_checkpoint = true;
-                std::println("Resumed from generation {} root_seed {}", start_generation, root_seed);
+                if (resume_progress)
+                {
+                    std::println("Resumed generation {} at {} ledger games root_seed {}",
+                        start_generation, resume_ledger.size(), root_seed);
+                }
+                else
+                {
+                    std::println("Resumed from generation {} root_seed {}", start_generation, root_seed);
+                }
             }
             catch (std::exception const &error)
             {
@@ -804,6 +1056,8 @@ namespace tournament_tuner
         std::println("Type view and Enter to watch one live game per wave, empty line to stop, bracket for live standings");
         for (std::uint64_t generation = start_generation; generation < static_cast<std::uint64_t>(cli.generations); ++generation)
         {
+            std::vector<std::uint8_t> pre_tell = optimizer->save_state();
+            std::string pre_tell_hex = tournament_bytes::encode_hex(pre_tell);
             std::vector<double> const &flat = optimizer->ask();
             if (flat.size() != static_cast<std::size_t>(lambda) * static_cast<std::size_t>(dimension))
             {
@@ -826,10 +1080,35 @@ namespace tournament_tuner
                 roster_entries.push_back({id, theta});
                 sample_ids.push_back(id);
             }
+            std::vector<tournament_runner::GameRecord> prior;
+            std::int64_t prior_waves = 0;
+            if (resume_progress && generation == start_generation)
+            {
+                bool roster_ok = resume_roster.size() == roster_entries.size();
+                for (std::size_t i = 0; roster_ok && i < roster_entries.size(); ++i)
+                {
+                    roster_ok = resume_roster[i].id == roster_entries[i].id
+                        && resume_roster[i].theta == roster_entries[i].theta;
+                }
+                if (!roster_ok)
+                {
+                    std::println(stderr, "checkpoint roster does not match optimizer samples");
+                    return 1;
+                }
+                prior = resume_ledger;
+                prior_waves = resume_waves;
+                resume_progress = false;
+                std::println("gen {} continuing at {} ledger games", generation, prior.size());
+            }
             TojBackend backend(shared_context);
             backend.set_view_state(view_state);
             std::uint64_t generation_seed = generation_seed_for(root_seed, generation);
-            Runner runner(backend, roster_entries, generation_seed, run_config, limits);
+            Runner runner(backend, roster_entries, generation_seed, run_config, limits, std::move(prior));
+            if (!runner.ok())
+            {
+                std::println(stderr, "gen {} ledger replay failed: {}", generation, runner.error().detail);
+                return 1;
+            }
             tournament_runner::RunResult run_result;
             for (;;)
             {
@@ -839,9 +1118,16 @@ namespace tournament_tuner
                     run_result = step;
                     break;
                 }
-                run_result.stats.games += step.stats.games;
-                run_result.stats.draws += step.stats.draws;
-                run_result.stats.waves += step.stats.waves;
+                std::int64_t ledger_games = static_cast<std::int64_t>(runner.ledger().size());
+                std::int64_t ledger_draws = 0;
+                for (auto const &record : runner.ledger())
+                {
+                    if (record.winner == tournament_bracket::GameWinner::Draw)
+                    {
+                        ++ledger_draws;
+                    }
+                }
+                std::int64_t ledger_waves = prior_waves + runner.total_waves();
                 std::string active;
                 for (int id : runner.bracket().ready_series())
                 {
@@ -856,18 +1142,30 @@ namespace tournament_tuner
                         + "-" + std::to_string(view.games_b);
                 }
                 std::println("gen {} wave {} games {} draws {} ready {} {}",
-                    generation, run_result.stats.waves, run_result.stats.games, run_result.stats.draws,
+                    generation, ledger_waves, ledger_games, ledger_draws,
                     runner.bracket().ready_series().size(), active);
                 if (dump_bracket->exchange(false))
                 {
                     print_bracket(runner);
                 }
-                if (step.complete)
+                if (!step.complete)
                 {
-                    run_result.complete = true;
-                    run_result.champion = step.champion;
-                    break;
+                    std::string save_error;
+                    if (!save_progress(cli.data_file, identity, generation, root_seed, cli,
+                                       cma_config, pre_tell_hex, incumbent, roster_entries,
+                                       runner.ledger(), ledger_waves, save_error))
+                    {
+                        std::println(stderr, "cannot save wave checkpoint: {}", save_error);
+                        return 1;
+                    }
+                    continue;
                 }
+                run_result.complete = true;
+                run_result.champion = step.champion;
+                run_result.stats.games = ledger_games;
+                run_result.stats.draws = ledger_draws;
+                run_result.stats.waves = ledger_waves;
+                break;
             }
             if (run_result.error.code != tournament_runner::ErrorCode::None)
             {
@@ -971,6 +1269,7 @@ namespace tournament_tuner
             envelope.generation = generation + 1;
             envelope.root_seed = root_seed;
             nlohmann::json payload;
+            payload["stage"] = "complete";
             payload["dimension"] = dimension;
             payload["lambda"] = lambda;
             payload["iters_per_move"] = run_config.iterations_per_move;
