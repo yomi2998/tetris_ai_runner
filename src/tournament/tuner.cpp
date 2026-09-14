@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <print>
+#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -19,6 +21,7 @@
 
 #include "ai_zzz.h"
 #include "param.h"
+#include "tuner_match.h"
 #include "tournament/bracket.h"
 #include "tournament/bytes.h"
 #include "tournament/checkpoint.h"
@@ -201,6 +204,8 @@ namespace tournament_tuner
         std::println("  {} help", program);
         std::println("");
         std::println("Defaults: generations 10, iters_per_move 50, seed 555, threads 0 (auto), max_rounds 3600, pairs 32, data tournament_data.bin");
+        std::println("  {} view [seed] [iters] [max_rounds]", program);
+        std::println("View defaults: seed 0 (time-based, printed for replay), iters 50, max_rounds 3600");
         std::println("Threading: workers = threads if given else hardware_threads - 1, roster = 2 * workers, lambda = roster - 1");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
@@ -311,6 +316,57 @@ namespace tournament_tuner
         }
         std::println("{} TOURNAMENT TUNER SELFCHECK(S) FAILED", failures);
         return 1;
+    }
+
+    int run_view(std::uint64_t seed, std::size_t iters, int max_rounds)
+    {
+        if (seed == 0)
+        {
+            seed = static_cast<std::uint64_t>(std::time(nullptr));
+        }
+        if (iters == 0 || max_rounds <= 0)
+        {
+            std::println(stderr, "view needs iters > 0 and max_rounds > 0");
+            return 1;
+        }
+        std::size_t const dimension = tuning_toj::TojAdapter::param_count();
+        std::vector<double> scales = scales_vec();
+        std::vector<double> base = default_theta_vec();
+        std::mt19937_64 rng(seed);
+        auto sample_candidate = [&]()
+        {
+            std::uint64_t draw = rng();
+            std::normal_distribution<double> local(0.0, 1.0);
+            std::mt19937_64 local_rng(draw);
+            std::vector<double> theta(dimension);
+            for (std::size_t i = 0; i < dimension; ++i)
+            {
+                theta[i] = base[i] + local(local_rng) * scales[i] * 0.25;
+            }
+            return theta;
+        };
+        std::vector<double> theta_a = sample_candidate();
+        std::vector<double> theta_b = sample_candidate();
+        std::uint64_t seed_a = tuning::mix64(seed ^ 0xA24BAED4963EE407ULL);
+        std::uint64_t seed_b = tuning::mix64(seed ^ 0x9FB21C651E98DF25ULL);
+        tuner_match::Scenario scenario_a = tuner_match::make_scenario(seed_a, static_cast<std::size_t>(max_rounds), static_cast<std::size_t>(tuner_match::next_length));
+        tuner_match::Scenario scenario_b = tuner_match::make_scenario(seed_b, static_cast<std::size_t>(max_rounds), static_cast<std::size_t>(tuner_match::next_length));
+        tuner_match::BotInstance b1;
+        tuner_match::BotInstance b2;
+        b1.scenario = &scenario_a;
+        b2.scenario = &scenario_b;
+        b1.search_budget = m_tetris::SearchBudget::by_iterations(iters);
+        b2.search_budget = m_tetris::SearchBudget::by_iterations(iters);
+        b1.init(theta_a.data());
+        b2.init(theta_b.data());
+        std::println("view seed {} iters {} max_rounds {}", seed, iters, max_rounds);
+        tuner_match::MatchResult result = tuner_match::play_match(b1, b2, max_rounds,
+            [&]() { tuner_match::render_view(b1, b2, "A", "B"); }, nullptr);
+        tuner_match::render_view(b1, b2, "A", "B");
+        std::string winner = result.winner > 0 ? "A" : (result.winner < 0 ? "B" : "draw");
+        std::println("view done winner {} rounds {} capped {} app {:.2f} {:.2f} apl {:.2f} {:.2f}",
+            winner, result.rounds, result.capped ? 1 : 0, result.app1, result.app2, result.apl1, result.apl2);
+        return 0;
     }
 
     int run_smoke()
@@ -803,6 +859,34 @@ int main(int argc, char *argv[])
         if (first == "smoke")
         {
             return tournament_tuner::run_smoke();
+        }
+        if (first == "view")
+        {
+            std::uint64_t seed = 0;
+            std::size_t iters = 50;
+            int max_rounds = 3600;
+            try
+            {
+                if (argc > 2)
+                {
+                    seed = static_cast<std::uint64_t>(std::stoull(argv[2]));
+                }
+                if (argc > 3)
+                {
+                    iters = static_cast<std::size_t>(std::stoul(argv[3]));
+                }
+                if (argc > 4)
+                {
+                    max_rounds = std::stoi(argv[4]);
+                }
+            }
+            catch (std::exception const &error)
+            {
+                std::println(stderr, "invalid view arguments: {}", error.what());
+                tournament_tuner::print_usage(program.c_str());
+                return 1;
+            }
+            return tournament_tuner::run_view(seed, iters, max_rounds);
         }
     }
     tournament_tuner::TunerConfig config;
