@@ -274,34 +274,6 @@ namespace tournament_tuner
         return 0;
     }
 
-    std::string bracket_status_name(tournament_bracket::SeriesStatus status)
-    {
-        switch (status)
-        {
-        case tournament_bracket::SeriesStatus::Pending: return "pending";
-        case tournament_bracket::SeriesStatus::Ready: return "ready";
-        case tournament_bracket::SeriesStatus::Complete: return "complete";
-        case tournament_bracket::SeriesStatus::Walkover: return "walkover";
-        case tournament_bracket::SeriesStatus::Void: return "void";
-        case tournament_bracket::SeriesStatus::Dormant: return "dormant";
-        }
-        return "unknown";
-    }
-
-    std::string bracket_stage_name(tournament_bracket::Stage stage)
-    {
-        switch (stage)
-        {
-        case tournament_bracket::Stage::Early: return "early";
-        case tournament_bracket::Stage::Top8: return "top8";
-        case tournament_bracket::Stage::WinnersFinal: return "winners-final";
-        case tournament_bracket::Stage::LosersFinal: return "losers-final";
-        case tournament_bracket::Stage::GrandFinal: return "grand-final";
-        case tournament_bracket::Stage::GrandFinalReset: return "grand-final-reset";
-        }
-        return "unknown";
-    }
-
     std::string bracket_id_name(tournament_bracket::CandidateId id)
     {
         if (id == tournament_bracket::kNoCandidate)
@@ -311,17 +283,64 @@ namespace tournament_tuner
         return std::to_string(id);
     }
 
-    void print_bracket(Runner const &runner)
+    void print_bracket_group(tournament_bracket::Bracket const &bracket,
+                             tournament_bracket::NodeKind kind, char const *title)
     {
-        auto const &bracket = runner.bracket();
+        int last_round = -1;
         for (int id = 0; id < bracket.series_count(); ++id)
         {
             auto view = bracket.series(id);
-            std::println("S{} {} R{} {}v{} sets {}-{} first-to-{} games {}-{} played {} {} winner {}",
-                view.id, bracket_stage_name(view.stage), view.round,
-                bracket_id_name(view.side_a), bracket_id_name(view.side_b),
-                view.sets_a, view.sets_b, view.format.first_to, view.games_a, view.games_b,
-                view.games_played, bracket_status_name(view.status), bracket_id_name(view.winner));
+            if (view.kind != kind || view.status == tournament_bracket::SeriesStatus::Void)
+            {
+                continue;
+            }
+            if (view.round != last_round)
+            {
+                std::println("{} round {}", title, view.round);
+                last_round = view.round;
+            }
+            if (view.status == tournament_bracket::SeriesStatus::Complete)
+            {
+                std::println("  S{} {} v {} {}-{} -> {}",
+                    view.id, bracket_id_name(view.side_a), bracket_id_name(view.side_b),
+                    view.sets_a, view.sets_b, bracket_id_name(view.winner));
+            }
+            else if (view.status == tournament_bracket::SeriesStatus::Walkover)
+            {
+                std::println("  S{} bye -> {}", view.id, bracket_id_name(view.winner));
+            }
+            else if (view.status == tournament_bracket::SeriesStatus::Ready)
+            {
+                std::println("  S{} {} v {} sets {}-{} FT{} games {}-{} LIVE",
+                    view.id, bracket_id_name(view.side_a), bracket_id_name(view.side_b),
+                    view.sets_a, view.sets_b, view.format.first_to, view.games_a, view.games_b);
+            }
+            else if (view.status == tournament_bracket::SeriesStatus::Dormant)
+            {
+                std::println("  S{} dormant", view.id);
+            }
+            else
+            {
+                std::println("  S{} {} v {} waiting",
+                    view.id, bracket_id_name(view.side_a), bracket_id_name(view.side_b));
+            }
+        }
+    }
+
+    void print_bracket(Runner const &runner)
+    {
+        auto const &bracket = runner.bracket();
+        print_bracket_group(bracket, tournament_bracket::NodeKind::Winners, "WINNERS");
+        print_bracket_group(bracket, tournament_bracket::NodeKind::Losers, "LOSERS");
+        print_bracket_group(bracket, tournament_bracket::NodeKind::GrandFinal, "GRAND FINAL");
+        print_bracket_group(bracket, tournament_bracket::NodeKind::GrandFinalReset, "GRAND FINAL RESET");
+        if (bracket.complete())
+        {
+            std::println("Champion: {}", bracket_id_name(bracket.champion()));
+        }
+        else
+        {
+            std::println("Champion: undecided");
         }
     }
 
