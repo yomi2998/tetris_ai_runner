@@ -162,6 +162,31 @@ namespace
         check(threw, "negative wins rejected");
     }
 
+    void test_series_safe_games()
+    {
+        check(series_safe_games(1, 11, 0, 0, 9, 2) == 2, "ft11 at 9-2 exposes two games");
+        check(series_safe_games(1, 7, 0, 0, 0, 0) == 7, "ft7 at 0-0 exposes seven games");
+        check(series_safe_games(2, 11, 0, 0, 0, 0) == 22, "bo3 at 0-0 exposes two full sets");
+        check(series_safe_games(3, 11, 0, 0, 0, 0) == 33, "bo5 at 0-0 exposes three full sets");
+        check(series_safe_games(2, 11, 1, 0, 0, 0) == 11, "bo3 leader one set away exposes one set");
+        check(series_safe_games(2, 11, 0, 0, 10, 0) == 12, "bo3 at 10-0 games exposes twelve games");
+        check(series_safe_games(2, 11, 1, 1, 10, 9) == 1, "bo3 decider at 10-9 exposes one game");
+        check(series_safe_games(3, 11, 1, 1, 0, 0) == 22, "bo5 split at 1-1 exposes two sets");
+        check(series_safe_games(2, 11, 2, 0, 0, 0) == 0, "decided bo3 exposes nothing");
+        check(series_safe_games(1, 11, 0, 0, 11, 3) == 0, "decided ft11 exposes nothing");
+        check(series_safe_games(0, 11, 0, 0, 0, 0) == 0, "degenerate format exposes nothing");
+        bool threw = false;
+        try
+        {
+            (void)series_safe_games(2, 11, -1, 0, 0, 0);
+        }
+        catch (...)
+        {
+            threw = true;
+        }
+        check(threw, "negative set score rejected");
+    }
+
     void test_wave_9_2_exposes_two()
     {
         std::vector<SeriesDemand> demands{
@@ -991,6 +1016,7 @@ namespace
 int main()
 {
     test_capacity_rule();
+    test_series_safe_games();
     test_wave_9_2_exposes_two();
     test_wave_fairness_and_determinism();
     test_duplicate_series_rejected();

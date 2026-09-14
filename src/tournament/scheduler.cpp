@@ -81,6 +81,37 @@ namespace tournament_scheduler
         return capacity > 0 ? capacity : 0;
     }
 
+    int series_safe_games(int sets_to_win, int first_to, int sets_a, int sets_b,
+                          int games_a, int games_b)
+    {
+        if (sets_to_win <= 0 || first_to <= 0)
+        {
+            return 0;
+        }
+        if (sets_a < 0 || sets_b < 0 || games_a < 0 || games_b < 0)
+        {
+            throw std::invalid_argument("negative series score");
+        }
+        int sets_leader = sets_a;
+        int games_leader = games_a;
+        if (sets_b > sets_a)
+        {
+            sets_leader = sets_b;
+            games_leader = games_b;
+        }
+        else if (sets_b == sets_a)
+        {
+            games_leader = std::max(games_a, games_b);
+        }
+        int const remaining_sets = sets_to_win - sets_leader;
+        if (remaining_sets <= 0)
+        {
+            return 0;
+        }
+        int const demand = first_to * remaining_sets - games_leader;
+        return demand > 0 ? demand : 0;
+    }
+
     std::vector<WaveSlot> build_wave(std::vector<SeriesDemand> const& demands, int wave_limit)
     {
         if (wave_limit < 0)

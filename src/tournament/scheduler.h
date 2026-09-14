@@ -43,6 +43,9 @@ namespace tournament_scheduler
 
     int first_to_capacity(int target, int wins_a, int wins_b);
 
+    int series_safe_games(int sets_to_win, int first_to, int sets_a, int sets_b,
+                          int games_a, int games_b);
+
     struct SeriesDemand
     {
         std::uint64_t series_id = 0;

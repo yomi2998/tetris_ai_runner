@@ -113,7 +113,9 @@ namespace tournament_runner
         demands.reserve(ready_views.size());
         for (SeriesView const &view : ready_views)
         {
-            int const capacity = tournament_scheduler::first_to_capacity(view.format.first_to, view.games_a, view.games_b);
+            int const capacity = tournament_scheduler::series_safe_games(
+                view.format.sets_to_win, view.format.first_to,
+                view.sets_a, view.sets_b, view.games_a, view.games_b);
             if (capacity <= 0)
             {
                 continue;

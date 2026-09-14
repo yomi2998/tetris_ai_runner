@@ -550,7 +550,17 @@ namespace
         view.games_a = 9;
         view.games_b = 2;
         demands = tr::plan_demands({view});
-        check(demands.size() == 1 && demands[0].capacity == 2, "bo5_set_scoped_demand_ignores_set_score");
+        check(demands.size() == 1 && demands[0].capacity == 24, "bo5_set_aware_demand_spans_remaining_sets");
+        view.sets_a = 0;
+        view.sets_b = 2;
+        view.games_a = 2;
+        view.games_b = 9;
+        demands = tr::plan_demands({view});
+        check(demands.size() == 1 && demands[0].capacity == 2, "bo5_final_set_clinch_window_is_two_games");
+        view.games_a = 0;
+        view.games_b = 10;
+        demands = tr::plan_demands({view});
+        check(demands.size() == 1 && demands[0].capacity == 1, "bo5_final_set_clinch_window_is_one_game");
     }
 
     void run_two_candidate_tests()
@@ -708,14 +718,24 @@ namespace
             by_id[record.game_id] = &record;
         }
         int const target = gf.format.first_to;
-        std::vector<std::pair<std::pair<int, int>, int>> observations;
+        int const sets_to_win = gf.format.sets_to_win;
+        struct Observation
+        {
+            int sets_a = 0;
+            int sets_b = 0;
+            int games_a = 0;
+            int games_b = 0;
+            int count = 0;
+        };
+        std::vector<Observation> observations;
+        int sa = 0;
+        int sb = 0;
         int wa = 0;
         int wb = 0;
         bool sizing_ok = true;
         for (auto const &call : handle.log->call_ids)
         {
-            std::pair<int, int> const pre{wa, wb};
-            int count = 0;
+            Observation pre{sa, sb, wa, wb, 0};
             for (std::uint64_t id : call)
             {
                 int series = 0;
@@ -725,7 +745,7 @@ namespace
                 {
                     continue;
                 }
-                ++count;
+                ++pre.count;
                 auto it = by_id.find(id);
                 if (it == by_id.end())
                 {
@@ -742,40 +762,44 @@ namespace
                 }
                 if (wa == target || wb == target)
                 {
+                    if (wa == target)
+                    {
+                        ++sa;
+                    }
+                    else
+                    {
+                        ++sb;
+                    }
                     wa = 0;
                     wb = 0;
                 }
             }
-            int const capacity = target - std::max(pre.first, pre.second);
-            if (count == 0)
+            int const capacity = target * (sets_to_win - std::max(pre.sets_a, pre.sets_b))
+                - std::max(pre.games_a, pre.games_b);
+            if (pre.count == 0)
             {
                 continue;
             }
-            sizing_ok = sizing_ok && count == std::min(3, capacity);
-            observations.push_back({pre, count});
+            sizing_ok = sizing_ok && pre.count == std::min(3, capacity);
+            observations.push_back(pre);
         }
         check(sizing_ok, "every_grand_final_wave_matches_safe_capacity");
-        bool saw_9_0 = false;
-        bool saw_9_2 = false;
-        bool saw_cap_one = false;
-        for (auto const &[pre, count] : observations)
+        bool saw_first_set_spanning = false;
+        bool saw_second_set_spanning = false;
+        for (auto const &pre : observations)
         {
-            if (pre.first == 9 && pre.second == 0 && count == 2)
+            int const set_max = std::max(pre.sets_a, pre.sets_b);
+            if (set_max == 0 && pre.games_a == 9 && pre.games_b == 0 && pre.count == 3)
             {
-                saw_9_0 = true;
+                saw_first_set_spanning = true;
             }
-            if (pre.first == 9 && pre.second == 2 && count == 2)
+            if (set_max == 1 && pre.games_a == 0 && pre.games_b == 10 && pre.count == 3)
             {
-                saw_9_2 = true;
-            }
-            if (pre.first == 9 && pre.second == 10 && count == 1)
-            {
-                saw_cap_one = true;
+                saw_second_set_spanning = true;
             }
         }
-        check(saw_9_0, "capacity_clamps_below_wave_limit_at_9_0");
-        check(saw_9_2, "safe_9_2_window_schedules_exactly_two_games");
-        check(saw_cap_one, "capacity_of_one_schedules_single_game");
+        check(saw_first_set_spanning, "first_set_nine_window_spans_into_second_set");
+        check(saw_second_set_spanning, "second_set_ten_window_spans_into_third_set");
         check_no_post_clinch(handle.runner);
     }
 
