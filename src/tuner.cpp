@@ -1094,10 +1094,17 @@ static void check_parallel_bot_slots(SelfCheck &sc)
         --live;
     };
 
+    auto run_with_reserved_slot = [&](std::counting_semaphore<> &permits)
+    {
+        permits.acquire();
+        tmatch::run_pair_parallel(busy, busy, permits);
+        permits.release();
+    };
+
     std::counting_semaphore<> roomy(4);
     for (int i = 0; i < 6; ++i)
     {
-        tmatch::run_pair_parallel(busy, busy, roomy);
+        run_with_reserved_slot(roomy);
     }
     sc.check(peak == 2, "a match runs its two bots at once while slots are free");
 
@@ -1109,7 +1116,7 @@ static void check_parallel_bot_slots(SelfCheck &sc)
         {
             for (int r = 0; r < 4; ++r)
             {
-                tmatch::run_pair_parallel(busy, busy, tight);
+                run_with_reserved_slot(tight);
             }
         });
     }
@@ -1122,7 +1129,7 @@ static void check_parallel_bot_slots(SelfCheck &sc)
     std::counting_semaphore<> single(1);
     live = 0;
     peak = 0;
-    tmatch::run_pair_parallel(busy, busy, single);
+    run_with_reserved_slot(single);
     sc.check(peak == 1, "with no spare slot the bots are played one after the other");
 
     std::counting_semaphore<> drained(3);
@@ -1133,7 +1140,7 @@ static void check_parallel_bot_slots(SelfCheck &sc)
     {
         five.emplace_back([&]
         {
-            tmatch::run_pair_parallel(busy, busy, drained);
+            run_with_reserved_slot(drained);
         });
     }
     for (auto &th : five)
