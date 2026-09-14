@@ -244,7 +244,7 @@ int main(int argc, char **argv)
         engine.status()->map_rise = 0;
         engine.status()->combo_debt = 0;
         engine.status()->just_attacked = 0;
-        engine.status()->b2b_chain = 0;
+        engine.status()->since_attack = 0;
         engine.status()->b2b = !!b2b;
         engine.status()->acc_value = 0;
         engine.status()->like = 0;

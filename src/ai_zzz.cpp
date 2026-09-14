@@ -619,36 +619,6 @@ namespace ai_zzz
         t3_value_ref = values.t3;
     }
 
-    uint32_t TOJ::Status::pack(uint8_t x, uint8_t y, Kind kind, uint8_t readiness, bool mirrored)
-    {
-        return uint32_t(x) | uint32_t(y) << 4 | uint32_t(kind) << 9 | uint32_t(readiness) << 11 | uint32_t(mirrored) << 19;
-    }
-
-    uint8_t TOJ::Status::descriptor_x(uint32_t descriptor)
-    {
-        return static_cast<uint8_t>(descriptor & 15);
-    }
-
-    uint8_t TOJ::Status::descriptor_y(uint32_t descriptor)
-    {
-        return static_cast<uint8_t>((descriptor >> 4) & 31);
-    }
-
-    TOJ::Status::Kind TOJ::Status::descriptor_kind(uint32_t descriptor)
-    {
-        return static_cast<Kind>((descriptor >> 9) & 3);
-    }
-
-    uint8_t TOJ::Status::descriptor_readiness(uint32_t descriptor)
-    {
-        return static_cast<uint8_t>((descriptor >> 11) & 255);
-    }
-
-    bool TOJ::Status::descriptor_mirrored(uint32_t descriptor)
-    {
-        return ((descriptor >> 19) & 1) != 0;
-    }
-
     int TOJ::Status::t2_readiness(uint32_t row0, uint32_t row1, uint32_t row2, int count0, int count1, int x)
     {
         int total = count0 + count1;
@@ -760,75 +730,6 @@ namespace ai_zzz
         }
     }
 
-    TOJ::Status::DescriptorSet TOJ::Status::enumerate_descriptors(m_tetris::TetrisMap const &map)
-    {
-        DescriptorSet result;
-        if (map.width != 10)
-        {
-            return result;
-        }
-        uint8_t counts[23];
-        fill_counts(map, counts);
-        int end = std::min(20, map.roof - 2);
-        for (int y = 0; y < end; ++y)
-        {
-            uint32_t const *rows = map.row + y;
-            uint32_t t2 = (rows[0] & (rows[0] >> 2)) & ~(rows[0] >> 1) & ~(rows[1] | (rows[1] >> 1) | (rows[1] >> 2)) & 0xffu;
-            while (t2 != 0)
-            {
-                int x = std::countr_zero(t2);
-                t2 &= t2 - 1;
-                int value = t2_readiness(rows[0], rows[1], rows[2], counts[y], counts[y + 1], x);
-                result.data[result.count++] = pack(x, y, Kind::T2, value);
-            }
-            int qualifying = (counts[y] == 9) + (counts[y + 1] == 8) + (counts[y + 2] == 9);
-            int total = counts[y] + counts[y + 1] + counts[y + 2];
-            if (counts[y + 2] != 9 || qualifying < 2 || total <= 20)
-            {
-                continue;
-            }
-            int hole = std::countr_zero(~rows[2] & 0x3ffu);
-            uint32_t straight = ~rows[0] & ~(rows[1] | (rows[1] >> 1)) & ~(rows[3] | (rows[3] >> 1) | (rows[3] >> 2)) & ~((rows[4] >> 1) | (rows[4] >> 2)) & 0xfeu;
-            if ((straight >> hole) & 1)
-            {
-                int value = t3a_readiness(map.row, counts, y, hole, qualifying, total);
-                result.data[result.count++] = pack(hole, y, Kind::T3, value);
-                continue;
-            }
-            uint32_t mirrored = ~rows[0] & ~(rows[1] | (rows[1] << 1)) & ~(rows[3] | (rows[3] << 1) | (rows[3] << 2)) & ~((rows[4] << 1) | (rows[4] << 2)) & 0x1fcu;
-            if ((mirrored >> hole) & 1)
-            {
-                int value = t3b_readiness(map.row, counts, y, hole, qualifying, total);
-                result.data[result.count++] = pack(hole, y, Kind::T3, value, true);
-            }
-        }
-        return result;
-    }
-
-    TOJ::Status::Values TOJ::Status::decode(DescriptorSet const &slots, m_tetris::TetrisMap *out_map)
-    {
-        Values result;
-        for (int i = 0; i < slots.count; ++i)
-        {
-            uint32_t descriptor = slots.data[i];
-            Kind kind = descriptor_kind(descriptor);
-            int readiness = descriptor_readiness(descriptor);
-            if (kind == Kind::T2)
-            {
-                result.t2 += static_cast<int16_t>(readiness);
-            }
-            else
-            {
-                result.t3 += static_cast<int16_t>(readiness);
-            }
-            if (out_map != nullptr)
-            {
-                apply_overlay(kind, descriptor_mirrored(descriptor), descriptor_x(descriptor), descriptor_y(descriptor), readiness, *out_map);
-            }
-        }
-        return result;
-    }
-
     TOJ::Result TOJ::eval(TetrisNodeEx const &node, TetrisMap const &map, TetrisMap const &src_map) const
     {
         const int width_m1 = map.width - 1;
@@ -859,15 +760,15 @@ namespace ai_zzz
             int HoleCount;
             int HoleLine;
 
-            int Wide[31];
+            int Wide2;
+            int Wide3;
+            int Wide4;
 
             int LineCoverBits;
             int ClearWidth;
         } v;
         std::memset(&v, 0, sizeof v);
         int WideCount = t_map.width - 1;
-        uint32_t wmask = uint32_t(1 << t_map.width) - 1;
-        int cheese_v = 0;
         int v08_hole_v = 0;
         int v08_well_v = 0;
         int hole_run[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -877,10 +778,6 @@ namespace ai_zzz
         {
             v.LineCoverBits |= t_map.row[y];
             int LineHole = v.LineCoverBits ^ t_map.row[y];
-            uint32_t above = y + 1 < t_map.height ? t_map.row[y + 1] : 0;
-            uint32_t below = y > 0 ? t_map.row[y - 1] : wmask;
-            uint32_t enclosed = ~uint32_t(t_map.row[y]) & ((t_map.row[y] << 1) | 1u) & ((t_map.row[y] >> 1) | (wmask & ~(wmask >> 1))) & above & below & wmask;
-            cheese_v += zzz::BitCount(enclosed);
             for (int x = 0; x < t_map.width; ++x)
             {
                 if ((LineHole >> x) & 1)
@@ -929,7 +826,18 @@ namespace ai_zzz
             WideCount = std::min<int>(WideCount, t_map.width - zzz::BitCount(v.LineCoverBits));
             if (v.HoleLine == 0)
             {
-                ++v.Wide[WideCount];
+                switch (WideCount)
+                {
+                case 2:
+                    ++v.Wide2;
+                    break;
+                case 3:
+                    ++v.Wide3;
+                    break;
+                case 4:
+                    ++v.Wide4;
+                    break;
+                }
             }
         }
         int side_roof = std::max({map.top[0], map.top[1], map.top[2], map.top[width_m1], map.top[width_m1 - 1], map.top[width_m1 - 2]});
@@ -978,12 +886,6 @@ namespace ai_zzz
             bump_sq += diff * diff;
         }
         int covered = 0;
-        int hole_high_v = 0;
-        int min_h = t_heights[0];
-        for (int x = 1; x < t_map.width; ++x)
-        {
-            min_h = std::min(min_h, t_heights[x]);
-        }
         for (int x = 0; x < t_map.width; ++x)
         {
             int filled = 0;
@@ -996,23 +898,14 @@ namespace ai_zzz
                 else
                 {
                     covered += std::min(6, filled);
-                    if (y >= min_h)
-                    {
-                        hole_high_v += y - min_h + 1;
-                    }
                 }
             }
         }
-        int parity_v = 0;
         int height_max = 0;
-        double col_height_sum = 0;
         for (int x = 0; x < t_map.width; ++x)
         {
-            parity_v += x % 2 == 0 ? t_heights[x] : -t_heights[x];
             height_max = std::max(height_max, t_heights[x]);
-            col_height_sum += t_heights[x] * p.col_height[x];
         }
-        parity_v = std::abs(parity_v);
         int height_excess_half = std::max(0, height_max - 10);
         int height_excess_quarter = std::max(0, height_max - 15);
         result.well_depth = static_cast<int16_t>(well_depth);
@@ -1023,24 +916,18 @@ namespace ai_zzz
             - v.HoleCount * p.hole_count
             - v.HoleLine * p.hole_line
             - v.ClearWidth * p.clear_width
-            + v.Wide[2] * p.wide_2
-            + v.Wide[3] * p.wide_3
-            + v.Wide[4] * p.wide_4
+            + v.Wide2 * p.wide_2
+            + v.Wide3 * p.wide_3
+            + v.Wide4 * p.wide_4
             - covered * p.cover
             - bump * p.bump
             - bump_sq * p.bump_sq
             + well_depth * p.well
-            + (well_depth > 0 ? p.well_col[well_x] : 0.)
             - height_max * p.height_max
             - height_excess_half * p.height_half
             - height_excess_quarter * p.height_quarter
-            - parity_v * p.parity
-            + col_height_sum
-            - cheese_v * p.cheese
             - v08_hole_v * p.v08_hole
             - v08_well_v * p.v08_well
-            - hole_high_v * p.hole_high
-            + (map.count % 10 == 6 && map.count <= 36 && map.roof <= 4 ? 10. * p.pc_next : 0.)
             );
         return result;
     }
@@ -1121,13 +1008,11 @@ namespace ai_zzz
                 update_like((node->status.t == 'T') * p.waste_t);
                 update_like(p.clear_1 * (1 - p.debt_ratio));
                 result.combo_debt += p.clear_1 * p.debt_ratio;
-                result.b2b_chain = 0;
             }
             attack += get_combo_attack(++result.combo);
             result.b2b = node.type != TSpinType::None;
             if (node.type != TSpinType::None)
             {
-                result.b2b_chain = status.b2b ? status.b2b_chain + 1 : 1;
             }
             break;
         case 2:
@@ -1136,7 +1021,6 @@ namespace ai_zzz
                 attack += 4 + status.b2b;
                 result.b2b = true;
                 update_like(p.tspin_2);
-                result.b2b_chain = status.b2b ? status.b2b_chain + 1 : 1;
                 t_attack = 1;
             }
             else
@@ -1147,7 +1031,6 @@ namespace ai_zzz
                 update_like((node->status.t == 'T') * p.waste_t);
                 update_like(p.clear_2 * (1 - p.debt_ratio));
                 result.combo_debt += p.clear_2 * p.debt_ratio;
-                result.b2b_chain = 0;
             }
             attack += get_combo_attack(++result.combo);
             break;
@@ -1157,7 +1040,6 @@ namespace ai_zzz
                 attack = 6 + status.b2b * 2;
                 result.b2b = true;
                 update_like(p.tspin_3);
-                result.b2b_chain = status.b2b ? status.b2b_chain + 1 : 1;
                 t_attack = 1;
             }
             else
@@ -1167,7 +1049,6 @@ namespace ai_zzz
                 update_like((node->status.t == 'I') * p.waste_i);
                 update_like(p.clear_3 * (1 - p.debt_ratio));
                 result.combo_debt += p.clear_3 * p.debt_ratio;
-                result.b2b_chain = 0;
             }
             attack += get_combo_attack(++result.combo);
             break;
@@ -1175,7 +1056,6 @@ namespace ai_zzz
             result.b2b = true;
             attack = get_combo_attack(++result.combo) + 4 + status.b2b;
             update_like(p.clear_4);
-            result.b2b_chain = status.b2b ? status.b2b_chain + 1 : 1;
             break;
         }
         result.under_attack = std::max(0, result.under_attack - attack);
@@ -1237,6 +1117,8 @@ namespace ai_zzz
             attack += static_cast<int>(p.pc_attack);
         }
         result.just_attacked = attack > 0 ? 1 : 0;
+        int stall = attack > 0 ? 0 : std::min<int>(status.since_attack + 1, 20);
+        result.since_attack = static_cast<int16_t>(stall);
         double field = eval_result.value * double(40 - config_safe) / 20;
         double t_like = 0;
         double t_dislike = 0;
@@ -1267,10 +1149,8 @@ namespace ai_zzz
             + attack * (config_safe + 16) * p.attack * (status.under_attack > 0 ? p.garb_cancel : 1.)
             + get_combo_attack(result.combo) * result.combo * (100 - config_safe) * p.combo
             + (result.b2b - status.b2b) * (config_safe + 16) * p.b2b
-            + (clear == 0 && status.b2b ? double(config_safe + 8) * p.b2b_hold : 0.)
             + (clear != 4 ? double(eval_result.well_depth) * std::max(0, 6 - i_expect) * double(config_safe + 8) * p.well_use : 0.)
-            + (result.map_rise > 0 && clear > 0 ? double(clear) * double(config_safe + 8) * p.garb_dig : 0.)
-            + (result.b2b_chain > 1 ? double(result.b2b_chain) * double(config_safe + 8) * p.b2b_chain : 0.)
+            - (stall > 0 ? double(config_safe + 8) * p.no_attack * std::ldexp(1.0, stall - 1) : 0.)
             - t_dislike
             - dislike * config_safe * (config_safe + 4) * 4
             - result.death * 999999999.0

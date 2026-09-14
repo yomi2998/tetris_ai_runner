@@ -229,35 +229,21 @@ namespace ai_zzz
             double bump = 0.5;
             double bump_sq = 0.15;
             double well = 3;
-            std::array<double, 10> well_col = {
-                -0.03, -0.05, 0, 0.03, 0.06,
-                0.06, 0.03, 0, -0.05, -0.03,
-            };
-            std::array<double, 10> col_height = {
-                0.05, 0.05, 0, -0.05, -0.1,
-                -0.1, -0.05, 0, 0.05, 0.05,
-            };
             double height_max = 0.2;
             double height_half = 0.5;
             double height_quarter = 1;
-            double parity = 0.05;
             double well_use = 0.05;
-            double b2b_hold = 0.5;
             double pc_like = 999;
             double pc_attack = 6;
-            double cheese = 1;
-            double garb_dig = 0.5;
             double garb_cancel = 1;
             double v08_hole = 0;
             double v08_well = 0;
-            double hole_high = 0.5;
             double debt_ratio = 0.5;
             double feed = 0.5;
-            double b2b_chain = 4;
-            double pc_next = 2;
+            double no_attack = 0.4;
         };
 
-        static constexpr size_t NUM_PARAMS = 71;
+        static constexpr size_t NUM_PARAMS = 45;
         static constexpr double kProductionDefaultTheta[NUM_PARAMS] = {
             10.443970269485416, 9.373513186121711, 12.962439145401284, 13.574406638200236, 6.476214003643634, 13.127765811816161,
             0.2356306477456177, 0.031172098101847057, 8.24986828703141, -4.52407485928385, 0.010288919706495387, 2.861876469543665,
@@ -265,11 +251,9 @@ namespace ai_zzz
             -1.0261488540315091, -0.6841360238910571, 0.02525647680792852, 0.005775522207892112, -0.4211018147090898, -0.8037881582329601,
             -0.7588763429975817, -0.5514266626147901, -0.9527062962470468, 1.5388267376187479, -0.11955543708991323,
             2, 0.5, 0.15, 3,
-            -0.03, -0.05, 0, 0.03, 0.06, 0.06, 0.03, 0, -0.05, -0.03,
-            0.05, 0.05, 0, -0.05, -0.1, -0.1, -0.05, 0, 0.05, 0.05,
-            0.2, 0.5, 1, 0.05, 0.05, 0.5, 999, 6,
-            1, 0.5, 1, 0, 0,
-            0.5, 0.5, 0.5, 4, 2,
+            0.2, 0.5, 1, 0.05, 999, 6,
+            1, 0, 0, 0.5, 0.5,
+            0.4,
         };
 
         static void production_default_theta(double *out)
@@ -299,22 +283,15 @@ namespace ai_zzz
             out[28] = p.ratio;
             out[29] = p.cover;       out[30] = p.bump;
             out[31] = p.bump_sq;     out[32] = p.well;
-            for (size_t i = 0; i < 10; ++i)
-            {
-                out[33 + i] = p.well_col[i];
-                out[43 + i] = p.col_height[i];
-            }
-            out[53] = p.height_max;  out[54] = p.height_half;
-            out[55] = p.height_quarter;
-            out[56] = p.parity;      out[57] = p.well_use;
-            out[58] = p.b2b_hold;    out[59] = p.pc_like;
-            out[60] = p.pc_attack;
-            out[61] = p.cheese;      out[62] = p.garb_dig;
-            out[63] = p.garb_cancel;
-            out[64] = p.v08_hole;    out[65] = p.v08_well;
-            out[66] = p.hole_high;   out[67] = p.debt_ratio;
-            out[68] = p.feed;        out[69] = p.b2b_chain;
-            out[70] = p.pc_next;
+            out[33] = p.height_max;  out[34] = p.height_half;
+            out[35] = p.height_quarter;
+            out[36] = p.well_use;    out[37] = p.pc_like;
+            out[38] = p.pc_attack;
+            out[39] = p.garb_cancel;
+            out[40] = p.v08_hole;    out[41] = p.v08_well;
+            out[42] = p.debt_ratio;
+            out[43] = p.feed;
+            out[44] = p.no_attack;
         }
 
         static void theta_to_param(double const *in, Param &p)
@@ -336,22 +313,15 @@ namespace ai_zzz
             p.ratio = in[28];
             p.cover = in[29];        p.bump = in[30];
             p.bump_sq = in[31];      p.well = in[32];
-            for (size_t i = 0; i < 10; ++i)
-            {
-                p.well_col[i] = in[33 + i];
-                p.col_height[i] = in[43 + i];
-            }
-            p.height_max = in[53];   p.height_half = in[54];
-            p.height_quarter = in[55];
-            p.parity = in[56];       p.well_use = in[57];
-            p.b2b_hold = in[58];     p.pc_like = in[59];
-            p.pc_attack = in[60];
-            p.cheese = in[61];       p.garb_dig = in[62];
-            p.garb_cancel = in[63];
-            p.v08_hole = in[64];     p.v08_well = in[65];
-            p.hole_high = in[66];    p.debt_ratio = in[67];
-            p.feed = in[68];         p.b2b_chain = in[69];
-            p.pc_next = in[70];
+            p.height_max = in[33];   p.height_half = in[34];
+            p.height_quarter = in[35];
+            p.well_use = in[36];     p.pc_like = in[37];
+            p.pc_attack = in[38];
+            p.garb_cancel = in[39];
+            p.v08_hole = in[40];     p.v08_well = in[41];
+            p.debt_ratio = in[42];
+            p.feed = in[43];
+            p.no_attack = in[44];
         }
 
         static void struct_defaults_theta(double *out)
@@ -397,7 +367,7 @@ namespace ai_zzz
             int8_t map_rise;
             int8_t b2b;
             int8_t just_attacked = 0;
-            int8_t b2b_chain = 0;
+            int16_t since_attack = 0;
             int16_t t2_value;
             int16_t t3_value;
             double combo_debt = 0;
@@ -416,26 +386,13 @@ namespace ai_zzz
                 int16_t t2 = 0;
                 int16_t t3 = 0;
             };
-            struct DescriptorSet
-            {
-                std::array<uint32_t, 120> data;
-                uint8_t count = 0;
-            };
 
             static void init_t_value(m_tetris::TetrisMap const &m, int16_t &t2_value_ref, int16_t &t3_value_ref, m_tetris::TetrisMap *out_map = nullptr);
-            static uint32_t pack(uint8_t x, uint8_t y, Kind kind, uint8_t readiness, bool mirrored = false);
-            static uint8_t descriptor_x(uint32_t descriptor);
-            static uint8_t descriptor_y(uint32_t descriptor);
-            static Kind descriptor_kind(uint32_t descriptor);
-            static uint8_t descriptor_readiness(uint32_t descriptor);
-            static bool descriptor_mirrored(uint32_t descriptor);
             static int t2_readiness(uint32_t row0, uint32_t row1, uint32_t row2, int count0, int count1, int x);
             static int t3a_readiness(uint32_t const *rows, uint8_t const *counts, int y, int hole, int qualifying, int total);
             static int t3b_readiness(uint32_t const *rows, uint8_t const *counts, int y, int hole, int qualifying, int total);
             static void apply_overlay(Kind kind, bool mirrored, int x, int y, int readiness, m_tetris::TetrisMap &map);
             static void fill_counts(m_tetris::TetrisMap const &map, uint8_t *counts);
-            static DescriptorSet enumerate_descriptors(m_tetris::TetrisMap const &map);
-            static Values decode(DescriptorSet const &slots, m_tetris::TetrisMap *out_map);
         };
     public:
         int8_t get_safe(m_tetris::TetrisMap const &m, char t) const;

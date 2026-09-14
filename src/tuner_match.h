@@ -29,7 +29,7 @@
 
 namespace tuner_match
 {
-    inline constexpr size_t NUM_PARAMS = 71;
+    inline constexpr size_t NUM_PARAMS = 45;
     inline constexpr int next_length = tuner_toj::Tuner::NEXT_LENGTH;
 
     inline constexpr double const (&param_scale)[NUM_PARAMS] = tuner_toj::Tuner::param_scale;
@@ -174,7 +174,7 @@ namespace tuner_match
             ai.status()->map_rise = 0;
             ai.status()->combo_debt = 0;
             ai.status()->just_attacked = 0;
-            ai.status()->b2b_chain = 0;
+            ai.status()->since_attack = 0;
             ai.status()->b2b = !!b2b;
             ai.status()->acc_value = 0;
             ai.status()->like = 0;

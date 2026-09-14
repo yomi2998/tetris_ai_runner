@@ -12,7 +12,7 @@ namespace tuner_toj
     class Tuner
     {
     public:
-        static constexpr size_t NUM_PARAMS = 71;
+        static constexpr size_t NUM_PARAMS = 45;
         static constexpr int NEXT_LENGTH = 6;
 
         static constexpr double param_scale[NUM_PARAMS] = {
@@ -20,11 +20,10 @@ namespace tuner_toj
             0.037, 2.64, 1.8, 0.00085, 0.0012, 1.4, 0.31, 0.24, 0.99, 0.48,
             0.70, 0.0092, 0.058, 1.3, 0.22, 0.26, 0.59, 0.94, 0.68,
             0.5, 0.12, 0.04, 0.7,
-            0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03,
-            0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,
-            0.06, 0.12, 0.25, 0.02, 0.01, 0.1, 3.0, 0.15,
-            0.25, 0.1, 0.15, 0.8, 1.2,
-            0.1, 0.1, 0.15, 0.8, 0.4,
+            0.06, 0.12, 0.25, 0.01, 3.0, 0.15,
+            0.15, 0.8, 1.2,
+            0.1, 0.15,
+            0.1,
         };
 
         static inline char const *const param_names[NUM_PARAMS] = {
@@ -34,14 +33,9 @@ namespace tuner_toj
             "clear_3", "clear_4", "t2_slot", "t3_slot", "tspin_mini", "tspin_1",
             "tspin_2", "tspin_3", "combo", "ratio",
             "cover", "bump", "bump_sq", "well",
-            "well_col_0", "well_col_1", "well_col_2", "well_col_3", "well_col_4",
-            "well_col_5", "well_col_6", "well_col_7", "well_col_8", "well_col_9",
-            "col_height_0", "col_height_1", "col_height_2", "col_height_3", "col_height_4",
-            "col_height_5", "col_height_6", "col_height_7", "col_height_8", "col_height_9",
-            "height_max", "height_half", "height_quarter", "parity", "well_use",
-            "b2b_hold", "pc_like", "pc_attack",
-            "cheese", "garb_dig", "garb_cancel", "v08_hole", "v08_well",
-            "hole_high", "debt_ratio", "feed", "b2b_chain", "pc_next",
+            "height_max", "height_half", "height_quarter", "well_use", "pc_like", "pc_attack",
+            "garb_cancel", "v08_hole", "v08_well", "debt_ratio", "feed",
+            "no_attack",
         };
 
         static constexpr int combo_table[] = { 0, 0, 0, 1, 1, 2, 2, 3, 3, 4 };

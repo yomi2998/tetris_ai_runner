@@ -316,7 +316,7 @@ extern "C" DECLSPEC_EXPORT char *__cdecl TetrisAI(int overfield[], int field[], 
     srs_ai.status()->map_rise = 0;
     srs_ai.status()->combo_debt = 0;
     srs_ai.status()->just_attacked = 0;
-    srs_ai.status()->b2b_chain = 0;
+    srs_ai.status()->since_attack = 0;
     srs_ai.status()->b2b = !!b2b;
     srs_ai.status()->acc_value = 0;
     srs_ai.status()->like = 0;
