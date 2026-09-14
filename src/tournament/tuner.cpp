@@ -302,6 +302,15 @@ namespace tournament_tuner
         return "unknown";
     }
 
+    std::string bracket_id_name(tournament_bracket::CandidateId id)
+    {
+        if (id == tournament_bracket::kNoCandidate)
+        {
+            return "-";
+        }
+        return std::to_string(id);
+    }
+
     void print_bracket(Runner const &runner)
     {
         auto const &bracket = runner.bracket();
@@ -309,9 +318,10 @@ namespace tournament_tuner
         {
             auto view = bracket.series(id);
             std::println("S{} {} R{} {}v{} sets {}-{} first-to-{} games {}-{} played {} {} winner {}",
-                view.id, bracket_stage_name(view.stage), view.round, view.side_a, view.side_b,
+                view.id, bracket_stage_name(view.stage), view.round,
+                bracket_id_name(view.side_a), bracket_id_name(view.side_b),
                 view.sets_a, view.sets_b, view.format.first_to, view.games_a, view.games_b,
-                view.games_played, bracket_status_name(view.status), view.winner);
+                view.games_played, bracket_status_name(view.status), bracket_id_name(view.winner));
         }
     }
 
