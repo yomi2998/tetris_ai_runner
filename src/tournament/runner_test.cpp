@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include "tournament_runner.h"
-#include "tournament_scheduler.h"
+#include "tournament/runner.h"
+#include "tournament/scheduler.h"
 
 namespace tr = tournament_runner;
 namespace tb = tournament_bracket;

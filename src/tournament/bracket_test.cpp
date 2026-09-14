@@ -1,4 +1,4 @@
-#include "tournament_bracket.h"
+#include "tournament/bracket.h"
 
 #include <algorithm>
 #include <cstdint>

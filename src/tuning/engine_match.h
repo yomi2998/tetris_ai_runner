@@ -14,9 +14,9 @@
 #include <vector>
 
 #include "tetris_core.h"
-#include "tournament_scheduler.h"
-#include "tuning_domain.h"
-#include "tuning_match.h"
+#include "tournament/scheduler.h"
+#include "tuning/domain.h"
+#include "tuning/match.h"
 
 namespace tuning
 {

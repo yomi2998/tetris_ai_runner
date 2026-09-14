@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "tuning_match.h"
+#include "tuning/match.h"
 
 namespace tournament_promotion
 {

@@ -1,4 +1,4 @@
-#include "tournament_checkpoint.h"
+#include "tournament/checkpoint.h"
 
 #include <cstddef>
 #include <cstring>

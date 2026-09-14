@@ -1,4 +1,4 @@
-#include "tournament_runner.h"
+#include "tournament/runner.h"
 
 #include <algorithm>
 #include <utility>

@@ -9,7 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "tournament_rating.h"
+#include "tournament/rating.h"
 
 namespace tournament_ordinal
 {

@@ -10,9 +10,9 @@
 #include <vector>
 
 #include "tetris_core.h"
-#include "tuning_domain.h"
+#include "tuning/domain.h"
 #ifndef TUNING_DOMAIN_TEST_SKIP_TOJ
-#include "tuning_toj_adapter.h"
+#include "tuning/toj_adapter.h"
 #endif
 
 namespace

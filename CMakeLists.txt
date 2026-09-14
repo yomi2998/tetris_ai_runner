@@ -75,7 +75,7 @@ add_executable(match
     src/integer_utils.cpp
     src/random.cpp
 )
-target_include_directories(match PRIVATE src)
+target_include_directories(match PRIVATE src third_party/nlohmann/include)
 if (_cxx_compiler_lower MATCHES "mingw")
     target_link_options(match PRIVATE -static-libgcc -static-libstdc++ -static)
 endif()
@@ -136,33 +136,33 @@ if (UNIX)
 endif()
 
 add_executable(tournament_bracket_test
-    src/tournament_bracket.cpp
-    src/tournament_bracket_test.cpp
+    src/tournament/bracket.cpp
+    src/tournament/bracket_test.cpp
 )
 target_include_directories(tournament_bracket_test PRIVATE src)
 
 add_executable(tournament_scheduler_test
-    src/tournament_scheduler.cpp
-    src/tournament_scheduler_test.cpp
+    src/tournament/scheduler.cpp
+    src/tournament/scheduler_test.cpp
 )
 target_include_directories(tournament_scheduler_test PRIVATE src)
 target_link_libraries(tournament_scheduler_test PRIVATE Threads::Threads)
 
 add_executable(tournament_rating_test
-    src/tournament_rating.cpp
-    src/tournament_rating_test.cpp
+    src/tournament/rating.cpp
+    src/tournament/rating_test.cpp
 )
 target_include_directories(tournament_rating_test PRIVATE src)
 
 add_executable(tournament_checkpoint_test
-    src/tournament_checkpoint.cpp
-    src/tournament_checkpoint_test.cpp
+    src/tournament/checkpoint.cpp
+    src/tournament/checkpoint_test.cpp
 )
-target_include_directories(tournament_checkpoint_test PRIVATE src)
+target_include_directories(tournament_checkpoint_test PRIVATE src third_party/nlohmann/include)
 
 add_executable(tournament_cmaes_test
-    src/tournament_cmaes.cpp
-    src/tournament_cmaes_test.cpp
+    src/tournament/cmaes.cpp
+    src/tournament/cmaes_test.cpp
 )
 target_include_directories(tournament_cmaes_test PRIVATE src)
 target_link_libraries(tournament_cmaes_test PRIVATE c_cmaes)
@@ -178,46 +178,46 @@ add_library(tournament_toj_objects OBJECT
 target_include_directories(tournament_toj_objects PRIVATE src)
 
 add_executable(tuning_domain_test
-    src/tuning_domain_test.cpp
+    src/tuning/domain_test.cpp
     $<TARGET_OBJECTS:tournament_toj_objects>
 )
 target_include_directories(tuning_domain_test PRIVATE src)
 
 add_executable(tuning_match_test
-    src/tuning_match_test.cpp
+    src/tuning/match_test.cpp
     $<TARGET_OBJECTS:tournament_toj_objects>
 )
 target_include_directories(tuning_match_test PRIVATE src)
 target_link_libraries(tuning_match_test PRIVATE Threads::Threads)
 
 add_executable(tournament_promotion_test
-    src/tournament_promotion_test.cpp
+    src/tournament/promotion_test.cpp
 )
 target_include_directories(tournament_promotion_test PRIVATE src)
 target_link_libraries(tournament_promotion_test PRIVATE Threads::Threads)
 
 add_executable(tournament_ordinal_test
-    src/tournament_ordinal_test.cpp
+    src/tournament/ordinal_test.cpp
 )
 target_include_directories(tournament_ordinal_test PRIVATE src)
 
 add_executable(tournament_bytes_test
-    src/tournament_bytes_test.cpp
+    src/tournament/bytes_test.cpp
 )
 target_include_directories(tournament_bytes_test PRIVATE src)
 
 add_executable(tournament_runner_test
-    src/tournament_bracket.cpp
-    src/tournament_runner.cpp
-    src/tournament_scheduler.cpp
-    src/tournament_runner_test.cpp
+    src/tournament/bracket.cpp
+    src/tournament/runner.cpp
+    src/tournament/scheduler.cpp
+    src/tournament/runner_test.cpp
 )
 target_include_directories(tournament_runner_test PRIVATE src)
 target_link_libraries(tournament_runner_test PRIVATE Threads::Threads)
 
 add_executable(tuning_engine_match_test
-    src/tuning_engine_match_test.cpp
-    src/tournament_scheduler.cpp
+    src/tuning/engine_match_test.cpp
+    src/tournament/scheduler.cpp
     src/rule_srs.cpp
     src/search_simple.cpp
     $<TARGET_OBJECTS:tournament_toj_objects>
@@ -232,16 +232,16 @@ add_executable(tetris_memory_budget_test
 target_include_directories(tetris_memory_budget_test PRIVATE src)
 
 add_executable(tournament_tuner
-    src/tournament_tuner.cpp
-    src/tournament_bracket.cpp
-    src/tournament_scheduler.cpp
-    src/tournament_rating.cpp
-    src/tournament_checkpoint.cpp
-    src/tournament_cmaes.cpp
-    src/tournament_runner.cpp
+    src/tournament/tuner.cpp
+    src/tournament/bracket.cpp
+    src/tournament/scheduler.cpp
+    src/tournament/rating.cpp
+    src/tournament/checkpoint.cpp
+    src/tournament/cmaes.cpp
+    src/tournament/runner.cpp
     $<TARGET_OBJECTS:tournament_toj_objects>
 )
-target_include_directories(tournament_tuner PRIVATE src third_party/c-cmaes/src)
+target_include_directories(tournament_tuner PRIVATE src third_party/c-cmaes/src third_party/nlohmann/include)
 target_link_libraries(tournament_tuner PRIVATE c_cmaes Threads::Threads)
 
 enable_testing()

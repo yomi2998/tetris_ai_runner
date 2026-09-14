@@ -1,4 +1,4 @@
-#include "tournament_promotion.h"
+#include "tournament/promotion.h"
 
 #include <algorithm>
 #include <cmath>

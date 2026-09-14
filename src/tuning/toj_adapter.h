@@ -12,7 +12,7 @@
 #include "search_tspin.h"
 #include "tetris_core.h"
 #include "tuner_toj.h"
-#include "tuning_domain.h"
+#include "tuning/domain.h"
 
 namespace tuning_toj
 {

@@ -10,10 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include "tournament_bracket.h"
-#include "tournament_scheduler.h"
-#include "tuning_domain.h"
-#include "tuning_match.h"
+#include "tournament/bracket.h"
+#include "tournament/scheduler.h"
+#include "tuning/domain.h"
+#include "tuning/match.h"
 
 namespace tournament_runner
 {

@@ -1,4 +1,4 @@
-#include "tournament_rating.h"
+#include "tournament/rating.h"
 
 #include <algorithm>
 #include <cmath>

@@ -42,13 +42,13 @@ The exact copyright and attribution statements belong to those files, not to thi
 
 ## Library behavior notes
 
-- Files are written only on error paths (`errcmaes.err` from the internal `ERRORMESSAGE` handler) and by `cmaes_Optimize`, `cmaes_WriteToFile*`, and `cmaes_ReadSignals`. The wrapper in `src/tournament_cmaes.cpp` calls none of these.
-- Upstream quirk: `cmaes_init_final` appends `actparcmaes.par` unless `sp.filename` is a none string, and the programmatic init path leaves `sp.filename` NULL even when the caller passes `non`, so the file is written anyway. The wrapper therefore sets `sp.filename` to a heap copy of `non` between `cmaes_init_para` and `cmaes_init_final`, which suppresses the write and is freed by `cmaes_readpara_exit`. An empty working directory test in `src/tournament_cmaes_test.cpp` verifies that no incidental files appear.
+- Files are written only on error paths (`errcmaes.err` from the internal `ERRORMESSAGE` handler) and by `cmaes_Optimize`, `cmaes_WriteToFile*`, and `cmaes_ReadSignals`. The wrapper in `src/tournament/cmaes.cpp` calls none of these.
+- Upstream quirk: `cmaes_init_final` appends `actparcmaes.par` unless `sp.filename` is a none string, and the programmatic init path leaves `sp.filename` NULL even when the caller passes `non`, so the file is written anyway. The wrapper therefore sets `sp.filename` to a heap copy of `non` between `cmaes_init_para` and `cmaes_init_final`, which suppresses the write and is freed by `cmaes_readpara_exit`. An empty working directory test in `src/tournament/cmaes_test.cpp` verifies that no incidental files appear.
 - The library applies an initial standard deviation normalization (`sqrt(N / trace)` scaling with `sigma = sqrt(trace/N)`), so the effective initial per coordinate standard deviation equals the configured coordinate scales.
 - Seeds below 1 fall back to a clock derived value. The wrapper rejects seeds outside [1, 2147483647].
 - The lazy eigendecomposition can skip recomputation based on wall-clock timing (`updateCmode.maxtime`, default 0.20). The wrapper sets `sp.updateCmode.maxtime = 1.0` after initialization so sampling never depends on timing.
 
-## Wrapper contract (src/tournament_cmaes.h)
+## Wrapper contract (src/tournament/cmaes.h)
 
 - `ask()` and `tell(ordinal_fitness)` strictly alternate. `ask()` returns the flattened lambda by dimension population; entry `i * dimension + j` is coordinate `j` of sample `i`. `tell()` consumes one ordinal fitness value per sample, lower is better, matching the library's minimization convention. Values are used only through their ordering.
 - `tell()` rejects values that are non-finite or flat in the sense that the best and the median ordinal value are equal, because the library responds to flat fitness by inflating sigma and emitting an error file.

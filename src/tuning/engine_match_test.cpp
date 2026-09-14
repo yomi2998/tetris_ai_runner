@@ -15,14 +15,14 @@
 #include "rule_srs.h"
 #include "search_simple.h"
 #include "tetris_core.h"
-#include "tournament_scheduler.h"
-#include "tuning_domain.h"
-#include "tuning_engine_match.h"
-#include "tuning_match.h"
+#include "tournament/scheduler.h"
+#include "tuning/domain.h"
+#include "tuning/engine_match.h"
+#include "tuning/match.h"
 
 #ifndef TUNING_ENGINE_MATCH_TEST_SKIP_TOJ
-#include "tuning_toj_adapter.h"
-#include "tuning_toj_match.h"
+#include "tuning/toj_adapter.h"
+#include "tuning/toj_match.h"
 #endif
 
 namespace

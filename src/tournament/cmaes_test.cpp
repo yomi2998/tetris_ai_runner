@@ -1,4 +1,4 @@
-#include "tournament_cmaes.h"
+#include "tournament/cmaes.h"
 
 #include <algorithm>
 #include <cmath>

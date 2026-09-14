@@ -1,4 +1,4 @@
-#include "tournament_scheduler.h"
+#include "tournament/scheduler.h"
 
 #include <algorithm>
 #include <exception>

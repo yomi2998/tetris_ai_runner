@@ -6,7 +6,7 @@
 #include <limits>
 #include <vector>
 
-#include "tuning_domain.h"
+#include "tuning/domain.h"
 
 namespace tuning
 {

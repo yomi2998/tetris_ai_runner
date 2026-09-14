@@ -6,10 +6,10 @@
 #include <string_view>
 #include <vector>
 
-#include "tuning_domain.h"
-#include "tuning_match.h"
+#include "tuning/domain.h"
+#include "tuning/match.h"
 #ifndef TUNING_MATCH_TEST_SKIP_TOJ
-#include "tuning_toj_match.h"
+#include "tuning/toj_match.h"
 #endif
 
 namespace

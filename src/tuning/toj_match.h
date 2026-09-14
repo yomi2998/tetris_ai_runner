@@ -7,9 +7,9 @@
 #include <vector>
 
 #include "tuner_match.h"
-#include "tuning_domain.h"
-#include "tuning_match.h"
-#include "tuning_toj_adapter.h"
+#include "tuning/domain.h"
+#include "tuning/match.h"
+#include "tuning/toj_adapter.h"
 
 namespace tuning_toj
 {

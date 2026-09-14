@@ -1,4 +1,4 @@
-#include "tournament_ordinal.h"
+#include "tournament/ordinal.h"
 
 #include <limits>
 #include <print>
