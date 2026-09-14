@@ -210,7 +210,7 @@ namespace tournament_tuner
         std::println("Threading: workers = threads if given else hardware_threads - 1, roster = 2 * workers, lambda = roster - 1");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
-        std::println("During runs: type view and Enter for one live game per wave, empty line to stop");
+        std::println("During runs: type view and Enter for one live game per wave, empty line to stop, bracket for live standings");
         std::println("Outputs: tournament_incumbent.bin anchor, tournament_current.bin latest champion");
         std::println("Existing tuner files are not touched");
     }
@@ -272,6 +272,47 @@ namespace tournament_tuner
             return 1;
         }
         return 0;
+    }
+
+    std::string bracket_status_name(tournament_bracket::SeriesStatus status)
+    {
+        switch (status)
+        {
+        case tournament_bracket::SeriesStatus::Pending: return "pending";
+        case tournament_bracket::SeriesStatus::Ready: return "ready";
+        case tournament_bracket::SeriesStatus::Complete: return "complete";
+        case tournament_bracket::SeriesStatus::Walkover: return "walkover";
+        case tournament_bracket::SeriesStatus::Void: return "void";
+        case tournament_bracket::SeriesStatus::Dormant: return "dormant";
+        }
+        return "unknown";
+    }
+
+    std::string bracket_stage_name(tournament_bracket::Stage stage)
+    {
+        switch (stage)
+        {
+        case tournament_bracket::Stage::Early: return "early";
+        case tournament_bracket::Stage::Top8: return "top8";
+        case tournament_bracket::Stage::WinnersFinal: return "winners-final";
+        case tournament_bracket::Stage::LosersFinal: return "losers-final";
+        case tournament_bracket::Stage::GrandFinal: return "grand-final";
+        case tournament_bracket::Stage::GrandFinalReset: return "grand-final-reset";
+        }
+        return "unknown";
+    }
+
+    void print_bracket(Runner const &runner)
+    {
+        auto const &bracket = runner.bracket();
+        for (int id = 0; id < bracket.series_count(); ++id)
+        {
+            auto view = bracket.series(id);
+            std::println("S{} {} R{} {}v{} sets {}-{} first-to-{} games {}-{} played {} {} winner {}",
+                view.id, bracket_stage_name(view.stage), view.round, view.side_a, view.side_b,
+                view.sets_a, view.sets_b, view.format.first_to, view.games_a, view.games_b,
+                view.games_played, bracket_status_name(view.status), view.winner);
+        }
     }
 
     int run_selfcheck()
@@ -706,7 +747,8 @@ namespace tournament_tuner
             return 1;
         }
         auto view_state = std::make_shared<tuning::EngineViewState>();
-        std::thread stdin_thread([view_state]()
+        auto dump_bracket = std::make_shared<std::atomic<bool>>(false);
+        std::thread stdin_thread([view_state, dump_bracket]()
         {
             std::string line;
             while (std::getline(std::cin, line))
@@ -715,15 +757,22 @@ namespace tournament_tuner
                 {
                     view_state->enabled.store(true, std::memory_order_relaxed);
                     std::print("\033[2J");
+                    std::println("view enabled, one live game renders from the next round");
                 }
                 else if (line.empty())
                 {
                     view_state->enabled.store(false, std::memory_order_relaxed);
+                    std::println("view disabled");
+                }
+                else if (line == "bracket" || line == "status")
+                {
+                    dump_bracket->store(true, std::memory_order_relaxed);
+                    std::println("bracket dump queued, prints after the current wave");
                 }
             }
         });
         stdin_thread.detach();
-        std::println("Type view and Enter to watch one live game per wave, empty line to stop");
+        std::println("Type view and Enter to watch one live game per wave, empty line to stop, bracket for live standings");
         for (std::uint64_t generation = start_generation; generation < static_cast<std::uint64_t>(cli.generations); ++generation)
         {
             std::vector<double> const &flat = optimizer->ask();
@@ -752,7 +801,45 @@ namespace tournament_tuner
             backend.set_view_state(view_state);
             std::uint64_t generation_seed = generation_seed_for(root_seed, generation);
             Runner runner(backend, roster_entries, generation_seed, run_config, limits);
-            auto run_result = runner.run();
+            tournament_runner::RunResult run_result;
+            for (;;)
+            {
+                tournament_runner::RunResult step = runner.run_next_wave();
+                if (step.error.code != tournament_runner::ErrorCode::None)
+                {
+                    run_result = step;
+                    break;
+                }
+                run_result.stats.games += step.stats.games;
+                run_result.stats.draws += step.stats.draws;
+                run_result.stats.waves += step.stats.waves;
+                std::string active;
+                for (int id : runner.bracket().ready_series())
+                {
+                    auto view = runner.bracket().series(id);
+                    if (!active.empty())
+                    {
+                        active += " ";
+                    }
+                    active += "S" + std::to_string(id) + " " + std::to_string(view.side_a)
+                        + "v" + std::to_string(view.side_b) + " " + std::to_string(view.sets_a)
+                        + "-" + std::to_string(view.sets_b) + " " + std::to_string(view.games_a)
+                        + "-" + std::to_string(view.games_b);
+                }
+                std::println("gen {} wave {} games {} draws {} ready {} {}",
+                    generation, run_result.stats.waves, run_result.stats.games, run_result.stats.draws,
+                    runner.bracket().ready_series().size(), active);
+                if (dump_bracket->exchange(false))
+                {
+                    print_bracket(runner);
+                }
+                if (step.complete)
+                {
+                    run_result.complete = true;
+                    run_result.champion = step.champion;
+                    break;
+                }
+            }
             if (run_result.error.code != tournament_runner::ErrorCode::None)
             {
                 std::println(stderr, "generation {} tournament failed: {}", generation, run_result.error.detail);

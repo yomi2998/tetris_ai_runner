@@ -27,6 +27,7 @@ namespace tuning
     struct EngineViewState
     {
         std::atomic<bool> enabled{false};
+        std::atomic<std::uint64_t> claim{0};
         std::mutex mutex;
     };
 
@@ -316,7 +317,7 @@ namespace tuning
                                 std::shared_ptr<m_tetris::TetrisContext> const& context,
                                 tournament_scheduler::RunPair const& run_pair,
                                 tuning::GameOutcome& out,
-                                EngineViewState* view_state = nullptr, bool viewed = false)
+                                EngineViewState* view_state = nullptr)
     {
         if (!context)
         {
@@ -361,13 +362,25 @@ namespace tuning
             };
             run_pair(leaf_a, leaf_b);
             ++played_rounds;
-            if (viewed && view_state != nullptr
+            if (view_state != nullptr
                 && view_state->enabled.load(std::memory_order_relaxed))
             {
-                std::lock_guard<std::mutex> lock(view_state->mutex);
-                if (view_state->enabled.load(std::memory_order_relaxed))
+                std::uint64_t const want = game.id + 1;
+                std::uint64_t held = view_state->claim.load(std::memory_order_relaxed);
+                if (held == 0
+                    && view_state->claim.compare_exchange_strong(held, want,
+                                                                 std::memory_order_relaxed))
                 {
-                    render_engine_sides<Adapter>(a, b, "A", "B");
+                    held = want;
+                }
+                if (held == want)
+                {
+                    std::lock_guard<std::mutex> lock(view_state->mutex);
+                    if (view_state->enabled.load(std::memory_order_relaxed)
+                        && view_state->claim.load(std::memory_order_relaxed) == want)
+                    {
+                        render_engine_sides<Adapter>(a, b, "A", "B");
+                    }
                 }
             }
             if (a.dead || b.dead)
@@ -385,6 +398,13 @@ namespace tuning
             {
                 b.recv_attack.push_back(a.send_attack);
             }
+        }
+
+        if (view_state != nullptr)
+        {
+            std::uint64_t const want = game.id + 1;
+            std::uint64_t expected = want;
+            view_state->claim.compare_exchange_strong(expected, 0, std::memory_order_relaxed);
         }
 
         out.id = game.id;
@@ -455,16 +475,15 @@ namespace tuning
         tournament_scheduler::GameJob make_game_job(tuning::BatchGame const& game, tuning::RunConfig const& config,
                                                     std::shared_ptr<m_tetris::TetrisContext> context,
                                                     tuning::GameOutcome& out,
-                                                    EngineViewState* view_state = nullptr,
-                                                    bool viewed = false) const
+                                                    EngineViewState* view_state = nullptr) const
         {
             tournament_scheduler::GameJob job;
             job.game_id = game.id;
             job.body = [&game, &out, context = std::move(context),
-                        config, view_state, viewed](tournament_scheduler::RunPair const& run_pair) -> int
+                        config, view_state](tournament_scheduler::RunPair const& run_pair) -> int
             {
                 return tuning::engine_play_game<Adapter>(game, config, context, run_pair, out,
-                                                         view_state, viewed);
+                                                         view_state);
             };
             return job;
         }
@@ -497,13 +516,15 @@ namespace tuning
 
             std::vector<tuning::GameOutcome> results(games.size());
             std::vector<tournament_scheduler::GameJob> jobs(games.size());
-            bool const viewing = view_state_ != nullptr
-                && view_state_->enabled.load(std::memory_order_relaxed);
+            if (view_state_ != nullptr)
+            {
+                view_state_->claim.store(0, std::memory_order_relaxed);
+            }
             for (std::size_t i = 0; i < games.size(); ++i)
             {
                 results[i].id = games[i].id;
                 jobs[i] = make_game_job(games[i], config, context, results[i],
-                                        view_state_.get(), viewing && i == 0);
+                                        view_state_.get());
             }
 
             tournament_scheduler::ExecutorConfig executor_config;

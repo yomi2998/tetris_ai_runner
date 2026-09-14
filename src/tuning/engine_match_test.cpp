@@ -521,6 +521,8 @@ namespace
         auto const lit_reference = plain.run_games({ game }, fake_config(1, 2));
         check(lit.size() == 1 && same_outcome(lit[0], lit_reference[0]),
               "a viewed game reports the same outcome as an unviewed replay");
+        check(view_state->claim.load(std::memory_order_relaxed) == 0,
+              "a finished viewed game releases the render claim");
     }
 
     void test_fake_worker_count_determinism()
