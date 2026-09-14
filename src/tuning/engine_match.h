@@ -1,11 +1,15 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <numeric>
+#include <print>
 #include <random>
 #include <span>
 #include <stdexcept>
@@ -20,6 +24,12 @@
 
 namespace tuning
 {
+    struct EngineViewState
+    {
+        std::atomic<bool> enabled{false};
+        std::mutex mutex;
+    };
+
     struct GameScenario
     {
         std::deque<char> pieces;
@@ -265,10 +275,48 @@ namespace tuning
     }
 
     template<class Adapter>
+    inline void render_engine_sides(EngineBotState<Adapter> const& a, EngineBotState<Adapter> const& b,
+                                    char const* name_a, char const* name_b)
+    {
+        std::string upcoming_a(a.next.size() > 1 ? a.next.begin() + 1 : a.next.end(), a.next.end());
+        std::string upcoming_b(b.next.size() > 1 ? b.next.begin() + 1 : b.next.end(), b.next.end());
+        int up_a = std::accumulate(a.recv_attack.begin(), a.recv_attack.end(), 0);
+        int up_b = std::accumulate(b.recv_attack.begin(), b.recv_attack.end(), 0);
+        double apl_a = a.total_clear > 0 ? static_cast<double>(a.total_attack) / a.total_clear : 0.0;
+        double apl_b = b.total_clear > 0 ? static_cast<double>(b.total_attack) / b.total_clear : 0.0;
+        double app_a = a.total_block > 0 ? static_cast<double>(a.total_attack) / a.total_block : 0.0;
+        double app_b = b.total_block > 0 ? static_cast<double>(b.total_attack) / b.total_block : 0.0;
+        std::print("\x1b[H\x1b[2J");
+        std::println(
+            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {}\n"
+            "HOLD={} NEXT={} COMBO={} B2B={} UP={} P={} L={} A={} APL={:.2f} APP={:.2f} {}",
+            a.hold, upcoming_a, a.combo, a.b2b ? 1 : 0, up_a, a.total_block, a.total_clear,
+            a.total_attack, apl_a, app_a, name_a,
+            b.hold, upcoming_b, b.combo, b.b2b ? 1 : 0, up_b, b.total_block, b.total_clear,
+            b.total_attack, apl_b, app_b, name_b);
+        int width = std::min(a.map.width, b.map.width);
+        for (int y = 21; y >= 0; --y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                std::print("{}", a.map.full(x, y) ? "[]" : "  ");
+            }
+            std::print("  ");
+            for (int x = 0; x < width; ++x)
+            {
+                std::print("{}", b.map.full(x, y) ? "[]" : "  ");
+            }
+            std::println("");
+        }
+        std::fflush(stdout);
+    }
+
+    template<class Adapter>
     inline int engine_play_game(tuning::BatchGame const& game, tuning::RunConfig const& config,
                                 std::shared_ptr<m_tetris::TetrisContext> const& context,
                                 tournament_scheduler::RunPair const& run_pair,
-                                tuning::GameOutcome& out)
+                                tuning::GameOutcome& out,
+                                EngineViewState* view_state = nullptr, bool viewed = false)
     {
         if (!context)
         {
@@ -313,6 +361,15 @@ namespace tuning
             };
             run_pair(leaf_a, leaf_b);
             ++played_rounds;
+            if (viewed && view_state != nullptr
+                && view_state->enabled.load(std::memory_order_relaxed))
+            {
+                std::lock_guard<std::mutex> lock(view_state->mutex);
+                if (view_state->enabled.load(std::memory_order_relaxed))
+                {
+                    render_engine_sides<Adapter>(a, b, "A", "B");
+                }
+            }
             if (a.dead || b.dead)
             {
                 break;
@@ -390,16 +447,24 @@ namespace tuning
             return tuning::validate_theta(Adapter::schema(), theta);
         }
 
+        void set_view_state(std::shared_ptr<EngineViewState> view_state)
+        {
+            view_state_ = std::move(view_state);
+        }
+
         tournament_scheduler::GameJob make_game_job(tuning::BatchGame const& game, tuning::RunConfig const& config,
                                                     std::shared_ptr<m_tetris::TetrisContext> context,
-                                                    tuning::GameOutcome& out) const
+                                                    tuning::GameOutcome& out,
+                                                    EngineViewState* view_state = nullptr,
+                                                    bool viewed = false) const
         {
             tournament_scheduler::GameJob job;
             job.game_id = game.id;
             job.body = [&game, &out, context = std::move(context),
-                        config](tournament_scheduler::RunPair const& run_pair) -> int
+                        config, view_state, viewed](tournament_scheduler::RunPair const& run_pair) -> int
             {
-                return tuning::engine_play_game<Adapter>(game, config, context, run_pair, out);
+                return tuning::engine_play_game<Adapter>(game, config, context, run_pair, out,
+                                                         view_state, viewed);
             };
             return job;
         }
@@ -432,10 +497,13 @@ namespace tuning
 
             std::vector<tuning::GameOutcome> results(games.size());
             std::vector<tournament_scheduler::GameJob> jobs(games.size());
+            bool const viewing = view_state_ != nullptr
+                && view_state_->enabled.load(std::memory_order_relaxed);
             for (std::size_t i = 0; i < games.size(); ++i)
             {
                 results[i].id = games[i].id;
-                jobs[i] = make_game_job(games[i], config, context, results[i]);
+                jobs[i] = make_game_job(games[i], config, context, results[i],
+                                        view_state_.get(), viewing && i == 0);
             }
 
             tournament_scheduler::ExecutorConfig executor_config;
@@ -455,5 +523,6 @@ namespace tuning
 
     private:
         std::shared_ptr<m_tetris::TetrisContext> shared_context_;
+        std::shared_ptr<EngineViewState> view_state_;
     };
 }

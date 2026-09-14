@@ -210,6 +210,7 @@ namespace tournament_tuner
         std::println("Threading: workers = threads if given else hardware_threads - 1, roster = 2 * workers, lambda = roster - 1");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
+        std::println("During runs: type view and Enter for one live game per wave, empty line to stop");
         std::println("Outputs: tournament_incumbent.bin anchor, tournament_current.bin latest champion");
         std::println("Existing tuner files are not touched");
     }
@@ -704,6 +705,25 @@ namespace tournament_tuner
             std::println(stderr, "cannot prepare shared TOJ context");
             return 1;
         }
+        auto view_state = std::make_shared<tuning::EngineViewState>();
+        std::thread stdin_thread([view_state]()
+        {
+            std::string line;
+            while (std::getline(std::cin, line))
+            {
+                if (line == "view")
+                {
+                    view_state->enabled.store(true, std::memory_order_relaxed);
+                    std::print("\033[2J");
+                }
+                else if (line.empty())
+                {
+                    view_state->enabled.store(false, std::memory_order_relaxed);
+                }
+            }
+        });
+        stdin_thread.detach();
+        std::println("Type view and Enter to watch one live game per wave, empty line to stop");
         for (std::uint64_t generation = start_generation; generation < static_cast<std::uint64_t>(cli.generations); ++generation)
         {
             std::vector<double> const &flat = optimizer->ask();
@@ -729,6 +749,7 @@ namespace tournament_tuner
                 sample_ids.push_back(id);
             }
             TojBackend backend(shared_context);
+            backend.set_view_state(view_state);
             std::uint64_t generation_seed = generation_seed_for(root_seed, generation);
             Runner runner(backend, roster_entries, generation_seed, run_config, limits);
             auto run_result = runner.run();

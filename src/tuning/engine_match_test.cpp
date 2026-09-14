@@ -500,6 +500,29 @@ namespace
               "tight leaf limit peak never exceeds the cap");
     }
 
+    void test_fake_viewed_game_matches()
+    {
+        Backend plain;
+        tuning::BatchGame game;
+        game.id = 9182;
+        game.theta_a = t3(2.0, 0.0, 0.0);
+        game.theta_b = t3(2.0, 0.0, 0.0);
+        game.seed_a = 314;
+        game.seed_b = 159;
+        auto const reference = plain.run_games({ game }, fake_config(1, 4));
+        Backend viewing;
+        auto view_state = std::make_shared<tuning::EngineViewState>();
+        viewing.set_view_state(view_state);
+        auto const dark = viewing.run_games({ game }, fake_config(1, 4));
+        check(dark.size() == 1 && same_outcome(dark[0], reference[0]),
+              "an attached but disabled view state leaves outcomes identical");
+        view_state->enabled.store(true, std::memory_order_relaxed);
+        auto const lit = viewing.run_games({ game }, fake_config(1, 2));
+        auto const lit_reference = plain.run_games({ game }, fake_config(1, 2));
+        check(lit.size() == 1 && same_outcome(lit[0], lit_reference[0]),
+              "a viewed game reports the same outcome as an unviewed replay");
+    }
+
     void test_fake_worker_count_determinism()
     {
         Backend backend;
@@ -680,6 +703,7 @@ int main()
     test_fake_validation_failures();
     test_fake_pair_overlap();
     test_fake_parallel_games_and_peaks();
+    test_fake_viewed_game_matches();
     test_fake_worker_count_determinism();
 #ifndef TUNING_ENGINE_MATCH_TEST_SKIP_TOJ
     test_toj_scenario_equivalence();
