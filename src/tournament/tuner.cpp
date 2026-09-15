@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <exception>
 #include <filesystem>
@@ -49,6 +50,7 @@ namespace tournament_tuner
         int threads = 0;
         int max_rounds = 3600;
         int pairs = 32;
+        bool fresh_zero = false;
         double threshold = 0.5;
         std::string data_file = "tournament_data.bin";
         std::string incumbent_file = "tournament_incumbent.bin";
@@ -392,6 +394,7 @@ namespace tournament_tuner
         std::println("  {} view [seed] [iters] [max_rounds]", program);
         std::println("View defaults: seed 0 (time-based, printed for replay), iters 50, max_rounds 3600");
         std::println("Threading: budget = threads if given else hardware_threads - 1, game workers = budget / 2, helpers = game workers, roster = 2 * game workers, lambda = roster - 1");
+        std::println("Flags: --fresh-zero starts a fresh run from zero weights instead of the incumbent file (ignored when a checkpoint exists)");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
         std::println("During runs: type view and Enter for one live game per wave, empty line to stop, bracket for live standings");
@@ -991,7 +994,18 @@ namespace tournament_tuner
         if (!have_checkpoint)
         {
             std::vector<double> file_theta;
-            if (read_theta_bin(cli.incumbent_file, file_theta))
+            if (cli.fresh_zero)
+            {
+                incumbent.assign(static_cast<std::size_t>(dimension), 0.0);
+                cma_config.mean = incumbent;
+                if (!write_theta_bin(cli.incumbent_file, incumbent))
+                {
+                    std::println(stderr, "cannot write {}", cli.incumbent_file);
+                    return 1;
+                }
+                std::println("Fresh incumbent from zero weights (--fresh-zero)");
+            }
+            else if (read_theta_bin(cli.incumbent_file, file_theta))
             {
                 incumbent = file_theta;
                 cma_config.mean = file_theta;
@@ -1006,6 +1020,10 @@ namespace tournament_tuner
                 }
                 std::println("Fresh incumbent from production defaults");
             }
+        }
+        else if (cli.fresh_zero)
+        {
+            std::println("note: a valid checkpoint exists, --fresh-zero only affects runs without one; delete {} for a fresh start", cli.data_file);
         }
         std::unique_ptr<tournament_cmaes::Optimizer> optimizer;
         try
@@ -1410,35 +1428,49 @@ int main(int argc, char *argv[])
         }
     }
     tournament_tuner::TunerConfig config;
+    std::vector<char const *> positional;
+    positional.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--fresh-zero") == 0)
+        {
+            config.fresh_zero = true;
+        }
+        else
+        {
+            positional.push_back(argv[i]);
+        }
+    }
+    int const argn = static_cast<int>(positional.size());
     try
     {
-        if (argc > 1)
+        if (argn > 1)
         {
-            config.generations = std::stoi(argv[1]);
+            config.generations = std::stoi(positional[1]);
         }
-        if (argc > 2)
+        if (argn > 2)
         {
-            config.iters_per_move = static_cast<std::size_t>(std::stoul(argv[2]));
+            config.iters_per_move = static_cast<std::size_t>(std::stoul(positional[2]));
         }
-        if (argc > 3)
+        if (argn > 3)
         {
-            config.root_seed = static_cast<std::uint64_t>(std::stoull(argv[3]));
+            config.root_seed = static_cast<std::uint64_t>(std::stoull(positional[3]));
         }
-        if (argc > 4)
+        if (argn > 4)
         {
-            config.threads = std::stoi(argv[4]);
+            config.threads = std::stoi(positional[4]);
         }
-        if (argc > 5)
+        if (argn > 5)
         {
-            config.max_rounds = std::stoi(argv[5]);
+            config.max_rounds = std::stoi(positional[5]);
         }
-        if (argc > 6)
+        if (argn > 6)
         {
-            config.pairs = std::stoi(argv[6]);
+            config.pairs = std::stoi(positional[6]);
         }
-        if (argc > 7)
+        if (argn > 7)
         {
-            config.data_file = argv[7];
+            config.data_file = positional[7];
         }
     }
     catch (std::exception const &error)
