@@ -244,6 +244,80 @@ add_executable(tournament_tuner
 target_include_directories(tournament_tuner PRIVATE src third_party/c-cmaes/src third_party/nlohmann/include)
 target_link_libraries(tournament_tuner PRIVATE c_cmaes Threads::Threads)
 
+find_package(OpenSSL QUIET)
+
+if (OPENSSL_FOUND)
+    add_executable(tournament_wire_test
+        src/tournament/wire.cpp
+        src/tournament/wire_crypto.cpp
+        src/tournament/wire_test.cpp
+    )
+    target_include_directories(tournament_wire_test PRIVATE src)
+    target_link_libraries(tournament_wire_test PRIVATE OpenSSL::Crypto)
+
+    add_executable(tournament_registry_test
+        src/tournament/registry.cpp
+        src/tournament/registry_test.cpp
+    )
+    target_include_directories(tournament_registry_test PRIVATE src)
+    target_link_libraries(tournament_registry_test PRIVATE Threads::Threads)
+
+    add_executable(tournament_loopback_test
+        src/tournament/loopback.cpp
+        src/tournament/loopback_test.cpp
+    )
+    target_include_directories(tournament_loopback_test PRIVATE src)
+    target_link_libraries(tournament_loopback_test PRIVATE Threads::Threads)
+
+    add_executable(tournament_audit_repair_test
+        src/tournament/audit.cpp
+        src/tournament/repair.cpp
+        src/tournament/wire.cpp
+        src/tournament/bracket.cpp
+        src/tournament/runner.cpp
+        src/tournament/scheduler.cpp
+        src/tournament/audit_test.cpp
+        src/tournament/repair_test.cpp
+    )
+    target_include_directories(tournament_audit_repair_test PRIVATE src)
+    target_link_libraries(tournament_audit_repair_test PRIVATE Threads::Threads)
+
+    add_executable(repro_probe
+        src/repro_probe.cpp
+        src/tournament/wire.cpp
+        src/tournament/scheduler.cpp
+        $<TARGET_OBJECTS:tournament_toj_objects>
+    )
+    target_include_directories(repro_probe PRIVATE src)
+    target_link_libraries(repro_probe PRIVATE Threads::Threads)
+
+    add_executable(repro_probe_test
+        src/repro_probe_test.cpp
+        src/tournament/wire.cpp
+        src/tournament/scheduler.cpp
+        $<TARGET_OBJECTS:tournament_toj_objects>
+    )
+    target_include_directories(repro_probe_test PRIVATE src)
+    target_link_libraries(repro_probe_test PRIVATE Threads::Threads)
+
+    add_executable(tournament_remote_backend_test
+        src/tournament/remote_backend.cpp
+        src/tournament/wire.cpp
+        src/tournament/wire_crypto.cpp
+        src/tournament/loopback.cpp
+        src/tournament/registry.cpp
+        src/tournament/audit.cpp
+        src/tournament/repair.cpp
+        src/tournament/bracket.cpp
+        src/tournament/runner.cpp
+        src/tournament/scheduler.cpp
+        $<TARGET_OBJECTS:tournament_toj_objects>
+        src/tournament/remote_backend_test.cpp
+    )
+    target_include_directories(tournament_remote_backend_test PRIVATE src)
+    target_link_libraries(tournament_remote_backend_test PRIVATE Threads::Threads OpenSSL::Crypto)
+endif()
+
 enable_testing()
 
 add_test(NAME attach_test COMMAND attach_test)
@@ -261,3 +335,12 @@ add_test(NAME tournament_bytes_test COMMAND tournament_bytes_test)
 add_test(NAME tournament_runner_test COMMAND tournament_runner_test)
 add_test(NAME tuning_engine_match_test COMMAND tuning_engine_match_test)
 add_test(NAME tetris_memory_budget_test COMMAND tetris_memory_budget_test)
+
+if (OPENSSL_FOUND)
+    add_test(NAME tournament_wire_test COMMAND tournament_wire_test)
+    add_test(NAME tournament_registry_test COMMAND tournament_registry_test)
+    add_test(NAME tournament_loopback_test COMMAND tournament_loopback_test)
+    add_test(NAME tournament_audit_repair_test COMMAND tournament_audit_repair_test)
+    add_test(NAME repro_probe_test COMMAND repro_probe_test)
+    add_test(NAME tournament_remote_backend_test COMMAND tournament_remote_backend_test)
+endif()
