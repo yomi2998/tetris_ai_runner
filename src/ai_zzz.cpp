@@ -869,10 +869,11 @@ namespace ai_zzz
             int depth = std::min(left, right) - t_heights[x];
             if (depth > well_depth)
             {
-                well_depth = std::min(depth, 15);
+                well_depth = depth;
                 well_x = x;
             }
         }
+        well_depth = std::min(well_depth, 15);
         int bump = 0;
         int bump_sq = 0;
         for (int x = 0; x + 1 < t_map.width; ++x)
