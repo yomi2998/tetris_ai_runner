@@ -76,9 +76,9 @@ namespace tournament_tuner
         return std::max(1, budget / 2);
     }
 
-    int roster_size_for(int workers)
+    int roster_size_for(int pso_count)
     {
-        return std::max(2, workers * 2);
+        return std::max(2, pso_count * 2);
     }
 
     int lambda_for(int roster)
@@ -393,7 +393,7 @@ namespace tournament_tuner
         std::println("Defaults: generations 10, iters_per_move 50, seed 555, threads 0 (auto), max_rounds 3600, pairs 32, data tournament_data.bin");
         std::println("  {} view [seed] [iters] [max_rounds]", program);
         std::println("View defaults: seed 0 (time-based, printed for replay), iters 50, max_rounds 3600");
-        std::println("Threading: budget = threads if given else hardware_threads - 1, game workers = budget / 2, helpers = game workers, roster = 2 * game workers, lambda = roster - 1");
+        std::println("Threading: budget = threads if given else hardware_threads - 1, game workers = budget / 2, helpers = game workers, roster = 2 * budget (pso candidate count), lambda = roster - 1");
         std::println("Flags: --fresh-zero starts a fresh run from zero weights instead of the incumbent file (ignored when a checkpoint exists)");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
@@ -561,7 +561,8 @@ namespace tournament_tuner
         check(thread_budget_for(4) == 4, "thread budget respects explicit threads");
         check(game_workers_for(15) == 7, "game workers split the budget with helper threads");
         check(game_workers_for(1) == 1, "game workers clamp to at least one");
-        check(roster_size_for(7) == 14, "roster is twice game workers");
+        check(roster_size_for(15) == 30, "roster follows the pso candidate count of twice the budget");
+        check(roster_size_for(1) == 2, "roster clamps to at least two");
         check(lambda_for(30) == 29, "lambda is roster minus one");
         check(lambda_for(2) == 2, "lambda clamps to at least two");
         check(cma_seed_for(555) >= 1 && cma_seed_for(555) <= 2147483647ULL, "cma seed is in library range");
@@ -844,12 +845,12 @@ namespace tournament_tuner
     {
         int const budget = thread_budget_for(cli.threads);
         int const game_workers = game_workers_for(budget);
-        int const roster_size = roster_size_for(game_workers);
+        int const roster_size = roster_size_for(budget);
         int const lambda = lambda_for(roster_size);
         int const dimension = static_cast<int>(tuning_toj::TojAdapter::param_count());
         tuning::RunConfig run_config;
         run_config.threads = game_workers;
-        std::println("thread budget {} game workers {} helpers {} roster {} lambda {}",
+        std::println("thread budget {} game workers {} helpers {} roster {} (pso 2x) lambda {}",
             budget, game_workers, game_workers, roster_size, lambda);
         run_config.iterations_per_move = cli.iters_per_move;
         run_config.max_rounds = cli.max_rounds;
