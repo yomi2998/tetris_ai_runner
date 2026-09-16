@@ -358,6 +358,7 @@ namespace tournament_wire
         out.append(hello.adapter_id);
         append_u64(out, hello.schema_hash);
         append_u64(out, hello.engine_fingerprint);
+        append_u32(out, hello.max_concurrent_assignments);
         return out;
     }
 
@@ -381,6 +382,7 @@ namespace tournament_wire
         hello.adapter_id = reader.text(adapter_size);
         hello.schema_hash = reader.u64();
         hello.engine_fingerprint = reader.u64();
+        hello.max_concurrent_assignments = reader.u32();
         reader.expect_end();
         if (!reader.ok)
         {

@@ -1,14 +1,18 @@
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <print>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "tournament/engine_identity.h"
@@ -26,6 +30,7 @@ namespace remote_client
     constexpr std::size_t kKeyComponentSize = 32;
     constexpr std::size_t kKeyFileSize = 64;
     constexpr std::uint64_t kAssignmentTimeoutMs = 600000;
+    constexpr std::uint32_t kMaxConcurrentAssignments = 64;
     constexpr std::uint64_t kBackoffStepsMs[] = {1000, 2000, 4000, 8000, 15000, 30000};
 
     struct ClientConfig
@@ -33,6 +38,7 @@ namespace remote_client
         std::string host;
         std::uint16_t port = 0;
         std::uint64_t device_id = 0;
+        std::uint32_t max_concurrent_assignments = 1;
         std::string key_file;
         std::string fingerprint;
         bool quiet = false;
@@ -44,7 +50,8 @@ namespace remote_client
     {
         std::println(stderr, "Usage:");
         std::println(stderr, "  {} --generate-key --key-file PATH", program);
-        std::println(stderr, "  {} --host HOST --port PORT --device-id N --key-file PATH --fingerprint FP [--quiet] [--flip-outcomes]", program);
+        std::println(stderr, "  {} --host HOST --port PORT --device-id N --key-file PATH --fingerprint FP [--assignments N] [--quiet] [--flip-outcomes]", program);
+        std::println(stderr, "  --assignments N is the number of assignments the client processes concurrently and advertises to the host (default 1, 1..64)");
         std::println(stderr, "  --flip-outcomes is test-only: it flips every game outcome before signing");
     }
 
@@ -231,6 +238,186 @@ namespace remote_client
         }
     }
 
+    enum class LoopStop
+    {
+        None,
+        Reconnect,
+        Fatal,
+    };
+
+    struct AssignmentQueue
+    {
+        std::mutex mutex;
+        std::condition_variable ready;
+        std::deque<tw::AssignmentBatch> pending;
+        LoopStop stop = LoopStop::None;
+    };
+
+    bool stop_requested(AssignmentQueue &queue)
+    {
+        std::lock_guard<std::mutex> lock(queue.mutex);
+        return queue.stop != LoopStop::None;
+    }
+
+    bool request_stop(AssignmentQueue &queue, LoopStop reason)
+    {
+        std::lock_guard<std::mutex> lock(queue.mutex);
+        if (queue.stop != LoopStop::None)
+        {
+            return false;
+        }
+        queue.stop = reason;
+        queue.ready.notify_all();
+        return true;
+    }
+
+    int run_assignment_loop_concurrent(tnet::ClientConnection &connection, TojBackend const &backend,
+                                       tw::KeyPair const &keys, ClientConfig const &cli)
+    {
+        AssignmentQueue queue;
+        std::mutex connection_close_mutex;
+        bool connection_closed = false;
+        auto close_connection_once = [&]()
+        {
+            std::lock_guard<std::mutex> lock(connection_close_mutex);
+            if (connection_closed)
+            {
+                return;
+            }
+            connection_closed = true;
+            connection.close();
+        };
+        auto worker_main = [&]()
+        {
+            for (;;)
+            {
+                tw::AssignmentBatch assignment;
+                {
+                    std::unique_lock<std::mutex> lock(queue.mutex);
+                    queue.ready.wait(lock, [&]()
+                    {
+                        return !queue.pending.empty() || queue.stop != LoopStop::None;
+                    });
+                    if (queue.stop != LoopStop::None)
+                    {
+                        return;
+                    }
+                    assignment = std::move(queue.pending.front());
+                    queue.pending.pop_front();
+                }
+                std::vector<tuning::BatchGame> games;
+                games.reserve(assignment.games.size());
+                for (tw::WireGame const &wire_game : assignment.games)
+                {
+                    games.push_back(tw::from_wire(wire_game));
+                }
+                std::vector<tuning::GameOutcome> outcomes;
+                try
+                {
+                    outcomes = backend.run_games(games, assignment.config);
+                }
+                catch (std::exception const &error)
+                {
+                    if (request_stop(queue, LoopStop::Fatal))
+                    {
+                        std::println(stderr, "assignment nonce={} failed: {}", assignment.nonce, error.what());
+                        close_connection_once();
+                    }
+                    return;
+                }
+                if (stop_requested(queue))
+                {
+                    return;
+                }
+                tw::ResultBatch batch;
+                batch.nonce = assignment.nonce;
+                batch.device = assignment.device;
+                batch.outcomes.reserve(outcomes.size());
+                for (tuning::GameOutcome const &outcome : outcomes)
+                {
+                    tw::WireOutcome wire_outcome = tw::to_wire(outcome);
+                    batch.outcomes.push_back(cli.flip_outcomes ? flip_wire_outcome(wire_outcome)
+                                                               : wire_outcome);
+                }
+                tw::SignedResult const signed_result{batch, tw::sign_result(keys, batch)};
+                std::string send_detail;
+                if (!connection.send_result(signed_result, send_detail))
+                {
+                    if (request_stop(queue, LoopStop::Reconnect))
+                    {
+                        std::println(stderr, "result send failed: {}", send_detail);
+                        close_connection_once();
+                    }
+                    return;
+                }
+                if (!cli.quiet)
+                {
+                    std::println(stderr, "assignment nonce={} games={} ok", batch.nonce, batch.outcomes.size());
+                }
+            }
+        };
+        std::vector<std::thread> workers;
+        workers.reserve(cli.max_concurrent_assignments);
+        for (std::uint32_t index = 0; index < cli.max_concurrent_assignments; ++index)
+        {
+            workers.emplace_back(worker_main);
+        }
+        for (;;)
+        {
+            if (stop_requested(queue))
+            {
+                break;
+            }
+            std::string detail;
+            std::optional<tw::AssignmentBatch> assignment
+                = connection.next_assignment(kAssignmentTimeoutMs, detail);
+            if (!assignment)
+            {
+                if (stop_requested(queue))
+                {
+                    break;
+                }
+                if (detail.rfind("rejected: ", 0) == 0)
+                {
+                    if (request_stop(queue, LoopStop::Fatal))
+                    {
+                        std::println(stderr, "host refused this device: {}", detail);
+                    }
+                    break;
+                }
+                if (detail == "timed out waiting for frame")
+                {
+                    continue;
+                }
+                if (detail_indicates_closed(detail))
+                {
+                    if (request_stop(queue, LoopStop::Reconnect))
+                    {
+                        std::println(stderr, "connection lost: {}", detail);
+                    }
+                    break;
+                }
+                std::println(stderr, "assignment wait failed: {}", detail);
+                continue;
+            }
+            {
+                std::lock_guard<std::mutex> lock(queue.mutex);
+                if (queue.stop != LoopStop::None)
+                {
+                    break;
+                }
+                queue.pending.push_back(std::move(*assignment));
+            }
+            queue.ready.notify_one();
+        }
+        close_connection_once();
+        for (std::thread &worker : workers)
+        {
+            worker.join();
+        }
+        return queue.stop == LoopStop::Fatal ? 1 : 0;
+    }
+
     int run_client(ClientConfig const &cli)
     {
         tw::KeyPair keys;
@@ -259,6 +446,7 @@ namespace remote_client
         };
         hello.engine_fingerprint = tournament_identity::adapter_engine_fingerprint<tuning_toj::TojAdapter>(
             probe_run);
+        hello.max_concurrent_assignments = cli.max_concurrent_assignments;
         std::size_t backoff_step = 0;
         for (;;)
         {
@@ -285,7 +473,9 @@ namespace remote_client
                 continue;
             }
             backoff_step = 0;
-            int const loop_result = run_assignment_loop(connection, backend, keys, cli);
+            int const loop_result = cli.max_concurrent_assignments > 1
+                ? run_assignment_loop_concurrent(connection, backend, keys, cli)
+                : run_assignment_loop(connection, backend, keys, cli);
             if (loop_result != 0)
             {
                 return loop_result;
@@ -376,6 +566,21 @@ int main(int argc, char *argv[])
             }
             cli.fingerprint = argv[++i];
             have_fingerprint = true;
+        }
+        else if (std::strcmp(flag, "--assignments") == 0)
+        {
+            if (i + 1 >= argc)
+            {
+                return remote_client::missing_value_error(flag, program);
+            }
+            std::optional<std::uint64_t> parsed = remote_client::parse_u64(argv[++i]);
+            if (!parsed || *parsed < 1 || *parsed > remote_client::kMaxConcurrentAssignments)
+            {
+                std::println(stderr, "invalid assignment count {}", argv[i]);
+                remote_client::print_usage(program);
+                return 1;
+            }
+            cli.max_concurrent_assignments = static_cast<std::uint32_t>(*parsed);
         }
         else
         {

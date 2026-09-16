@@ -19,6 +19,7 @@ namespace tournament_registry
         int audits_passed = 0;
         int audits_failed = 0;
         bool blacklisted = false;
+        std::uint32_t concurrent_assignments = 0;
 
         bool operator==(DeviceStats const &) const = default;
     };
@@ -34,6 +35,8 @@ namespace tournament_registry
         bool blacklisted(DeviceId device) const;
         bool ban_key(PublicKey const &public_key);
         bool key_banned(PublicKey const &public_key) const;
+        bool set_concurrency(DeviceId device, std::uint32_t concurrent_assignments);
+        std::uint32_t concurrency(DeviceId device) const;
         bool record_accepted(DeviceId device, int games);
         bool record_dropped(DeviceId device, int games);
         bool record_audit(DeviceId device, bool passed);

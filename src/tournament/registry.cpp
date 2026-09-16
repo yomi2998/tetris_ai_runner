@@ -88,6 +88,25 @@ namespace tournament_registry
         return false;
     }
 
+    bool DeviceRegistry::set_concurrency(DeviceId device, std::uint32_t concurrent_assignments)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto const it = devices_.find(device);
+        if (it == devices_.end())
+        {
+            return false;
+        }
+        it->second.stats.concurrent_assignments = concurrent_assignments;
+        return true;
+    }
+
+    std::uint32_t DeviceRegistry::concurrency(DeviceId device) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto const it = devices_.find(device);
+        return it == devices_.end() ? 0 : it->second.stats.concurrent_assignments;
+    }
+
     bool DeviceRegistry::record_accepted(DeviceId device, int games)
     {
         std::lock_guard<std::mutex> lock(mutex_);

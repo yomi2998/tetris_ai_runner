@@ -196,6 +196,75 @@ namespace
         };
     }
 
+    tw::WireOutcome fabricated_outcome(tw::GameId id, int winner)
+    {
+        tw::WireOutcome outcome;
+        outcome.id = id;
+        outcome.winner = winner;
+        outcome.reason = winner == 1 ? tuning::WinReason::ASurvivor : tuning::WinReason::BSurvivor;
+        outcome.rounds = 12;
+        return outcome;
+    }
+
+    tl::DeviceHandler fabricated_handler(tw::KeyPair keys,
+                                         int winner,
+                                         std::shared_ptr<tt::ManualClock> clock = nullptr)
+    {
+        return [keys, winner, clock](tw::AssignmentBatch const &assignment)
+        {
+            if (clock)
+            {
+                clock->advance(1);
+            }
+            tw::ResultBatch result;
+            result.nonce = assignment.nonce;
+            result.device = assignment.device;
+            for (tw::WireGame const &game : assignment.games)
+            {
+                result.outcomes.push_back(fabricated_outcome(game.id, winner));
+            }
+            tw::Signature const signature = tw::sign_result(keys, result);
+            return tw::SignedResult{std::move(result), std::move(signature)};
+        };
+    }
+
+    std::vector<tuning::BatchGame> fabricated_games(std::uint64_t count)
+    {
+        std::vector<tuning::BatchGame> games;
+        for (std::uint64_t id = 1; id <= count; ++id)
+        {
+            tuning::BatchGame game;
+            game.id = id;
+            game.theta_a = theta_for(0);
+            game.theta_b = theta_for(1);
+            game.seed_a = tuning::derive_game_seed(999, id, 0);
+            game.seed_b = tuning::derive_game_seed(999, id, 1);
+            games.push_back(std::move(game));
+        }
+        return games;
+    }
+
+    bool fabricated_results_match(std::vector<tuning::GameOutcome> const &results,
+                                  tprov::ProvenanceLedger const &provenance,
+                                  int winner_for_device_one)
+    {
+        for (tprov::ProvenanceRecord const *entry : provenance.entries())
+        {
+            std::size_t const index = static_cast<std::size_t>(entry->game_id - 1);
+            if (index >= results.size())
+            {
+                return false;
+            }
+            int const expected_winner = entry->device == 1 ? winner_for_device_one : -winner_for_device_one;
+            if (tw::encode_outcome(tw::to_wire(results[index]))
+                != tw::encode_outcome(fabricated_outcome(entry->game_id, expected_winner)))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void test_honest_batch_matches_local()
     {
         ContextPtr context = tuning_toj::TojAdapter::make_shared_context();
@@ -613,6 +682,100 @@ namespace
         }
         check(threw, "exhausted assignment rounds throws runtime error");
     }
+
+    trem::RemoteConfig fabricated_remote_config()
+    {
+        trem::RemoteConfig remote_config;
+        remote_config.games_per_assignment = 1;
+        remote_config.lease_ms = 1000000;
+        remote_config.max_assignment_rounds = 4;
+        remote_config.per_series_device_cap = 8;
+        return remote_config;
+    }
+
+    void test_concurrency_capacity_respected()
+    {
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2)};
+        Cluster cluster(devices, fabricated_remote_config());
+        cluster.registry->set_concurrency(1, 2);
+        cluster.registry->set_concurrency(2, 1);
+        cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1, cluster.clock));
+        cluster.transport->add_device(2, fabricated_handler(devices[1].keys, -1, cluster.clock));
+
+        std::vector<tuning::BatchGame> const games = fabricated_games(4);
+        std::vector<tuning::GameOutcome> const results = cluster.backend.run_games(games, fast_config());
+        check(results.size() == 4, "capacity cluster returns every game result");
+        check(cluster.provenance->size() == 4, "capacity cluster records full provenance");
+        check(cluster.provenance->games_of_device(1) == std::vector<tw::GameId>{1, 3, 4},
+              "device advertising 2 takes flights 1 and 3 plus the deferred flight");
+        check(cluster.provenance->games_of_device(2) == std::vector<tw::GameId>{2},
+              "device advertising 1 receives exactly one flight while alternatives are capped");
+        check(fabricated_results_match(results, *cluster.provenance, 1),
+              "fabricated results match the attributed device outcome");
+
+        tprov::ProvenanceRecord const *deferred = cluster.provenance->find(4);
+        tprov::ProvenanceRecord const *first_round = cluster.provenance->find(1);
+        check(deferred != nullptr && first_round != nullptr
+                && deferred->accepted_at_ms > first_round->accepted_at_ms,
+              "fourth chunk deferred to a later round instead of overrunning capacity 1");
+
+        treg::DeviceStats const *stats_one = cluster.registry->stats(1);
+        treg::DeviceStats const *stats_two = cluster.registry->stats(2);
+        check(stats_one != nullptr && stats_one->games_accepted == 3 && stats_one->games_dropped == 0,
+              "capacity 2 device accepted 3 games without drops");
+        check(stats_two != nullptr && stats_two->games_accepted == 1 && stats_two->games_dropped == 0,
+              "capacity 1 device accepted 1 game without drops");
+    }
+
+    void test_unspecified_concurrency_acts_as_one()
+    {
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2)};
+        Cluster cluster(devices, fabricated_remote_config());
+        cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1));
+        cluster.transport->add_device(2, fabricated_handler(devices[1].keys, -1));
+
+        std::vector<tuning::BatchGame> const games = fabricated_games(2);
+        std::vector<tuning::GameOutcome> const results = cluster.backend.run_games(games, fast_config());
+        check(cluster.provenance->size() == 2, "unspecified capacity cluster records both games");
+        check(cluster.provenance->games_of_device(1) == std::vector<tw::GameId>{1}
+                && cluster.provenance->games_of_device(2) == std::vector<tw::GameId>{2},
+              "unspecified capacity spreads two single-game flights across both devices");
+        check(fabricated_results_match(results, *cluster.provenance, 1),
+              "unspecified capacity results match the attributed device outcome");
+    }
+
+    void test_degenerate_capacity_liveness()
+    {
+        {
+            std::vector<DeviceHarness> devices{make_device(1)};
+            Cluster cluster(devices, fabricated_remote_config());
+            cluster.registry->set_concurrency(1, 1);
+            cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1));
+            std::vector<tuning::BatchGame> const games = fabricated_games(4);
+            std::vector<tuning::GameOutcome> const results
+                = cluster.backend.run_games(games, fast_config());
+            check(results.size() == 4 && cluster.provenance->size() == 4,
+                  "single capacity 1 device completes four chunks within four rounds");
+            check(cluster.provenance->games_of_device(1) == std::vector<tw::GameId>{1, 2, 3, 4},
+                  "single device owns every degenerate attribution");
+            check(fabricated_results_match(results, *cluster.provenance, 1),
+                  "degenerate four chunk run keeps fabricated outcomes intact");
+        }
+        {
+            std::vector<DeviceHarness> devices{make_device(1)};
+            Cluster cluster(devices, fabricated_remote_config());
+            cluster.registry->set_concurrency(1, 1);
+            cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1));
+            std::vector<tuning::BatchGame> const games = fabricated_games(5);
+            std::vector<tuning::GameOutcome> const results
+                = cluster.backend.run_games(games, fast_config());
+            check(results.size() == 5 && cluster.provenance->size() == 5,
+                  "more chunks than rounds still completes via the final fallback tier");
+            check(cluster.registry->stats(1) != nullptr
+                    && cluster.registry->stats(1)->games_accepted == 5,
+                  "final fallback tier accepted every degenerate chunk");
+        }
+    }
 }
 
 int main()
@@ -623,6 +786,9 @@ int main()
     test_dropper_and_late_results();
     test_protocol_tamper_rejections();
     test_failure_modes();
+    test_concurrency_capacity_respected();
+    test_unspecified_concurrency_acts_as_one();
+    test_degenerate_capacity_liveness();
     std::println("remote backend integration: {} checks, {} failures", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

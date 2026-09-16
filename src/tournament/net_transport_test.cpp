@@ -206,7 +206,8 @@ namespace
 
     ClientHarness make_client(HostHarness &host, tw::DeviceId id, std::string const &adapter = "test_adapter",
                               std::uint32_t protocol = tw::protocol_version, std::uint64_t schema_hash = 0,
-                              tw::KeyPair const *keys = nullptr, std::uint64_t engine_fingerprint = 0)
+                              tw::KeyPair const *keys = nullptr, std::uint64_t engine_fingerprint = 0,
+                              std::uint32_t concurrency = 0)
     {
         ClientHarness client;
         client.id = id;
@@ -225,6 +226,7 @@ namespace
         hello.adapter_id = adapter;
         hello.schema_hash = schema_hash;
         hello.engine_fingerprint = engine_fingerprint;
+        hello.max_concurrent_assignments = concurrency;
         client.status = client.conn->send_hello(hello, client.detail);
         return client;
     }
@@ -578,6 +580,25 @@ namespace
               "nonpositive cap clamped to default admits two clients: " + two.detail);
     }
 
+    void test_concurrency_advertised()
+    {
+        HostHarness host("concurrency");
+        check(host.start(tnet::NetConfig{}), "host started for concurrency advertisement test");
+        auto silent = make_client(host, 1);
+        check(silent.status == tnet::ClientConnection::HelloStatus::Accepted
+                  && host.registry->concurrency(1) == 0,
+              "client without advertisement leaves concurrency zero: " + silent.detail);
+        auto capable = make_client(host, 2, "test_adapter", tw::protocol_version, 0, nullptr, 0, 3);
+        check(capable.status == tnet::ClientConnection::HelloStatus::Accepted
+                  && host.registry->concurrency(2) == 3,
+              "advertised concurrency reaches the registry: " + capable.detail);
+        auto reconnected = make_client(host, 2, "test_adapter", tw::protocol_version, 0,
+                                       &capable.keys, 0, 5);
+        check(reconnected.status == tnet::ClientConnection::HelloStatus::Accepted
+                  && host.registry->concurrency(2) == 5,
+              "reconnect updates the advertised concurrency: " + reconnected.detail);
+    }
+
     void test_remote_backend_flow()
     {
         HostHarness host("backend");
@@ -809,6 +830,7 @@ int main()
     test_blacklisted_reconnect_rejected();
     test_engine_fingerprint_pin();
     test_connection_cap();
+    test_concurrency_advertised();
     test_remote_backend_flow();
     test_dropper_reassignment();
     test_late_reply_discarded();

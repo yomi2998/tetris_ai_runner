@@ -108,6 +108,7 @@ namespace tournament_wire
         std::string adapter_id;
         std::uint64_t schema_hash = 0;
         std::uint64_t engine_fingerprint = 0;
+        std::uint32_t max_concurrent_assignments = 0;
     };
 
     struct FramedMessage

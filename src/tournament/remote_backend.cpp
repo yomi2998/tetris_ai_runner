@@ -144,23 +144,25 @@ namespace tournament_remote
                 tournament_transport::Delivery delivery{};
                 std::uint64_t assigned_at_ms = 0;
             };
+            std::vector<std::uint32_t> capacities(devices.size(), 1);
+            for (std::size_t i = 0; i < devices.size(); ++i)
+            {
+                capacities[i] = std::max<std::uint32_t>(1u, registry_->concurrency(devices[i]));
+            }
+            std::vector<std::uint32_t> flights_used(devices.size(), 0);
+
             std::vector<Flight> flights;
+            std::size_t cursor = 0;
             for (std::size_t start = 0; start < pending.size(); start += chunk_size)
             {
-                Flight flight;
+                std::vector<std::size_t> indices;
                 for (std::size_t k = start; k < pending.size() && k < start + chunk_size; ++k)
                 {
-                    flight.indices.push_back(pending[k]);
+                    indices.push_back(pending[k]);
                 }
-                flights.push_back(std::move(flight));
-            }
-
-            std::size_t cursor = 0;
-            for (Flight &flight : flights)
-            {
                 auto unfailed = [&](tournament_wire::DeviceId device)
                 {
-                    for (std::size_t index : flight.indices)
+                    for (std::size_t index : indices)
                     {
                         auto const it = failed_on.find(games[index].id);
                         if (it != failed_on.end() && it->second.count(device) != 0)
@@ -177,7 +179,7 @@ namespace tournament_remote
                     {
                         return true;
                     }
-                    for (std::size_t index : flight.indices)
+                    for (std::size_t index : indices)
                     {
                         auto const series_it = device_it->second.find(series_of(games[index].id));
                         if (series_it != device_it->second.end()
@@ -188,11 +190,16 @@ namespace tournament_remote
                     }
                     return true;
                 };
+                auto within_flight_cap = [&](std::size_t candidate)
+                {
+                    return flights_used[candidate] < capacities[candidate];
+                };
                 std::size_t chosen = devices.size();
                 for (std::size_t step = 0; step < devices.size(); ++step)
                 {
                     std::size_t const candidate = (cursor + step) % devices.size();
-                    if (unfailed(devices[candidate]) && within_series_cap(devices[candidate]))
+                    if (unfailed(devices[candidate]) && within_series_cap(devices[candidate])
+                        && within_flight_cap(candidate))
                     {
                         chosen = candidate;
                         break;
@@ -203,7 +210,7 @@ namespace tournament_remote
                     for (std::size_t step = 0; step < devices.size(); ++step)
                     {
                         std::size_t const candidate = (cursor + step) % devices.size();
-                        if (unfailed(devices[candidate]))
+                        if (unfailed(devices[candidate]) && within_flight_cap(candidate))
                         {
                             chosen = candidate;
                             break;
@@ -212,9 +219,33 @@ namespace tournament_remote
                 }
                 if (chosen == devices.size())
                 {
-                    chosen = cursor % devices.size();
+                    std::size_t unfailed_candidate = devices.size();
+                    for (std::size_t step = 0; step < devices.size(); ++step)
+                    {
+                        std::size_t const candidate = (cursor + step) % devices.size();
+                        if (unfailed(devices[candidate]))
+                        {
+                            unfailed_candidate = candidate;
+                            break;
+                        }
+                    }
+                    if (unfailed_candidate == devices.size())
+                    {
+                        chosen = cursor % devices.size();
+                    }
+                    else if (round == config_.max_assignment_rounds)
+                    {
+                        chosen = unfailed_candidate;
+                    }
+                    else
+                    {
+                        continue;
+                    }
                 }
                 cursor = (chosen + 1) % devices.size();
+                ++flights_used[chosen];
+                Flight flight;
+                flight.indices = std::move(indices);
                 flight.device = devices[chosen];
                 flight.assignment.nonce = next_nonce();
                 flight.assignment.device = flight.device;
@@ -223,6 +254,7 @@ namespace tournament_remote
                 {
                     flight.assignment.games.push_back(tournament_wire::to_wire(games[index]));
                 }
+                flights.push_back(std::move(flight));
             }
 
             std::vector<std::thread> workers;

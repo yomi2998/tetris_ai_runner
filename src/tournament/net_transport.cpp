@@ -404,6 +404,7 @@ namespace tournament_net
                 reason = "enrollment failed";
                 return false;
             }
+            shared.registry->set_concurrency(hello->device, hello->max_concurrent_assignments);
             return true;
         }
 

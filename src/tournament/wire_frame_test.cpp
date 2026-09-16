@@ -119,12 +119,14 @@ namespace
         hello.adapter_id = "toj_adapter";
         hello.schema_hash = 0xDEADBEEFCAFEBABEULL;
         hello.engine_fingerprint = 0x1234567890ABCDEFULL;
+        hello.max_concurrent_assignments = 4;
         std::string const encoded = tw::encode_hello(hello);
         std::optional<tw::HelloMessage> const decoded = tw::decode_hello(to_bytes(encoded));
         check(decoded.has_value() && decoded->device == hello.device
                   && decoded->public_key == hello.public_key && decoded->protocol == hello.protocol
                   && decoded->adapter_id == hello.adapter_id && decoded->schema_hash == hello.schema_hash
-                  && decoded->engine_fingerprint == hello.engine_fingerprint,
+                  && decoded->engine_fingerprint == hello.engine_fingerprint
+                  && decoded->max_concurrent_assignments == hello.max_concurrent_assignments,
               "hello roundtrip preserves all fields");
 
         hello.public_key.resize(31);

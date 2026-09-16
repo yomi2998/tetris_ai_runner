@@ -121,6 +121,20 @@ namespace
               "key ban: the active list skips the key-banned device");
     }
 
+    void test_concurrency_tracking()
+    {
+        tr::DeviceRegistry registry;
+        check(registry.concurrency(5) == 0, "concurrency: unknown device reports zero");
+        check(!registry.set_concurrency(5, 3), "concurrency: setting on unknown device fails");
+        registry.enroll(5, key_for(50));
+        check(registry.set_concurrency(5, 3), "concurrency: setting on enrolled device succeeds");
+        check(registry.concurrency(5) == 3, "concurrency: the advertised value reads back");
+        check(registry.set_concurrency(5, 0), "concurrency: clearing back to zero succeeds");
+        check(registry.concurrency(5) == 0, "concurrency: zero means unspecified");
+        check(registry.stats(5) && registry.stats(5)->concurrent_assignments == 0,
+              "concurrency: the value is visible through stats");
+    }
+
     void test_active_devices_sorted()
     {
         tr::DeviceRegistry registry;
@@ -182,6 +196,7 @@ int main()
     test_counter_accumulation();
     test_blacklist();
     test_key_bans();
+    test_concurrency_tracking();
     test_active_devices_sorted();
     test_size_counts_enrollments();
     test_stats_independent();
