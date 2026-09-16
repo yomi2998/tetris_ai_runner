@@ -47,7 +47,11 @@ namespace tuning
         std::size_t const pieces_needed = max_rounds * 2 + next_len * 2 + 4;
         while (scenario.pieces.size() < pieces_needed)
         {
-            std::shuffle(bag.begin(), bag.end(), rng);
+            for (std::size_t i = bag.size(); i > 1; --i)
+            {
+                std::size_t const j = static_cast<std::size_t>(rng() % i);
+                std::swap(bag[i - 1], bag[j]);
+            }
             for (char c : bag)
             {
                 scenario.pieces.push_back(c);

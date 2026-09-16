@@ -6,6 +6,7 @@
 #include <deque>
 #include <random>
 #include <string>
+#include <utility>
 
 namespace tuner_toj
 {
@@ -90,7 +91,11 @@ namespace tuner_toj
             size_t pieces_needed = max_rounds * 2 + next_len * 2 + 4;
             while (s.pieces.size() < pieces_needed)
             {
-                std::shuffle(bag.begin(), bag.end(), rng);
+                for (size_t i = bag.size(); i > 1; --i)
+                {
+                    size_t const j = static_cast<size_t>(rng() % i);
+                    std::swap(bag[i - 1], bag[j]);
+                }
                 for (char c : bag)
                 {
                     s.pieces.push_back(c);
