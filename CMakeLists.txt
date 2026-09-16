@@ -234,6 +234,7 @@ target_include_directories(tetris_memory_budget_test PRIVATE src)
 add_executable(tournament_tuner
     src/tournament/tuner.cpp
     src/tournament/audit.cpp
+    src/tournament/ban_file.cpp
     src/tournament/bracket.cpp
     src/tournament/scheduler.cpp
     src/tournament/rating.cpp
@@ -284,6 +285,12 @@ if (OPENSSL_FOUND)
     )
     target_include_directories(tournament_registry_test PRIVATE src)
     target_link_libraries(tournament_registry_test PRIVATE Threads::Threads)
+
+    add_executable(tournament_ban_file_test
+        src/tournament/ban_file.cpp
+        src/tournament/ban_file_test.cpp
+    )
+    target_include_directories(tournament_ban_file_test PRIVATE src)
 
     add_executable(tournament_loopback_test
         src/tournament/loopback.cpp
@@ -359,6 +366,7 @@ if (OPENSSL_FOUND)
 
     add_executable(tournament_host
         src/tournament_host.cpp
+        src/tournament/ban_file.cpp
         src/tournament/net_transport.cpp
         src/tournament/registry.cpp
         src/tournament/remote_backend.cpp
@@ -414,6 +422,7 @@ add_test(NAME tournament_journal_test COMMAND tournament_journal_test)
 if (OPENSSL_FOUND)
     add_test(NAME tournament_wire_test COMMAND tournament_wire_test)
     add_test(NAME tournament_registry_test COMMAND tournament_registry_test)
+    add_test(NAME tournament_ban_file_test COMMAND tournament_ban_file_test)
     add_test(NAME tournament_loopback_test COMMAND tournament_loopback_test)
     add_test(NAME tournament_audit_repair_test COMMAND tournament_audit_repair_test)
     add_test(NAME repro_probe_test COMMAND repro_probe_test)

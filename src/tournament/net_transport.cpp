@@ -380,6 +380,11 @@ namespace tournament_net
                 return false;
             }
             conn.device = hello->device;
+            if (shared.registry->key_banned(hello->public_key))
+            {
+                reason = "device key is banned";
+                return false;
+            }
             if (shared.registry->blacklisted(hello->device))
             {
                 reason = "device is blacklisted";

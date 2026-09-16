@@ -32,6 +32,8 @@ namespace tournament_registry
         DeviceStats const *stats(DeviceId device) const;
         bool blacklist(DeviceId device);
         bool blacklisted(DeviceId device) const;
+        bool ban_key(PublicKey const &public_key);
+        bool key_banned(PublicKey const &public_key) const;
         bool record_accepted(DeviceId device, int games);
         bool record_dropped(DeviceId device, int games);
         bool record_audit(DeviceId device, bool passed);
@@ -47,5 +49,6 @@ namespace tournament_registry
 
         mutable std::mutex mutex_;
         std::map<DeviceId, Entry> devices_;
+        std::vector<PublicKey> banned_keys_;
     };
 }

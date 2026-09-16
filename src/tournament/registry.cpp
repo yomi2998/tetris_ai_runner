@@ -5,6 +5,13 @@ namespace tournament_registry
     bool DeviceRegistry::enroll(DeviceId device, PublicKey const &public_key)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        for (PublicKey const &banned : banned_keys_)
+        {
+            if (banned == public_key)
+            {
+                return false;
+            }
+        }
         return devices_.emplace(device, Entry{public_key, DeviceStats{}}).second;
     }
 
@@ -45,6 +52,40 @@ namespace tournament_registry
         std::lock_guard<std::mutex> lock(mutex_);
         auto const it = devices_.find(device);
         return it != devices_.end() && it->second.stats.blacklisted;
+    }
+
+    bool DeviceRegistry::ban_key(PublicKey const &public_key)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (PublicKey const &banned : banned_keys_)
+        {
+            if (banned == public_key)
+            {
+                return false;
+            }
+        }
+        banned_keys_.push_back(public_key);
+        for (auto &entry : devices_)
+        {
+            if (entry.second.public_key == public_key)
+            {
+                entry.second.stats.blacklisted = true;
+            }
+        }
+        return true;
+    }
+
+    bool DeviceRegistry::key_banned(PublicKey const &public_key) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (PublicKey const &banned : banned_keys_)
+        {
+            if (banned == public_key)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     bool DeviceRegistry::record_accepted(DeviceId device, int games)

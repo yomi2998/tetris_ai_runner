@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "tournament/audit.h"
+#include "tournament/ban_file.h"
 #include "tournament/engine_identity.h"
 #include "tournament/net_transport.h"
 #include "tournament/provenance.h"
@@ -53,6 +54,7 @@ namespace tournament_host
         std::string certificate = "tournament_host.cert";
         std::string private_key = "tournament_host.key";
         std::string devices_file;
+        std::string ban_file = "tournament_bans.txt";
         int roster_size = 4;
         std::uint64_t generation_seed = 4242;
         double audit_rate = 1.0;
@@ -76,6 +78,7 @@ namespace tournament_host
         std::println("  --games-per-assignment --lease-ms --series-cap --wait-clients-ms --threads --iterations");
         std::println("  --max-rounds --max-games --max-draws");
         std::println("  --devices-file P restricts enrollment to the device ids and keys listed in P");
+        std::println("  --ban-file P persists banned device keys across restarts (default tournament_bans.txt, empty string disables)");
         std::println("Defaults: address 0.0.0.0, port 47001, certificate tournament_host.cert, private key tournament_host.key,");
         std::println("  roster size 4, generation seed 4242, audit rate 1.0, games per assignment 4, lease 30000 ms,");
         std::println("  series cap 2, client wait 120000 ms, threads 1, iterations 40, max rounds 600, max games 10000,");
@@ -227,6 +230,14 @@ namespace tournament_host
                     return fail("flag --devices-file requires a value");
                 }
                 config.devices_file = argv[++i];
+            }
+            else if (flag == "--ban-file")
+            {
+                if (i + 1 >= argc)
+                {
+                    return fail("flag --ban-file requires a value");
+                }
+                config.ban_file = argv[++i];
             }
             else if (flag == "--roster-size")
             {
@@ -400,6 +411,22 @@ namespace tournament_host
         }
 
         auto registry = std::make_shared<treg::DeviceRegistry>();
+        if (!cli.ban_file.empty())
+        {
+            tournament_ban::BanFile ban_store(cli.ban_file);
+            std::vector<tournament_ban::BanRecord> ban_records;
+            std::string ban_error;
+            if (!ban_store.load(ban_records, ban_error))
+            {
+                std::println(stderr, "cannot load ban file: {}", ban_error);
+                return 1;
+            }
+            for (tournament_ban::BanRecord const &record : ban_records)
+            {
+                registry->ban_key(record.public_key);
+            }
+            std::println("{} banned device key(s) loaded from {}", ban_records.size(), cli.ban_file);
+        }
         auto transport = std::make_shared<tnet::HostTransport>(registry, net_config_for(cli));
         std::string start_error;
         if (!transport->start(start_error))
@@ -547,9 +574,35 @@ namespace tournament_host
             std::vector<tw::DeviceId> const failed_devices = report.failed_devices();
             if (!failed_devices.empty())
             {
+                std::unordered_map<tw::DeviceId, std::uint64_t> per_device_failures;
+                for (taud::AuditVerdict const &verdict : report.verdicts)
+                {
+                    if (!verdict.passed)
+                    {
+                        ++per_device_failures[verdict.target.device];
+                    }
+                }
+                tournament_ban::BanFile ban_store(cli.ban_file);
+                tt::SystemClock catch_clock;
                 for (tw::DeviceId device : failed_devices)
                 {
                     registry->blacklist(device);
+                    tw::PublicKey const *banned_key = registry->public_key(device);
+                    if (banned_key != nullptr && !cli.ban_file.empty())
+                    {
+                        registry->ban_key(*banned_key);
+                        tournament_ban::BanRecord ban_record;
+                        ban_record.device = device;
+                        ban_record.public_key = *banned_key;
+                        ban_record.generation = 0;
+                        ban_record.failed_verdicts = per_device_failures[device];
+                        ban_record.caught_at_ms = catch_clock.now_ms();
+                        std::string ban_error;
+                        if (!ban_store.append(ban_record, ban_error))
+                        {
+                            std::println(stderr, "ban file append failed: {}", ban_error);
+                        }
+                    }
                 }
                 std::set<tw::GameId> voided_ids;
                 for (tw::DeviceId device : failed_devices)

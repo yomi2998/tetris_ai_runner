@@ -17,6 +17,7 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -27,6 +28,7 @@
 #include "param.h"
 #include "tuner_match.h"
 #include "tournament/audit.h"
+#include "tournament/ban_file.h"
 #include "tournament/bracket.h"
 #include "tournament/bytes.h"
 #include "tournament/checkpoint.h"
@@ -78,6 +80,7 @@ namespace tournament_tuner
         std::string devices_file;
         double audit_rate = 0.25;
         std::string journal_file = "tournament_journal.bin";
+        std::string ban_file = "tournament_bans.txt";
         int wait_clients_ms = 120000;
     };
 
@@ -422,6 +425,7 @@ namespace tournament_tuner
         std::println("Flags: --remote-port N distributes matches to remote_client devices over TLS (certificate and key are generated on first use, clients verify the printed fingerprint)");
         std::println("Flags: --remote-cert P and --remote-key P override the certificate paths, --audit-rate R sets the audit sample rate (default 0.25, remote mode only)");
         std::println("Flags: --journal-file P sets the provenance journal path (default tournament_journal.bin, remote mode only), --wait-clients-ms N bounds the initial client wait (default 120000)");
+        std::println("Flags: --ban-file P persists banned device keys across restarts (default tournament_bans.txt, empty string disables)");
         std::println("Flags: --devices-file P restricts remote enrollment to the device ids and keys listed in P (default open enrollment)");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
@@ -1076,6 +1080,7 @@ namespace tournament_tuner
             return 1;
         }
         std::shared_ptr<tournament_registry::DeviceRegistry> device_registry;
+        tournament_ban::BanFile ban_store(cli.ban_file);
 #if defined(TUNER_HAS_REMOTE)
         std::shared_ptr<tournament_net::HostTransport> net_transport;
         if (cli.remote_port > 0)
@@ -1135,6 +1140,22 @@ namespace tournament_tuner
             if (!cli.devices_file.empty())
             {
                 std::println("remote: enrollment restricted to {}", cli.devices_file);
+            }
+            if (!cli.ban_file.empty())
+            {
+                std::vector<tournament_ban::BanRecord> ban_records;
+                std::string ban_error;
+                if (!ban_store.load(ban_records, ban_error))
+                {
+                    std::println(stderr, "cannot load ban file: {}", ban_error);
+                    return 1;
+                }
+                for (tournament_ban::BanRecord const &record : ban_records)
+                {
+                    device_registry->ban_key(record.public_key);
+                }
+                std::println("remote: {} banned device key(s) loaded from {}",
+                             ban_records.size(), cli.ban_file);
             }
             std::println("remote: start clients with remote_client --host <host> --port {} --device-id N --key-file K --fingerprint {}",
                          static_cast<int>(port), *fingerprint);
@@ -1419,10 +1440,37 @@ namespace tournament_tuner
                 std::vector<tournament_runner::GameRecord> authoritative_ledger = runner.ledger();
                 if (!failed_devices.empty())
                 {
+                    std::unordered_map<std::uint64_t, std::uint64_t> per_device_failures;
+                    for (tournament_audit::AuditVerdict const &verdict : audit_report.verdicts)
+                    {
+                        if (!verdict.passed)
+                        {
+                            ++per_device_failures[verdict.target.device];
+                        }
+                    }
+                    tournament_transport::SystemClock catch_clock;
                     std::vector<std::uint64_t> voided;
                     for (std::uint64_t device : failed_devices)
                     {
                         device_registry->blacklist(device);
+                        tournament_wire::PublicKey const *banned_key
+                            = device_registry->public_key(device);
+                        if (banned_key != nullptr && !cli.ban_file.empty())
+                        {
+                            device_registry->ban_key(*banned_key);
+                            tournament_ban::BanRecord ban_record;
+                            ban_record.device = device;
+                            ban_record.public_key = *banned_key;
+                            ban_record.generation = generation;
+                            ban_record.failed_verdicts = per_device_failures[device];
+                            ban_record.caught_at_ms = catch_clock.now_ms();
+                            std::string ban_error;
+                            if (!ban_store.append(ban_record, ban_error))
+                            {
+                                std::println(stderr, "gen {} ban file append failed: {}",
+                                             generation, ban_error);
+                            }
+                        }
                         for (std::uint64_t game : provenance->games_of_device(device))
                         {
                             voided.push_back(game);
@@ -1582,10 +1630,29 @@ namespace tournament_tuner
                     std::vector<std::uint64_t> const promotion_failed = promotion_report.failed_devices();
                     if (!promotion_failed.empty())
                     {
+                        tournament_transport::SystemClock promotion_ban_clock;
                         for (std::uint64_t device : promotion_failed)
                         {
                             device_registry->blacklist(device);
                             device_registry->record_audit(device, false);
+                            tournament_wire::PublicKey const *banned_key
+                                = device_registry->public_key(device);
+                            if (banned_key != nullptr && !cli.ban_file.empty())
+                            {
+                                device_registry->ban_key(*banned_key);
+                                tournament_ban::BanRecord ban_record;
+                                ban_record.device = device;
+                                ban_record.public_key = *banned_key;
+                                ban_record.generation = generation;
+                                ban_record.failed_verdicts = 0;
+                                ban_record.caught_at_ms = promotion_ban_clock.now_ms();
+                                std::string ban_error;
+                                if (!ban_store.append(ban_record, ban_error))
+                                {
+                                    std::println(stderr, "gen {} ban file append failed: {}",
+                                                 generation, ban_error);
+                                }
+                            }
                         }
                         std::println(stderr,
                                      "gen {} promotion audit failed for {} device(s); promotion rejected",
@@ -1795,6 +1862,10 @@ int main(int argc, char *argv[])
         else if (std::strcmp(argv[i], "--journal-file") == 0 && i + 1 < argc)
         {
             config.journal_file = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--ban-file") == 0 && i + 1 < argc)
+        {
+            config.ban_file = argv[++i];
         }
         else if (std::strcmp(argv[i], "--wait-clients-ms") == 0 && i + 1 < argc)
         {

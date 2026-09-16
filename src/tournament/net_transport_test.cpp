@@ -538,6 +538,18 @@ namespace
         check(banned.status == tnet::ClientConnection::HelloStatus::Rejected
                   && banned.detail == "device is blacklisted",
               "blacklisted device reconnect rejected: " + banned.detail);
+        auto const fresh_keys = tw::generate_keypair();
+        check(host.registry->enroll(2, fresh_keys.public_key), "second device enrolls with a fresh key");
+        check(host.registry->ban_key(first.keys.public_key), "first device key banned in registry");
+        auto rotated = make_client(host, 5, "test_adapter", tw::protocol_version, 0,
+                                   &first.keys);
+        check(rotated.status == tnet::ClientConnection::HelloStatus::Rejected
+                  && rotated.detail == "device key is banned",
+              "banned key rejected under a different device id: " + rotated.detail);
+        auto survivor = make_client(host, 2, "test_adapter", tw::protocol_version, 0,
+                                    &fresh_keys);
+        check(survivor.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "clean key still enrolls while another key is banned: " + survivor.detail);
     }
 
     void test_connection_cap()

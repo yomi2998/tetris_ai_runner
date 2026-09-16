@@ -102,6 +102,25 @@ namespace
         check(registry.size() == 2, "blacklist: the size still counts the blacklisted id");
     }
 
+    void test_key_bans()
+    {
+        tr::DeviceRegistry registry;
+        registry.enroll(5, key_for(50));
+        registry.enroll(6, key_for(60));
+        check(registry.ban_key(key_for(50)), "key ban: banning a device key succeeds");
+        check(!registry.ban_key(key_for(50)), "key ban: banning the same key again is idempotent");
+        check(registry.key_banned(key_for(50)), "key ban: the banned key reports banned");
+        check(!registry.key_banned(key_for(60)), "key ban: other keys are unaffected");
+        check(!registry.enroll(9, key_for(50)),
+              "key ban: enrollment under a new id with the banned key is refused");
+        check(registry.enroll(10, key_for(70)),
+              "key ban: enrollment with a clean key still works");
+        check(registry.blacklisted(5),
+              "key ban: the device holding the banned key is blacklisted");
+        check(registry.active_devices() == std::vector<tw::DeviceId>{6, 10},
+              "key ban: the active list skips the key-banned device");
+    }
+
     void test_active_devices_sorted()
     {
         tr::DeviceRegistry registry;
@@ -162,6 +181,7 @@ int main()
     test_unknown_id_operations();
     test_counter_accumulation();
     test_blacklist();
+    test_key_bans();
     test_active_devices_sorted();
     test_size_counts_enrollments();
     test_stats_independent();
