@@ -12,7 +12,6 @@
 #include "tuning/match.h"
 #include "tuning/toj_adapter.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -368,20 +367,8 @@ namespace
         }
         check(repaired_records_honest, "every repaired record matches the honest ledger");
 
-        std::unordered_map<std::uint64_t, std::size_t> lying_position;
-        for (std::size_t i = 0; i < remote_runner.ledger().size(); ++i)
-        {
-            lying_position[remote_runner.ledger()[i].game_id] = i;
-        }
-        std::vector<trun::GameRecord> resume_prior = repaired.repaired_ledger;
-        std::sort(resume_prior.begin(), resume_prior.end(),
-                  [&](trun::GameRecord const &a, trun::GameRecord const &b)
-                  {
-                      return lying_position[a.game_id] < lying_position[b.game_id];
-                  });
-
         trun::TournamentRunner<TojBackend> resume_runner(engine, roster, generation_seed, config, limits,
-                                                         std::move(resume_prior));
+                                                         repaired.repaired_ledger);
         trun::RunResult const resume_result = resume_runner.run();
         check(resume_result.error.code == trun::ErrorCode::None,
               "resumed tournament after repair completes without error");

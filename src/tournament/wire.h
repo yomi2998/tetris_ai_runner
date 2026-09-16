@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -85,4 +87,49 @@ namespace tournament_wire
     tuning::BatchGame from_wire(WireGame const &game);
     WireOutcome to_wire(tuning::GameOutcome const &outcome);
     tuning::GameOutcome from_wire(WireOutcome const &outcome);
+
+    inline constexpr std::uint32_t protocol_version = 1;
+    inline constexpr std::uint32_t max_frame_payload = 1u << 20;
+
+    enum class MessageKind : std::uint8_t
+    {
+        Hello = 1,
+        Assignment = 2,
+        Result = 3,
+        Reject = 4,
+        Accept = 5,
+    };
+
+    struct HelloMessage
+    {
+        DeviceId device = 0;
+        PublicKey public_key;
+        std::uint32_t protocol = protocol_version;
+        std::string adapter_id;
+        std::uint64_t schema_hash = 0;
+    };
+
+    struct FramedMessage
+    {
+        MessageKind kind = MessageKind::Reject;
+        std::string payload;
+    };
+
+    std::optional<WireGame> decode_game(std::span<std::uint8_t const> bytes);
+    std::optional<WireOutcome> decode_outcome(std::span<std::uint8_t const> bytes);
+
+    std::string encode_hello(HelloMessage const &hello);
+    std::optional<HelloMessage> decode_hello(std::span<std::uint8_t const> bytes);
+
+    std::string encode_assignment(AssignmentBatch const &batch);
+    std::optional<AssignmentBatch> decode_assignment(std::span<std::uint8_t const> bytes);
+
+    std::string encode_result_message(SignedResult const &result);
+    std::optional<SignedResult> decode_result_message(std::span<std::uint8_t const> bytes);
+
+    std::string encode_reject(std::string const &reason);
+    std::optional<std::string> decode_reject(std::span<std::uint8_t const> bytes);
+
+    std::string frame_message(MessageKind kind, std::string const &payload);
+    std::optional<FramedMessage> unframe_message(std::span<std::uint8_t const> bytes);
 }

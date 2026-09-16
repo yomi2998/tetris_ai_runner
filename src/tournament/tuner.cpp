@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -11,10 +12,12 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <print>
 #include <random>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -23,15 +26,26 @@
 #include "ai_zzz.h"
 #include "param.h"
 #include "tuner_match.h"
+#include "tournament/audit.h"
 #include "tournament/bracket.h"
 #include "tournament/bytes.h"
 #include "tournament/checkpoint.h"
 #include "tournament/cmaes.h"
+#include "tournament/journal.h"
+#if defined(TUNER_HAS_REMOTE)
+#include "tournament/net_transport.h"
+#endif
 #include "tournament/ordinal.h"
 #include "tournament/promotion.h"
+#include "tournament/provenance.h"
 #include "tournament/rating.h"
+#include "tournament/registry.h"
+#include "tournament/remote_backend.h"
+#include "tournament/repair.h"
 #include "tournament/runner.h"
+#include "tournament/runtime_backend.h"
 #include "tournament/scheduler.h"
+#include "tournament/transport.h"
 #include "tuning/domain.h"
 #include "tuning/engine_match.h"
 #include "tuning/match.h"
@@ -40,7 +54,8 @@
 namespace tournament_tuner
 {
     using TojBackend = tuning::EngineMatchBackend<tuning_toj::TojAdapter>;
-    using Runner = tournament_runner::TournamentRunner<TojBackend>;
+    using LocalRunner = tournament_runner::TournamentRunner<TojBackend>;
+    using RuntimeRunner = tournament_runner::TournamentRunner<tournament_runtime::RuntimeBackend>;
 
     struct TunerConfig
     {
@@ -55,6 +70,13 @@ namespace tournament_tuner
         std::string data_file = "tournament_data.bin";
         std::string incumbent_file = "tournament_incumbent.bin";
         std::string current_file = "tournament_current.bin";
+        int remote_port = 0;
+        std::string remote_address = "0.0.0.0";
+        std::string remote_certificate = "tournament_host.cert";
+        std::string remote_key = "tournament_host.key";
+        double audit_rate = 0.25;
+        std::string journal_file = "tournament_journal.bin";
+        int wait_clients_ms = 120000;
     };
 
     int thread_budget_for(int threads_arg)
@@ -395,6 +417,9 @@ namespace tournament_tuner
         std::println("View defaults: seed 0 (time-based, printed for replay), iters 50, max_rounds 3600");
         std::println("Threading: budget = threads if given else hardware_threads - 1, game workers = budget / 2, helpers = game workers, roster = 2 * budget (pso candidate count), lambda = roster - 1");
         std::println("Flags: --fresh-zero starts a fresh run from zero weights instead of the incumbent file (ignored when a checkpoint exists)");
+        std::println("Flags: --remote-port N distributes matches to remote_client devices over TLS (certificate and key are generated on first use, clients verify the printed fingerprint)");
+        std::println("Flags: --remote-cert P and --remote-key P override the certificate paths, --audit-rate R sets the audit sample rate (default 0.25, remote mode only)");
+        std::println("Flags: --journal-file P sets the provenance journal path (default tournament_journal.bin, remote mode only), --wait-clients-ms N bounds the initial client wait (default 120000)");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
         std::println("During runs: type view and Enter for one live game per wave, empty line to stop, bracket for live standings");
@@ -529,7 +554,8 @@ namespace tournament_tuner
         }
     }
 
-    void print_bracket(Runner const &runner)
+    template<class RunnerT>
+    void print_bracket(RunnerT const &runner)
     {
         auto const &bracket = runner.bracket();
         print_bracket_group(bracket, tournament_bracket::NodeKind::Winners, "WINNERS");
@@ -760,7 +786,7 @@ namespace tournament_tuner
         limits.wave_limit = 0;
         limits.max_games = 20000;
         limits.max_draws = 10000;
-        Runner runner(backend, roster_entries, 987654321ULL, run_config, limits);
+        LocalRunner runner(backend, roster_entries, 987654321ULL, run_config, limits);
         auto result = runner.run();
         if (result.error.code != tournament_runner::ErrorCode::None)
         {
@@ -1046,10 +1072,68 @@ namespace tournament_tuner
             std::println(stderr, "cannot prepare shared TOJ context");
             return 1;
         }
+        std::shared_ptr<tournament_registry::DeviceRegistry> device_registry;
+#if defined(TUNER_HAS_REMOTE)
+        std::shared_ptr<tournament_net::HostTransport> net_transport;
+        if (cli.remote_port > 0)
+        {
+            if (!std::filesystem::exists(cli.remote_certificate)
+                || !std::filesystem::exists(cli.remote_key))
+            {
+                std::string cert_error;
+                if (!tournament_net::generate_self_signed_host_cert(cli.remote_certificate,
+                                                                   cli.remote_key, cert_error))
+                {
+                    std::println(stderr, "cannot generate host certificate: {}", cert_error);
+                    return 1;
+                }
+                std::println("generated {} and {}", cli.remote_certificate, cli.remote_key);
+            }
+            std::optional<std::string> const fingerprint
+                = tournament_net::certificate_fingerprint(cli.remote_certificate);
+            if (!fingerprint.has_value())
+            {
+                std::println(stderr, "cannot read certificate {}", cli.remote_certificate);
+                return 1;
+            }
+            device_registry = std::make_shared<tournament_registry::DeviceRegistry>();
+            tournament_net::NetConfig net_config;
+            net_config.listen_address = cli.remote_address;
+            net_config.port = static_cast<std::uint16_t>(cli.remote_port);
+            net_config.certificate_path = cli.remote_certificate;
+            net_config.private_key_path = cli.remote_key;
+            net_config.expected_adapter_id = std::string(tuning_toj::TojAdapter::schema().adapter_id);
+            net_config.expected_schema_hash = tuning::schema_hash(tuning_toj::TojAdapter::schema());
+            net_config.io_timeout_ms = 35000;
+            net_transport = std::make_shared<tournament_net::HostTransport>(device_registry, net_config);
+            std::string start_error;
+            if (!net_transport->start(start_error))
+            {
+                std::println(stderr, "cannot start host transport: {}", start_error);
+                return 1;
+            }
+            std::uint16_t const port = net_transport->listening_port();
+            std::println("remote: listening on {}:{} fingerprint {}", cli.remote_address,
+                         static_cast<int>(port), *fingerprint);
+            std::println("remote: start clients with remote_client --host <host> --port {} --device-id N --key-file K --fingerprint {}",
+                         static_cast<int>(port), *fingerprint);
+            for (int waited = 0; device_registry->active_devices().empty();)
+            {
+                if (waited >= cli.wait_clients_ms)
+                {
+                    std::println(stderr, "remote: no clients enrolled within {} ms", cli.wait_clients_ms);
+                    return 1;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                waited += 250;
+            }
+            std::println("remote: {} client(s) enrolled", device_registry->active_devices().size());
+        }
+#endif
         struct LiveBracket
         {
             std::mutex mutex;
-            Runner const *runner = nullptr;
+            RuntimeRunner const *runner = nullptr;
         };
         auto view_state = std::make_shared<tuning::EngineViewState>();
         auto live = std::make_shared<LiveBracket>();
@@ -1130,10 +1214,57 @@ namespace tournament_tuner
                 resume_progress = false;
                 std::println("gen {} continuing at {} ledger games", generation, prior.size());
             }
-            TojBackend backend(shared_context);
-            backend.set_view_state(view_state);
+            std::shared_ptr<tournament_provenance::ProvenanceLedger> provenance;
+            auto local_engine = [shared_context, view_state](std::vector<tuning::BatchGame> const &games,
+                                                             tuning::RunConfig const &engine_config)
+            {
+                TojBackend local(shared_context);
+                local.set_view_state(view_state);
+                return local.run_games(games, engine_config);
+            };
+            tournament_runtime::RuntimeBackend backend(tuning_toj::TojAdapter::schema(), local_engine);
+            tournament_journal::ProvenanceJournal journal(cli.journal_file);
+            std::unordered_set<std::uint64_t> journaled_ids;
+#if defined(TUNER_HAS_REMOTE)
+            std::optional<tournament_remote::RemoteBackend> remote_backend;
+            if (net_transport)
+            {
+                provenance = std::make_shared<tournament_provenance::ProvenanceLedger>();
+                remote_backend.emplace(tuning_toj::TojAdapter::schema(), net_transport, device_registry,
+                                       provenance, std::make_shared<tournament_transport::SystemClock>(),
+                                       tournament_remote::RemoteConfig{});
+                backend = tournament_runtime::RuntimeBackend(
+                    tuning_toj::TojAdapter::schema(),
+                    [engine = *remote_backend](std::vector<tuning::BatchGame> const &games,
+                                               tuning::RunConfig const &engine_config)
+                    {
+                        return engine.run_games(games, engine_config);
+                    });
+                if (prior.empty())
+                {
+                    std::string clear_error;
+                    if (!journal.clear(clear_error))
+                    {
+                        std::println(stderr, "gen {} cannot clear journal: {}", generation, clear_error);
+                        return 1;
+                    }
+                }
+                else
+                {
+                    std::string load_error;
+                    if (!journal.load(*provenance, load_error))
+                    {
+                        std::println("gen {} journal note: {}", generation, load_error);
+                    }
+                    for (auto const *entry : provenance->entries())
+                    {
+                        journaled_ids.insert(entry->game_id);
+                    }
+                }
+            }
+#endif
             std::uint64_t generation_seed = generation_seed_for(root_seed, generation);
-            Runner runner(backend, roster_entries, generation_seed, run_config, limits, std::move(prior));
+            RuntimeRunner runner(backend, roster_entries, generation_seed, run_config, limits, std::move(prior));
             {
                 std::lock_guard<std::mutex> live_lock(live->mutex);
                 live->runner = &runner;
@@ -1178,6 +1309,21 @@ namespace tournament_tuner
                 std::println("gen {} wave {} games {} draws {} ready {} {}",
                     generation, ledger_waves, ledger_games, ledger_draws,
                     runner.bracket().ready_series().size(), active);
+                if (provenance)
+                {
+                    for (auto const *entry : provenance->entries())
+                    {
+                        if (journaled_ids.insert(entry->game_id).second)
+                        {
+                            std::string append_error;
+                            if (!journal.append(*entry, append_error))
+                            {
+                                std::println(stderr, "gen {} journal append failed: {}",
+                                             generation, append_error);
+                            }
+                        }
+                    }
+                }
                 if (!step.complete)
                 {
                     std::string save_error;
@@ -1207,9 +1353,106 @@ namespace tournament_tuner
                 std::println(stderr, "generation {} tournament did not complete", generation);
                 return 1;
             }
+            auto engine_rerun = [shared_context](std::vector<tuning::BatchGame> const &games,
+                                                 tuning::RunConfig const &rerun_config)
+            {
+                TojBackend local(shared_context);
+                return local.run_games(games, rerun_config);
+            };
+            std::unordered_set<std::uint64_t> audited_ids;
+            std::optional<LocalRunner> audited_runner;
+            if (provenance && !provenance->empty())
+            {
+                std::vector<tournament_audit::AuditTarget> const audit_targets
+                    = tournament_audit::select_targets(*provenance, cli.audit_rate, {}, generation_seed);
+                tournament_audit::AuditReport const audit_report
+                    = tournament_audit::audit_records(*provenance, audit_targets, run_config, engine_rerun);
+                for (tournament_audit::AuditTarget const &target : audit_targets)
+                {
+                    audited_ids.insert(target.game);
+                }
+                std::vector<std::uint64_t> const failed_devices = audit_report.failed_devices();
+                std::unordered_set<std::uint64_t> const failed_set(failed_devices.begin(),
+                                                                   failed_devices.end());
+                std::unordered_set<std::uint64_t> seen_devices;
+                int failed_verdicts = 0;
+                for (tournament_audit::AuditVerdict const &verdict : audit_report.verdicts)
+                {
+                    if (!verdict.passed)
+                    {
+                        ++failed_verdicts;
+                    }
+                    if (seen_devices.insert(verdict.target.device).second)
+                    {
+                        device_registry->record_audit(verdict.target.device,
+                                                      failed_set.count(verdict.target.device) == 0);
+                    }
+                }
+                std::println("gen {} audit: {} sampled, {} failed verdicts, {} failed devices",
+                             generation, audit_targets.size(), failed_verdicts, failed_devices.size());
+                std::vector<tournament_runner::GameRecord> authoritative_ledger = runner.ledger();
+                if (!failed_devices.empty())
+                {
+                    std::vector<std::uint64_t> voided;
+                    for (std::uint64_t device : failed_devices)
+                    {
+                        device_registry->blacklist(device);
+                        for (std::uint64_t game : provenance->games_of_device(device))
+                        {
+                            voided.push_back(game);
+                        }
+                    }
+                    tournament_repair::RepairRequest repair_request;
+                    repair_request.roster = roster_entries;
+                    repair_request.generation_seed = generation_seed;
+                    repair_request.config = run_config;
+                    repair_request.ledger = runner.ledger();
+                    repair_request.voided_game_ids = voided;
+                    repair_request.re_run = engine_rerun;
+                    tournament_repair::RepairResult const repaired
+                        = tournament_repair::repair_ledger(std::move(repair_request));
+                    if (!repaired.ok)
+                    {
+                        std::println(stderr, "gen {} repair failed: {}", generation, repaired.error);
+                        return 1;
+                    }
+                    std::println("gen {} repair: voided {} re-ran {} dropped {} diverged {}",
+                                 generation, repaired.voided_games, repaired.re_run_games,
+                                 repaired.dropped_games, repaired.diverged_games);
+                    authoritative_ledger = std::move(repaired.repaired_ledger);
+                }
+                audited_runner.emplace(TojBackend(shared_context), roster_entries, generation_seed,
+                                       run_config, limits, std::move(authoritative_ledger));
+                if (!audited_runner->ok())
+                {
+                    std::println(stderr, "gen {} audited ledger replay failed: {}", generation,
+                                 audited_runner->error().detail);
+                    return 1;
+                }
+                tournament_runner::RunResult const audited_result = audited_runner->run();
+                if (audited_result.error.code != tournament_runner::ErrorCode::None
+                    || !audited_result.complete)
+                {
+                    std::println(stderr, "gen {} audited tournament failed: {}", generation,
+                                 audited_result.error.detail.empty()
+                                     ? std::string("did not complete")
+                                     : audited_result.error.detail);
+                    return 1;
+                }
+                run_result.complete = audited_result.complete;
+                run_result.champion = audited_result.champion;
+                run_result.stats.games = static_cast<std::int64_t>(audited_runner->ledger().size());
+                run_result.stats.draws = audited_runner->total_draws();
+                {
+                    std::lock_guard<std::mutex> live_lock(live->mutex);
+                    live->runner = nullptr;
+                }
+            }
+            std::vector<tournament_runner::GameRecord> const &authoritative_ledger_ref
+                = audited_runner.has_value() ? audited_runner->ledger() : runner.ledger();
             std::vector<tournament_rating::GameRecord> rating_records;
-            rating_records.reserve(runner.ledger().size());
-            for (auto const &record : runner.ledger())
+            rating_records.reserve(authoritative_ledger_ref.size());
+            for (auto const &record : authoritative_ledger_ref)
             {
                 double score = 0.5;
                 if (record.winner == tournament_bracket::GameWinner::SideA)
@@ -1244,7 +1487,8 @@ namespace tournament_tuner
                 std::println(stderr, "generation {} cma tell failed: {}", generation, error.what());
                 return 1;
             }
-            std::uint64_t champion_id = runner.champion();
+            std::uint64_t const champion_id = audited_runner.has_value() ? audited_runner->champion()
+                                                                         : runner.champion();
             std::vector<double> champion_theta;
             for (auto const &entry : roster_entries)
             {
@@ -1282,6 +1526,47 @@ namespace tournament_tuner
                 promotion_mean = promotion.mean_score;
                 promotion_lb = promotion.lower_bound;
                 promoted = promotion.promoted;
+                if (promoted && provenance && !provenance->empty())
+                {
+                    for (auto const *entry : provenance->entries())
+                    {
+                        if (journaled_ids.insert(entry->game_id).second)
+                        {
+                            std::string append_error;
+                            if (!journal.append(*entry, append_error))
+                            {
+                                std::println(stderr, "gen {} journal append failed: {}",
+                                             generation, append_error);
+                            }
+                        }
+                    }
+                    std::vector<std::uint64_t> forced;
+                    for (auto const *entry : provenance->entries())
+                    {
+                        if (audited_ids.insert(entry->game_id).second)
+                        {
+                            forced.push_back(entry->game_id);
+                        }
+                    }
+                    std::vector<tournament_audit::AuditTarget> const promotion_targets
+                        = tournament_audit::select_targets(*provenance, 0.0, forced, generation_seed);
+                    tournament_audit::AuditReport const promotion_report
+                        = tournament_audit::audit_records(*provenance, promotion_targets, run_config,
+                                                          engine_rerun);
+                    std::vector<std::uint64_t> const promotion_failed = promotion_report.failed_devices();
+                    if (!promotion_failed.empty())
+                    {
+                        for (std::uint64_t device : promotion_failed)
+                        {
+                            device_registry->blacklist(device);
+                            device_registry->record_audit(device, false);
+                        }
+                        std::println(stderr,
+                                     "gen {} promotion audit failed for {} device(s); promotion rejected",
+                                     generation, promotion_failed.size());
+                        promoted = false;
+                    }
+                }
                 if (promoted)
                 {
                     incumbent = champion_theta;
@@ -1317,12 +1602,13 @@ namespace tournament_tuner
             payload["games"] = run_result.stats.games;
             payload["draws"] = run_result.stats.draws;
             payload["waves"] = run_result.stats.waves;
-            payload["checksum"] = runner.checksum();
+            payload["checksum"] = audited_runner.has_value() ? audited_runner->checksum()
+                                                             : runner.checksum();
             payload["promoted"] = promoted;
             payload["promotion_mean"] = promotion_mean;
             payload["promotion_lb"] = promotion_lb;
             nlohmann::json standings = nlohmann::json::array();
-            for (auto id : runner.standings())
+            for (auto id : audited_runner.has_value() ? audited_runner->standings() : runner.standings())
             {
                 standings.push_back(id);
             }
@@ -1351,7 +1637,9 @@ namespace tournament_tuner
             }
             std::println("gen {} games {} draws {} waves {} champion {} checksum {} sigma {:.4f} promoted {} mean {:.3f} lb {:.3f}",
                 generation, run_result.stats.games, run_result.stats.draws, run_result.stats.waves,
-                champion_id, runner.checksum(), optimizer->sigma(), promoted ? 1 : 0, promotion_mean, promotion_lb);
+                champion_id,
+                audited_runner.has_value() ? audited_runner->checksum() : runner.checksum(),
+                optimizer->sigma(), promoted ? 1 : 0, promotion_mean, promotion_lb);
             std::size_t show = std::min<std::size_t>(5, fit.ratings.size());
             for (std::size_t i = 0; i < show; ++i)
             {
@@ -1365,6 +1653,12 @@ namespace tournament_tuner
                 live->runner = nullptr;
             }
         }
+#if defined(TUNER_HAS_REMOTE)
+        if (net_transport)
+        {
+            net_transport->stop();
+        }
+#endif
         return 0;
     }
 }
@@ -1431,16 +1725,67 @@ int main(int argc, char *argv[])
     tournament_tuner::TunerConfig config;
     std::vector<char const *> positional;
     positional.push_back(argv[0]);
+    bool flag_error = false;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--fresh-zero") == 0)
         {
             config.fresh_zero = true;
         }
+        else if (std::strcmp(argv[i], "--remote-port") == 0 && i + 1 < argc)
+        {
+            try
+            {
+                config.remote_port = std::stoi(argv[++i]);
+            }
+            catch (std::exception const &)
+            {
+                flag_error = true;
+            }
+        }
+        else if (std::strcmp(argv[i], "--remote-cert") == 0 && i + 1 < argc)
+        {
+            config.remote_certificate = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--remote-key") == 0 && i + 1 < argc)
+        {
+            config.remote_key = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--audit-rate") == 0 && i + 1 < argc)
+        {
+            try
+            {
+                config.audit_rate = std::stod(argv[++i]);
+            }
+            catch (std::exception const &)
+            {
+                flag_error = true;
+            }
+        }
+        else if (std::strcmp(argv[i], "--journal-file") == 0 && i + 1 < argc)
+        {
+            config.journal_file = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--wait-clients-ms") == 0 && i + 1 < argc)
+        {
+            try
+            {
+                config.wait_clients_ms = std::stoi(argv[++i]);
+            }
+            catch (std::exception const &)
+            {
+                flag_error = true;
+            }
+        }
         else
         {
             positional.push_back(argv[i]);
         }
+    }
+    if (flag_error)
+    {
+        tournament_tuner::print_usage(program.c_str());
+        return 1;
     }
     int const argn = static_cast<int>(positional.size());
     try
@@ -1492,5 +1837,27 @@ int main(int argc, char *argv[])
         std::println(stderr, "invalid promotion threshold");
         return 1;
     }
+    if (config.remote_port < 0 || config.remote_port > 65535)
+    {
+        std::println(stderr, "invalid remote port");
+        return 1;
+    }
+    if (!std::isfinite(config.audit_rate) || config.audit_rate < 0.0 || config.audit_rate > 1.0)
+    {
+        std::println(stderr, "invalid audit rate");
+        return 1;
+    }
+    if (config.wait_clients_ms <= 0)
+    {
+        std::println(stderr, "invalid client wait");
+        return 1;
+    }
+#if !defined(TUNER_HAS_REMOTE)
+    if (config.remote_port > 0)
+    {
+        std::println(stderr, "remote support requires a build with OpenSSL");
+        return 1;
+    }
+#endif
     return tournament_tuner::run_tournament(config);
 }

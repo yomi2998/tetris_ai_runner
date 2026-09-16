@@ -1,0 +1,620 @@
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <optional>
+#include <print>
+#include <set>
+#include <string>
+#include <system_error>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#include "tournament/audit.h"
+#include "tournament/net_transport.h"
+#include "tournament/provenance.h"
+#include "tournament/registry.h"
+#include "tournament/remote_backend.h"
+#include "tournament/repair.h"
+#include "tournament/runner.h"
+#include "tournament/transport.h"
+#include "tuning/domain.h"
+#include "tuning/engine_match.h"
+#include "tuning/match.h"
+#include "tuning/toj_adapter.h"
+
+namespace tournament_host
+{
+    namespace taud = tournament_audit;
+    namespace tbr = tournament_bracket;
+    namespace tnet = tournament_net;
+    namespace tprov = tournament_provenance;
+    namespace treg = tournament_registry;
+    namespace trem = tournament_remote;
+    namespace trep = tournament_repair;
+    namespace trun = tournament_runner;
+    namespace tt = tournament_transport;
+    namespace tw = tournament_wire;
+
+    using TojBackend = tuning::EngineMatchBackend<tuning_toj::TojAdapter>;
+
+    struct HostConfig
+    {
+        std::string address = "0.0.0.0";
+        std::uint16_t port = 47001;
+        std::string certificate = "tournament_host.cert";
+        std::string private_key = "tournament_host.key";
+        int roster_size = 4;
+        std::uint64_t generation_seed = 4242;
+        double audit_rate = 1.0;
+        int games_per_assignment = 4;
+        std::uint64_t lease_ms = 30000;
+        int series_cap = 2;
+        std::uint64_t wait_clients_ms = 120000;
+        int threads = 1;
+        int iterations = 40;
+        int max_rounds = 600;
+        std::int64_t max_games = 10000;
+        std::int64_t max_draws = 10000;
+    };
+
+    void print_usage(char const *program)
+    {
+        std::println("Usage:");
+        std::println("  {} [flags]", program);
+        std::println("  {} --address 0.0.0.0 --port 47001 --certificate tournament_host.cert --private-key tournament_host.key", program);
+        std::println("Flags: --address --port --certificate --private-key --roster-size --generation-seed --audit-rate");
+        std::println("  --games-per-assignment --lease-ms --series-cap --wait-clients-ms --threads --iterations");
+        std::println("  --max-rounds --max-games --max-draws");
+        std::println("Defaults: address 0.0.0.0, port 47001, certificate tournament_host.cert, private key tournament_host.key,");
+        std::println("  roster size 4, generation seed 4242, audit rate 1.0, games per assignment 4, lease 30000 ms,");
+        std::println("  series cap 2, client wait 120000 ms, threads 1, iterations 40, max rounds 600, max games 10000,");
+        std::println("  max draws 10000");
+    }
+
+    bool parse_u64(std::string const &text, std::uint64_t &out)
+    {
+        try
+        {
+            if (text.empty() || text.front() == '-')
+            {
+                return false;
+            }
+            std::size_t consumed = 0;
+            unsigned long long value = std::stoull(text, &consumed);
+            if (consumed != text.size())
+            {
+                return false;
+            }
+            out = static_cast<std::uint64_t>(value);
+            return true;
+        }
+        catch (std::exception const &)
+        {
+            return false;
+        }
+    }
+
+    bool parse_int(std::string const &text, int &out)
+    {
+        try
+        {
+            if (text.empty())
+            {
+                return false;
+            }
+            std::size_t consumed = 0;
+            int value = std::stoi(text, &consumed);
+            if (consumed != text.size())
+            {
+                return false;
+            }
+            out = value;
+            return true;
+        }
+        catch (std::exception const &)
+        {
+            return false;
+        }
+    }
+
+    bool parse_i64(std::string const &text, std::int64_t &out)
+    {
+        try
+        {
+            if (text.empty())
+            {
+                return false;
+            }
+            std::size_t consumed = 0;
+            long long value = std::stoll(text, &consumed);
+            if (consumed != text.size())
+            {
+                return false;
+            }
+            out = static_cast<std::int64_t>(value);
+            return true;
+        }
+        catch (std::exception const &)
+        {
+            return false;
+        }
+    }
+
+    bool parse_double(std::string const &text, double &out)
+    {
+        try
+        {
+            if (text.empty())
+            {
+                return false;
+            }
+            std::size_t consumed = 0;
+            double value = std::stod(text, &consumed);
+            if (consumed != text.size())
+            {
+                return false;
+            }
+            out = value;
+            return true;
+        }
+        catch (std::exception const &)
+        {
+            return false;
+        }
+    }
+
+    bool parse_flags(int argc, char *argv[], HostConfig &config)
+    {
+        std::string const program = argc > 0 ? argv[0] : "tournament_host";
+        auto fail = [&program](std::string const &message)
+        {
+            std::println(stderr, "{}", message);
+            print_usage(program.c_str());
+            return false;
+        };
+        for (int i = 1; i < argc; ++i)
+        {
+            std::string const flag = argv[i];
+            if (flag == "--address")
+            {
+                if (i + 1 >= argc)
+                {
+                    return fail("flag --address requires a value");
+                }
+                config.address = argv[++i];
+            }
+            else if (flag == "--port")
+            {
+                std::uint64_t value = 0;
+                if (i + 1 >= argc || !parse_u64(argv[i + 1], value) || value > 65535)
+                {
+                    return fail("flag --port requires an integer in 0..65535");
+                }
+                config.port = static_cast<std::uint16_t>(value);
+                ++i;
+            }
+            else if (flag == "--certificate")
+            {
+                if (i + 1 >= argc)
+                {
+                    return fail("flag --certificate requires a value");
+                }
+                config.certificate = argv[++i];
+            }
+            else if (flag == "--private-key")
+            {
+                if (i + 1 >= argc)
+                {
+                    return fail("flag --private-key requires a value");
+                }
+                config.private_key = argv[++i];
+            }
+            else if (flag == "--roster-size")
+            {
+                int value = 0;
+                if (i + 1 >= argc || !parse_int(argv[i + 1], value))
+                {
+                    return fail("flag --roster-size requires an integer");
+                }
+                config.roster_size = std::clamp(value, 2, 16);
+                ++i;
+            }
+            else if (flag == "--generation-seed")
+            {
+                if (i + 1 >= argc || !parse_u64(argv[i + 1], config.generation_seed))
+                {
+                    return fail("flag --generation-seed requires an unsigned integer");
+                }
+                ++i;
+            }
+            else if (flag == "--audit-rate")
+            {
+                double value = 0.0;
+                if (i + 1 >= argc || !parse_double(argv[i + 1], value) || !std::isfinite(value))
+                {
+                    return fail("flag --audit-rate requires a finite number");
+                }
+                config.audit_rate = value;
+                ++i;
+            }
+            else if (flag == "--games-per-assignment")
+            {
+                if (i + 1 >= argc || !parse_int(argv[i + 1], config.games_per_assignment))
+                {
+                    return fail("flag --games-per-assignment requires an integer");
+                }
+                ++i;
+            }
+            else if (flag == "--lease-ms")
+            {
+                if (i + 1 >= argc || !parse_u64(argv[i + 1], config.lease_ms))
+                {
+                    return fail("flag --lease-ms requires an unsigned integer");
+                }
+                ++i;
+            }
+            else if (flag == "--series-cap")
+            {
+                if (i + 1 >= argc || !parse_int(argv[i + 1], config.series_cap))
+                {
+                    return fail("flag --series-cap requires an integer");
+                }
+                ++i;
+            }
+            else if (flag == "--wait-clients-ms")
+            {
+                if (i + 1 >= argc || !parse_u64(argv[i + 1], config.wait_clients_ms))
+                {
+                    return fail("flag --wait-clients-ms requires an unsigned integer");
+                }
+                ++i;
+            }
+            else if (flag == "--threads")
+            {
+                if (i + 1 >= argc || !parse_int(argv[i + 1], config.threads))
+                {
+                    return fail("flag --threads requires an integer");
+                }
+                ++i;
+            }
+            else if (flag == "--iterations")
+            {
+                if (i + 1 >= argc || !parse_int(argv[i + 1], config.iterations))
+                {
+                    return fail("flag --iterations requires an integer");
+                }
+                ++i;
+            }
+            else if (flag == "--max-rounds")
+            {
+                if (i + 1 >= argc || !parse_int(argv[i + 1], config.max_rounds))
+                {
+                    return fail("flag --max-rounds requires an integer");
+                }
+                ++i;
+            }
+            else if (flag == "--max-games")
+            {
+                if (i + 1 >= argc || !parse_i64(argv[i + 1], config.max_games))
+                {
+                    return fail("flag --max-games requires an integer");
+                }
+                ++i;
+            }
+            else if (flag == "--max-draws")
+            {
+                if (i + 1 >= argc || !parse_i64(argv[i + 1], config.max_draws))
+                {
+                    return fail("flag --max-draws requires an integer");
+                }
+                ++i;
+            }
+            else
+            {
+                return fail("unknown flag: " + flag);
+            }
+        }
+        return true;
+    }
+
+    bool file_exists(std::string const &path)
+    {
+        std::error_code error;
+        return std::filesystem::exists(path, error);
+    }
+
+    tnet::NetConfig net_config_for(HostConfig const &cli)
+    {
+        tuning::ParamSchema const schema = tuning_toj::TojAdapter::schema();
+        tnet::NetConfig config;
+        config.listen_address = cli.address;
+        config.port = cli.port;
+        config.certificate_path = cli.certificate;
+        config.private_key_path = cli.private_key;
+        config.expected_adapter_id = std::string(tuning_toj::TojAdapter::kAdapterId);
+        config.expected_schema_hash = tuning::schema_hash(schema);
+        config.io_timeout_ms = cli.lease_ms + 5000;
+        return config;
+    }
+
+    std::string join_ids(std::vector<std::uint64_t> const &ids)
+    {
+        std::string joined;
+        for (std::uint64_t id : ids)
+        {
+            if (!joined.empty())
+            {
+                joined += ' ';
+            }
+            joined += std::to_string(id);
+        }
+        return joined;
+    }
+
+    int run_host(HostConfig const &cli)
+    {
+        if (!file_exists(cli.certificate) || !file_exists(cli.private_key))
+        {
+            std::string error;
+            if (!tnet::generate_self_signed_host_cert(cli.certificate, cli.private_key, error))
+            {
+                std::println(stderr, "certificate generation failed: {}", error);
+                return 1;
+            }
+            std::println("generated {}", cli.certificate);
+        }
+        std::optional<std::string> const fingerprint = tnet::certificate_fingerprint(cli.certificate);
+        if (!fingerprint.has_value())
+        {
+            std::println(stderr, "cannot read a certificate fingerprint from {}", cli.certificate);
+            return 1;
+        }
+
+        auto registry = std::make_shared<treg::DeviceRegistry>();
+        auto transport = std::make_shared<tnet::HostTransport>(registry, net_config_for(cli));
+        std::string start_error;
+        if (!transport->start(start_error))
+        {
+            std::println(stderr, "transport start failed: {}", start_error);
+            return 1;
+        }
+        std::uint16_t const bound_port = transport->listening_port();
+        std::println("listening on {}:{} fingerprint {}", cli.address, bound_port, *fingerprint);
+        std::println("start clients: remote_client --host {} --port {} --device-id N --key-file K --fingerprint {}",
+            cli.address, bound_port, *fingerprint);
+
+        std::uint64_t waited_ms = 0;
+        while (registry->active_devices().empty() && waited_ms < cli.wait_clients_ms)
+        {
+            if (waited_ms % 1000 == 0)
+            {
+                std::println("waiting for clients, enrolled={}", registry->active_devices().size());
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            waited_ms += 250;
+        }
+        if (registry->active_devices().empty())
+        {
+            std::println(stderr, "timed out after {} ms waiting for clients", cli.wait_clients_ms);
+            transport->stop();
+            return 1;
+        }
+
+        tuning::ParamSchema const schema = tuning_toj::TojAdapter::schema();
+        std::vector<trun::RosterEntry> roster;
+        roster.reserve(static_cast<std::size_t>(cli.roster_size));
+        for (int i = 0; i < cli.roster_size; ++i)
+        {
+            std::vector<double> theta(schema.defaults.begin(), schema.defaults.end());
+            for (double &value : theta)
+            {
+                value *= 1.0 + 0.05 * static_cast<double>(i);
+            }
+            roster.push_back(trun::RosterEntry{static_cast<trun::CandidateId>(i + 1), std::move(theta)});
+        }
+
+        auto provenance = std::make_shared<tprov::ProvenanceLedger>();
+        auto clock = std::make_shared<tt::SystemClock>();
+        trem::RemoteConfig remote_config;
+        remote_config.games_per_assignment = cli.games_per_assignment;
+        remote_config.lease_ms = cli.lease_ms;
+        remote_config.max_assignment_rounds = 4;
+        remote_config.per_series_device_cap = cli.series_cap;
+        trem::RemoteBackend backend(schema, transport, registry, provenance, clock, remote_config);
+
+        tuning::RunConfig run_config;
+        run_config.threads = cli.threads;
+        run_config.iterations_per_move = static_cast<std::size_t>(cli.iterations);
+        run_config.max_rounds = cli.max_rounds;
+        trun::RunLimits limits;
+        limits.wave_limit = 16;
+        limits.max_games = cli.max_games;
+        limits.max_draws = cli.max_draws;
+
+        trun::TournamentRunner<trem::RemoteBackend> runner(backend, roster, cli.generation_seed, run_config, limits);
+        if (!runner.ok())
+        {
+            std::println(stderr, "tournament rejected: {}", runner.error().detail);
+            transport->stop();
+            return 1;
+        }
+        for (;;)
+        {
+            trun::RunResult const step = runner.run_next_wave();
+            if (step.error.code != trun::ErrorCode::None)
+            {
+                std::println(stderr, "tournament wave failed: {}", step.error.detail);
+                transport->stop();
+                return 1;
+            }
+            std::int64_t draws = 0;
+            for (trun::GameRecord const &record : runner.ledger())
+            {
+                if (record.winner == tbr::GameWinner::Draw)
+                {
+                    ++draws;
+                }
+            }
+            std::println("wave {} games {} draws {} ready {}", runner.total_waves(), runner.total_games(),
+                draws, runner.bracket().ready_series().size());
+            if (step.complete)
+            {
+                break;
+            }
+        }
+
+        std::shared_ptr<m_tetris::TetrisContext> const local_context = tuning_toj::TojAdapter::make_shared_context();
+        if (!local_context)
+        {
+            std::println(stderr, "cannot prepare the local engine context");
+            transport->stop();
+            return 1;
+        }
+        TojBackend const local_engine{local_context};
+        taud::ReRun const re_run = [&local_engine](std::vector<tuning::BatchGame> const &games,
+                                        tuning::RunConfig const &config)
+        {
+            return local_engine.run_games(games, config);
+        };
+
+        std::uint64_t champion_id = runner.champion();
+        std::vector<trun::CandidateId> standings = runner.standings();
+        std::int64_t total_games = runner.total_games();
+        std::int64_t total_draws = runner.total_draws();
+        std::uint64_t checksum = runner.checksum();
+        std::vector<tw::DeviceId> blacklisted_devices;
+
+        try
+        {
+            std::vector<taud::AuditTarget> const targets = taud::select_targets(*provenance, cli.audit_rate, {},
+                cli.generation_seed);
+            taud::AuditReport const report = taud::audit_records(*provenance, targets, run_config, re_run);
+            std::map<tw::DeviceId, bool> device_passed;
+            for (taud::AuditVerdict const &verdict : report.verdicts)
+            {
+                auto entry = device_passed.emplace(verdict.target.device, verdict.passed);
+                if (!entry.second)
+                {
+                    entry.first->second = entry.first->second && verdict.passed;
+                }
+            }
+            for (auto const &[device, passed] : device_passed)
+            {
+                registry->record_audit(device, passed);
+            }
+            std::size_t const failed_verdicts = static_cast<std::size_t>(std::count_if(report.verdicts.begin(),
+                report.verdicts.end(), [](taud::AuditVerdict const &verdict)
+                {
+                    return !verdict.passed;
+                }));
+            std::println("audit: {} sampled, {} failed, devices {}", targets.size(), failed_verdicts,
+                join_ids(report.failed_devices()));
+
+            std::vector<tw::DeviceId> const failed_devices = report.failed_devices();
+            if (!failed_devices.empty())
+            {
+                for (tw::DeviceId device : failed_devices)
+                {
+                    registry->blacklist(device);
+                }
+                std::set<tw::GameId> voided_ids;
+                for (tw::DeviceId device : failed_devices)
+                {
+                    for (tw::GameId game_id : provenance->games_of_device(device))
+                    {
+                        voided_ids.insert(game_id);
+                    }
+                }
+                std::vector<tw::GameId> const voided(voided_ids.begin(), voided_ids.end());
+
+                trep::RepairRequest request;
+                request.roster = roster;
+                request.generation_seed = cli.generation_seed;
+                request.config = run_config;
+                request.ledger = runner.ledger();
+                request.voided_game_ids = voided;
+                request.re_run = re_run;
+                trep::RepairResult const repaired = trep::repair_ledger(std::move(request));
+                if (!repaired.ok)
+                {
+                    std::println(stderr, "repair failed: {}", repaired.error);
+                    transport->stop();
+                    return 1;
+                }
+
+                trun::TournamentRunner<TojBackend> resumed(local_engine, roster, cli.generation_seed, run_config,
+                    limits, repaired.repaired_ledger);
+                if (!resumed.ok())
+                {
+                    std::println(stderr, "resumed tournament rejected: {}", resumed.error().detail);
+                    transport->stop();
+                    return 1;
+                }
+                trun::RunResult const resumed_result = resumed.run();
+                if (resumed_result.error.code != trun::ErrorCode::None || !resumed_result.complete)
+                {
+                    std::println(stderr, "resumed tournament failed: {}", resumed_result.error.detail);
+                    transport->stop();
+                    return 1;
+                }
+                std::println("repair: voided={} re-ran={} dropped={} diverged={} resumed_games={}",
+                    repaired.voided_games, repaired.re_run_games, repaired.dropped_games, 0,
+                    repaired.repaired_ledger.size());
+
+                champion_id = resumed.champion();
+                standings = resumed.standings();
+                total_games = resumed.total_games();
+                total_draws = resumed.total_draws();
+                checksum = resumed.checksum();
+                blacklisted_devices = failed_devices;
+            }
+        }
+        catch (std::exception const &error)
+        {
+            std::println(stderr, "audit or repair failed: {}", error.what());
+            transport->stop();
+            return 1;
+        }
+
+        std::println("champion {}", champion_id);
+        std::println("standings {}", join_ids(standings));
+        std::println("games {} draws {}", total_games, total_draws);
+        std::println("ledger checksum {:016x}", checksum);
+        std::vector<tw::DeviceId> const active_devices = registry->active_devices();
+        std::set<tw::DeviceId> enrolled(active_devices.begin(), active_devices.end());
+        enrolled.insert(blacklisted_devices.begin(), blacklisted_devices.end());
+        for (tw::DeviceId device : enrolled)
+        {
+            treg::DeviceStats const *stats = registry->stats(device);
+            if (stats == nullptr)
+            {
+                continue;
+            }
+            std::println("device {} accepted={} dropped={} audits_passed={} audits_failed={} blacklisted={}",
+                device, stats->games_accepted, stats->games_dropped, stats->audits_passed,
+                stats->audits_failed, stats->blacklisted ? 1 : 0);
+        }
+
+        transport->stop();
+        return 0;
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    std::setbuf(stdout, nullptr);
+    std::setbuf(stderr, nullptr);
+    tournament_host::HostConfig config;
+    if (!tournament_host::parse_flags(argc, argv, config))
+    {
+        return 1;
+    }
+    return tournament_host::run_host(config);
+}

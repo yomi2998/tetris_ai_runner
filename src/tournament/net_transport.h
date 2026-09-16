@@ -1,0 +1,86 @@
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "tournament/registry.h"
+#include "tournament/transport.h"
+#include "tournament/wire.h"
+
+namespace tournament_net
+{
+    using tournament_transport::Delivery;
+    using tournament_wire::AssignmentBatch;
+    using tournament_wire::DeviceId;
+    using tournament_wire::HelloMessage;
+    using tournament_wire::SignedResult;
+
+    struct NetConfig
+    {
+        std::string listen_address = "127.0.0.1";
+        std::uint16_t port = 0;
+        std::string certificate_path;
+        std::string private_key_path;
+        std::string expected_adapter_id;
+        std::uint64_t expected_schema_hash = 0;
+        std::uint64_t io_timeout_ms = 10000;
+    };
+
+    bool generate_self_signed_host_cert(std::string const &certificate_path,
+                                        std::string const &private_key_path,
+                                        std::string &error);
+
+    std::optional<std::string> certificate_fingerprint(std::string const &certificate_path);
+
+    class HostTransport : public tournament_transport::Transport
+    {
+    public:
+        HostTransport(std::shared_ptr<tournament_registry::DeviceRegistry> registry, NetConfig config);
+        ~HostTransport() override;
+        HostTransport(HostTransport const &) = delete;
+        HostTransport &operator=(HostTransport const &) = delete;
+
+        bool start(std::string &error);
+        void stop();
+        std::uint16_t listening_port() const;
+
+        std::vector<DeviceId> devices() const override;
+        Delivery request(DeviceId device, AssignmentBatch const &assignment) override;
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
+
+    class ClientConnection
+    {
+    public:
+        ClientConnection(std::string host, std::uint16_t port, std::string expected_fingerprint);
+        ~ClientConnection();
+        ClientConnection(ClientConnection const &) = delete;
+        ClientConnection &operator=(ClientConnection const &) = delete;
+
+        bool connected() const;
+
+        enum class HelloStatus
+        {
+            Accepted,
+            Rejected,
+            Failed,
+        };
+
+        HelloStatus send_hello(HelloMessage const &hello, std::string &detail);
+
+        std::optional<AssignmentBatch> next_assignment(std::uint64_t timeout_ms, std::string &detail);
+        bool send_result(SignedResult const &result, std::string &detail);
+
+        void close();
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
+}

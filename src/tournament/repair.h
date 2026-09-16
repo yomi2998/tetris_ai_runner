@@ -30,6 +30,7 @@ namespace tournament_repair
         int re_run_games = 0;
         int dropped_games = 0;
         int voided_games = 0;
+        int diverged_games = 0;
     };
 
     RepairResult repair_ledger(RepairRequest request);

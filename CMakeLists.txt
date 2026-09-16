@@ -233,18 +233,41 @@ target_include_directories(tetris_memory_budget_test PRIVATE src)
 
 add_executable(tournament_tuner
     src/tournament/tuner.cpp
+    src/tournament/audit.cpp
     src/tournament/bracket.cpp
     src/tournament/scheduler.cpp
     src/tournament/rating.cpp
     src/tournament/checkpoint.cpp
     src/tournament/cmaes.cpp
+    src/tournament/journal.cpp
+    src/tournament/repair.cpp
     src/tournament/runner.cpp
+    src/tournament/wire.cpp
+    src/tournament/registry.cpp
     $<TARGET_OBJECTS:tournament_toj_objects>
 )
 target_include_directories(tournament_tuner PRIVATE src third_party/c-cmaes/src third_party/nlohmann/include)
 target_link_libraries(tournament_tuner PRIVATE c_cmaes Threads::Threads)
 
 find_package(OpenSSL QUIET)
+
+if (OPENSSL_FOUND)
+    target_compile_definitions(tournament_tuner PRIVATE TUNER_HAS_REMOTE=1)
+    target_sources(tournament_tuner PRIVATE
+        src/tournament/net_transport.cpp
+        src/tournament/remote_backend.cpp
+        src/tournament/wire_crypto.cpp
+    )
+    target_link_libraries(tournament_tuner PRIVATE OpenSSL::Crypto OpenSSL::SSL)
+endif()
+
+add_executable(tournament_journal_test
+    src/tournament/journal.cpp
+    src/tournament/wire.cpp
+    src/tournament/checkpoint.cpp
+    src/tournament/journal_test.cpp
+)
+target_include_directories(tournament_journal_test PRIVATE src third_party/nlohmann/include)
 
 if (OPENSSL_FOUND)
     add_executable(tournament_wire_test
@@ -300,6 +323,57 @@ if (OPENSSL_FOUND)
     target_include_directories(repro_probe_test PRIVATE src)
     target_link_libraries(repro_probe_test PRIVATE Threads::Threads)
 
+    add_executable(tournament_wire_frame_test
+        src/tournament/wire.cpp
+        src/tournament/wire_crypto.cpp
+        src/tournament/wire_frame_test.cpp
+    )
+    target_include_directories(tournament_wire_frame_test PRIVATE src)
+    target_link_libraries(tournament_wire_frame_test PRIVATE OpenSSL::Crypto)
+
+    add_executable(tournament_net_transport_test
+        src/tournament/net_transport.cpp
+        src/tournament/net_transport_test.cpp
+        src/tournament/remote_backend.cpp
+        src/tournament/wire.cpp
+        src/tournament/wire_crypto.cpp
+        src/tournament/registry.cpp
+        src/tournament/bracket.cpp
+        src/tournament/runner.cpp
+        src/tournament/scheduler.cpp
+    )
+    target_include_directories(tournament_net_transport_test PRIVATE src)
+    target_link_libraries(tournament_net_transport_test PRIVATE Threads::Threads OpenSSL::Crypto OpenSSL::SSL)
+
+    add_executable(remote_client
+        src/remote_client.cpp
+        src/tournament/net_transport.cpp
+        src/tournament/registry.cpp
+        src/tournament/wire.cpp
+        src/tournament/wire_crypto.cpp
+        src/tournament/scheduler.cpp
+        $<TARGET_OBJECTS:tournament_toj_objects>
+    )
+    target_include_directories(remote_client PRIVATE src)
+    target_link_libraries(remote_client PRIVATE Threads::Threads OpenSSL::Crypto OpenSSL::SSL)
+
+    add_executable(tournament_host
+        src/tournament_host.cpp
+        src/tournament/net_transport.cpp
+        src/tournament/registry.cpp
+        src/tournament/remote_backend.cpp
+        src/tournament/wire.cpp
+        src/tournament/wire_crypto.cpp
+        src/tournament/audit.cpp
+        src/tournament/repair.cpp
+        src/tournament/bracket.cpp
+        src/tournament/runner.cpp
+        src/tournament/scheduler.cpp
+        $<TARGET_OBJECTS:tournament_toj_objects>
+    )
+    target_include_directories(tournament_host PRIVATE src)
+    target_link_libraries(tournament_host PRIVATE Threads::Threads OpenSSL::Crypto OpenSSL::SSL)
+
     add_executable(tournament_remote_backend_test
         src/tournament/remote_backend.cpp
         src/tournament/wire.cpp
@@ -335,6 +409,7 @@ add_test(NAME tournament_bytes_test COMMAND tournament_bytes_test)
 add_test(NAME tournament_runner_test COMMAND tournament_runner_test)
 add_test(NAME tuning_engine_match_test COMMAND tuning_engine_match_test)
 add_test(NAME tetris_memory_budget_test COMMAND tetris_memory_budget_test)
+add_test(NAME tournament_journal_test COMMAND tournament_journal_test)
 
 if (OPENSSL_FOUND)
     add_test(NAME tournament_wire_test COMMAND tournament_wire_test)
@@ -343,4 +418,6 @@ if (OPENSSL_FOUND)
     add_test(NAME tournament_audit_repair_test COMMAND tournament_audit_repair_test)
     add_test(NAME repro_probe_test COMMAND repro_probe_test)
     add_test(NAME tournament_remote_backend_test COMMAND tournament_remote_backend_test)
+    add_test(NAME tournament_wire_frame_test COMMAND tournament_wire_frame_test)
+    add_test(NAME tournament_net_transport_test COMMAND tournament_net_transport_test)
 endif()

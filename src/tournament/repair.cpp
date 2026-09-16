@@ -13,6 +13,7 @@ namespace tournament_repair
         using Bracket = tournament_bracket::Bracket;
         using CandidateId = tournament_bracket::CandidateId;
         using ReportStatus = tournament_bracket::ReportStatus;
+        using SeriesStatus = tournament_bracket::SeriesStatus;
         using SeriesView = tournament_bracket::SeriesView;
         using GameRecord = tournament_runner::GameRecord;
         using RosterEntry = tournament_runner::RosterEntry;
@@ -54,7 +55,7 @@ namespace tournament_repair
         {
             HoleGame outcome;
             SeriesView const view = bracket.series(series_id);
-            if (view.status != tournament_bracket::SeriesStatus::Ready)
+            if (view.status != SeriesStatus::Ready)
             {
                 outcome.error = "series is not ready while filling a hole";
                 return outcome;
@@ -122,6 +123,54 @@ namespace tournament_repair
             outcome.record = record;
             return outcome;
         }
+
+        bool report_walk_record(Bracket &bracket, RepairRequest const &request,
+                                std::unordered_map<CandidateId, std::vector<double>> const &theta_by_id,
+                                GameRecord const &record, RepairResult &result)
+        {
+            ReportStatus status = bracket.report_game(record.series_id, record.game_index, record.winner);
+            for (;;)
+            {
+                if (status == ReportStatus::Accepted)
+                {
+                    result.repaired_ledger.push_back(record);
+                    return true;
+                }
+                if (status == ReportStatus::NotReady)
+                {
+                    ++result.dropped_games;
+                    return true;
+                }
+                if (status != ReportStatus::GameIndexMismatch)
+                {
+                    result.error = "bracket rejected game " + std::to_string(record.game_id) + " in series "
+                        + std::to_string(record.series_id);
+                    return false;
+                }
+                SeriesView const view = bracket.series(record.series_id);
+                if (record.game_index < view.games_played)
+                {
+                    ++result.dropped_games;
+                    return true;
+                }
+                if (record.game_index > view.games_played)
+                {
+                    HoleGame const hole = run_hole_game(bracket, request, theta_by_id, record.series_id);
+                    if (!hole.ok)
+                    {
+                        result.error = hole.error;
+                        return false;
+                    }
+                    result.repaired_ledger.push_back(hole.record);
+                    ++result.re_run_games;
+                    status = bracket.report_game(record.series_id, record.game_index, record.winner);
+                    continue;
+                }
+                result.error = "bracket reported a mismatch at the expected index for game "
+                    + std::to_string(record.game_id);
+                return false;
+            }
+        }
     }
 
     RepairResult repair_ledger(RepairRequest request)
@@ -152,16 +201,11 @@ namespace tournament_repair
             result.error = "bracket creation failed";
             return result;
         }
-        std::vector<GameRecord> const ordered = tournament_runner::canonical_ledger(request.ledger);
         std::unordered_set<std::uint64_t> const voided(request.voided_game_ids.begin(), request.voided_game_ids.end());
-        std::size_t cursor = 0;
-        while (cursor < ordered.size())
+        for (GameRecord const &record : request.ledger)
         {
-            GameRecord const &record = ordered[cursor];
             if (voided.find(record.game_id) != voided.end())
             {
-                ++result.voided_games;
-                ++cursor;
                 continue;
             }
             if (record.series_id < 0 || record.series_id >= bracket.series_count())
@@ -175,46 +219,58 @@ namespace tournament_repair
                 result.error = "game id does not match series and index for game " + std::to_string(record.game_id);
                 return result;
             }
-            ReportStatus status = bracket.report_game(record.series_id, record.game_index, record.winner);
-            for (;;)
+        }
+        std::vector<std::size_t> remaining(request.ledger.size());
+        for (std::size_t i = 0; i < remaining.size(); ++i)
+        {
+            remaining[i] = i;
+        }
+        for (;;)
+        {
+            std::vector<std::size_t> deferred;
+            bool progress = false;
+            for (std::size_t const idx : remaining)
             {
-                if (status == ReportStatus::Accepted)
+                GameRecord const &record = request.ledger[idx];
+                if (voided.find(record.game_id) != voided.end())
                 {
-                    result.repaired_ledger.push_back(record);
-                    ++cursor;
-                    break;
-                }
-                if (status == ReportStatus::NotReady)
-                {
-                    ++result.dropped_games;
-                    ++cursor;
-                    break;
-                }
-                if (status != ReportStatus::GameIndexMismatch)
-                {
-                    result.error = "bracket rejected game " + std::to_string(record.game_id) + " in series "
-                        + std::to_string(record.series_id);
-                    return result;
+                    ++result.voided_games;
+                    progress = true;
+                    continue;
                 }
                 SeriesView const view = bracket.series(record.series_id);
-                if (record.game_index < view.games_played)
+                if (view.status == SeriesStatus::Complete || view.status == SeriesStatus::Void
+                    || view.status == SeriesStatus::Walkover)
                 {
-                    result.error = "duplicate game index in series " + std::to_string(record.series_id) + " for game "
-                        + std::to_string(record.game_id);
+                    ++result.dropped_games;
+                    progress = true;
+                    continue;
+                }
+                if (view.status != SeriesStatus::Ready)
+                {
+                    deferred.push_back(idx);
+                    continue;
+                }
+                if (record.seat.side_a != view.side_a || record.seat.side_b != view.side_b)
+                {
+                    ++result.diverged_games;
+                    progress = true;
+                    continue;
+                }
+                if (!report_walk_record(bracket, request, theta_by_id, record, result))
+                {
+                    result.ok = false;
                     return result;
                 }
-                HoleGame const hole = run_hole_game(bracket, request, theta_by_id, record.series_id);
-                if (!hole.ok)
-                {
-                    result.error = hole.error;
-                    return result;
-                }
-                result.repaired_ledger.push_back(hole.record);
-                ++result.re_run_games;
-                status = bracket.report_game(record.series_id, record.game_index, record.winner);
+                progress = true;
+            }
+            remaining = std::move(deferred);
+            if (!progress)
+            {
+                break;
             }
         }
-        result.repaired_ledger = tournament_runner::canonical_ledger(result.repaired_ledger);
+        result.dropped_games += static_cast<int>(remaining.size());
         result.ok = true;
         return result;
     }
