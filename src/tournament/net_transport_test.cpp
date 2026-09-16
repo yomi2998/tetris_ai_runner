@@ -526,6 +526,20 @@ namespace
               "unpinned host accepts any fingerprint: " + relaxed_nonzero.detail);
     }
 
+    void test_blacklisted_reconnect_rejected()
+    {
+        HostHarness host("blacklist");
+        check(host.start(tnet::NetConfig{}), "host started for blacklist reconnect test");
+        auto first = make_client(host, 1);
+        check(first.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "device enrolls before blacklisting: " + first.detail);
+        check(host.registry->blacklist(1), "device blacklisted in registry");
+        auto banned = make_client(host, 1);
+        check(banned.status == tnet::ClientConnection::HelloStatus::Rejected
+                  && banned.detail == "device is blacklisted",
+              "blacklisted device reconnect rejected: " + banned.detail);
+    }
+
     void test_connection_cap()
     {
         HostHarness host("cap");
@@ -780,6 +794,7 @@ int main()
     test_duplicate_device_key_rules();
     test_load_devices_file();
     test_allowlist_enrollment();
+    test_blacklisted_reconnect_rejected();
     test_engine_fingerprint_pin();
     test_connection_cap();
     test_remote_backend_flow();

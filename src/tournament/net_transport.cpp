@@ -380,6 +380,11 @@ namespace tournament_net
                 return false;
             }
             conn.device = hello->device;
+            if (shared.registry->blacklisted(hello->device))
+            {
+                reason = "device is blacklisted";
+                return false;
+            }
             tournament_wire::PublicKey const *stored = shared.registry->public_key(hello->device);
             if (stored != nullptr)
             {
