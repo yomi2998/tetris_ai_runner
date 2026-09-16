@@ -38,6 +38,11 @@ namespace tournament_audit
     std::vector<AuditTarget> select_targets(tournament_provenance::ProvenanceLedger const &ledger, double sample_rate,
                                             std::vector<tournament_wire::GameId> const &forced, std::uint64_t rng_seed);
 
+    std::vector<AuditTarget> select_targets_rated(tournament_provenance::ProvenanceLedger const &ledger,
+                                                  std::function<double(tournament_wire::DeviceId)> const &device_rate,
+                                                  std::vector<tournament_wire::GameId> const &forced,
+                                                  std::uint64_t rng_seed);
+
     AuditReport audit_records(tournament_provenance::ProvenanceLedger const &ledger, std::vector<AuditTarget> const &targets,
                               tuning::RunConfig const &config, ReRun const &re_run);
 }

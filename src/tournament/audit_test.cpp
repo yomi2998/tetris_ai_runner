@@ -242,6 +242,97 @@ namespace
               "select: rates above one clamp to everything");
     }
 
+    void test_select_targets_rated()
+    {
+        std::map<tw::GameId, tw::WireOutcome> reported;
+        tp::ProvenanceLedger const ledger = sample_ledger(reported);
+        std::vector<ta::AuditTarget> expected_a;
+        for (tw::GameId game_id : ledger.games_of_device(11))
+        {
+            expected_a.push_back(ta::AuditTarget{game_id, 11});
+        }
+
+        auto const split_rates = [](tw::DeviceId device)
+        {
+            return device == 11 ? 1.0 : 0.0;
+        };
+        std::vector<ta::AuditTarget> const only_a = ta::select_targets_rated(ledger, split_rates, {}, 5);
+        check(only_a == expected_a, "rated: rate one for device eleven selects exactly its games");
+
+        std::vector<ta::AuditTarget> const with_forced = ta::select_targets_rated(ledger, split_rates, {5, 999}, 5);
+        ta::AuditTarget const *forced_target = nullptr;
+        for (ta::AuditTarget const &target : with_forced)
+        {
+            if (target.game == 5)
+            {
+                forced_target = &target;
+            }
+        }
+        check(forced_target != nullptr && with_forced.size() == expected_a.size() + 1,
+              "rated: a forced id on a zero-rate device is still selected");
+        check(forced_target != nullptr && forced_target->device == 22,
+              "rated: the forced zero-rate target carries the ledger device");
+
+        std::vector<ta::AuditTarget> const again_a = ta::select_targets_rated(ledger, split_rates, {}, 5);
+        check(only_a == again_a, "rated: the same seed and rates reproduce the same targets");
+
+        auto const mixed_rates = [](tw::DeviceId device)
+        {
+            return device == 11 ? 1.0 : 0.5;
+        };
+        std::vector<ta::AuditTarget> const mixed = ta::select_targets_rated(ledger, mixed_rates, {}, 42);
+        std::size_t mixed_a = 0;
+        std::size_t mixed_b = 0;
+        for (ta::AuditTarget const &target : mixed)
+        {
+            if (target.device == 11)
+            {
+                ++mixed_a;
+            }
+            else
+            {
+                ++mixed_b;
+            }
+        }
+        check(mixed_a == expected_a.size() && mixed_b > 0 && mixed.size() < ledger.size(),
+              "rated: mixed rates target all of device eleven and a strict subset of device twenty-two");
+        std::vector<ta::AuditTarget> const mixed_again = ta::select_targets_rated(ledger, mixed_rates, {}, 42);
+        check(mixed == mixed_again, "rated: the mixed-rate sample is stable for its seed");
+
+        auto const zero_rates = [](tw::DeviceId)
+        {
+            return 0.0;
+        };
+        auto const negative_rates = [](tw::DeviceId)
+        {
+            return -3.0;
+        };
+        auto const overshoot_rates = [](tw::DeviceId)
+        {
+            return 3.0;
+        };
+        check(ta::select_targets_rated(ledger, negative_rates, {5}, 42)
+                  == ta::select_targets_rated(ledger, zero_rates, {5}, 42),
+              "rated: negative rates clamp to zero");
+        check(ta::select_targets_rated(ledger, overshoot_rates, {}, 42).size() == ledger.size(),
+              "rated: rates above one clamp to everything");
+
+        std::vector<tw::GameId> const forced_ids{3, 7, 999};
+        bool equivalent = true;
+        for (double const rate : {0.0, 0.25, 0.5, 0.75, 1.0})
+        {
+            auto const constant_rates = [rate](tw::DeviceId)
+            {
+                return rate;
+            };
+            equivalent = equivalent
+                && ta::select_targets_rated(ledger, constant_rates, {}, 42) == ta::select_targets(ledger, rate, {}, 42)
+                && ta::select_targets_rated(ledger, constant_rates, forced_ids, 42)
+                    == ta::select_targets(ledger, rate, forced_ids, 42);
+        }
+        check(equivalent, "rated: a constant rate function matches select_targets exactly");
+    }
+
     void test_count_mismatch_throws()
     {
         std::map<tw::GameId, tw::WireOutcome> reported;
@@ -301,6 +392,7 @@ int run_audit_tests()
     test_flipped_winner_fails();
     test_rounds_change_fails();
     test_select_targets();
+    test_select_targets_rated();
     test_count_mismatch_throws();
     std::println("audit: {} checks, {} failures", g_checks, g_failures);
     return g_failures;

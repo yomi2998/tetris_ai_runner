@@ -18,15 +18,18 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <thread>
@@ -308,6 +311,8 @@ namespace tournament_net
             std::atomic<bool> shutting_down{false};
             std::mutex mutex;
             std::map<DeviceId, std::shared_ptr<HostConnection>> connections;
+            std::vector<std::weak_ptr<HostConnection>> live_connections;
+            std::optional<std::vector<AllowedDevice>> allowlist;
             std::vector<std::thread> readers;
         };
 
@@ -343,6 +348,30 @@ namespace tournament_net
             if (shared.config.expected_schema_hash != 0 && hello->schema_hash != shared.config.expected_schema_hash)
             {
                 reason = "schema hash mismatch";
+                return false;
+            }
+            if (shared.allowlist.has_value())
+            {
+                auto const allowed = std::find_if(shared.allowlist->begin(), shared.allowlist->end(),
+                    [device = hello->device](AllowedDevice const &entry)
+                    {
+                        return entry.id == device;
+                    });
+                if (allowed == shared.allowlist->end())
+                {
+                    reason = "device not in allowlist";
+                    return false;
+                }
+                if (allowed->public_key != hello->public_key)
+                {
+                    reason = "device key does not match allowlist";
+                    return false;
+                }
+            }
+            if (shared.config.expected_engine_fingerprint != 0
+                && hello->engine_fingerprint != shared.config.expected_engine_fingerprint)
+            {
+                reason = "engine fingerprint mismatch";
                 return false;
             }
             if (!shared.registry)
@@ -420,13 +449,11 @@ namespace tournament_net
             }
         }
 
-        void handle_connection(std::shared_ptr<HostShared> shared, int fd)
+        void handle_connection(std::shared_ptr<HostShared> shared, std::shared_ptr<HostConnection> conn)
         {
-            set_socket_timeouts(fd);
-            std::shared_ptr<HostConnection> conn = std::make_shared<HostConnection>();
-            conn->fd = fd;
+            set_socket_timeouts(conn->fd);
             conn->ssl = SSL_new(shared->ctx);
-            if (conn->ssl == nullptr || SSL_set_fd(conn->ssl, fd) != 1
+            if (conn->ssl == nullptr || SSL_set_fd(conn->ssl, conn->fd) != 1
                 || !ssl_handshake(conn->ssl, true, deadline_after(kHandshakeTimeoutMs)))
             {
                 conn->teardown();
@@ -473,6 +500,18 @@ namespace tournament_net
             }
         }
 
+        std::size_t live_connection_count(HostShared &shared)
+        {
+            auto &live = shared.live_connections;
+            live.erase(std::remove_if(live.begin(), live.end(),
+                           [](std::weak_ptr<HostConnection> const &entry)
+                           {
+                               return entry.expired();
+                           }),
+                live.end());
+            return live.size();
+        }
+
         void accept_loop(std::shared_ptr<HostShared> shared, int listen_fd)
         {
             while (!shared->shutting_down.load())
@@ -490,9 +529,95 @@ namespace tournament_net
                     }
                     break;
                 }
-                std::thread(handle_connection, shared, fd).detach();
+                std::lock_guard<std::mutex> lock(shared->mutex);
+                if (shared->shutting_down.load())
+                {
+                    close(fd);
+                    break;
+                }
+                if (live_connection_count(*shared)
+                    >= static_cast<std::size_t>(shared->config.max_connections))
+                {
+                    close(fd);
+                    continue;
+                }
+                std::shared_ptr<HostConnection> conn = std::make_shared<HostConnection>();
+                conn->fd = fd;
+                shared->live_connections.push_back(conn);
+                std::thread(handle_connection, shared, conn).detach();
             }
         }
+    }
+
+    std::optional<std::vector<AllowedDevice>> load_devices_file(std::string const &path, std::string &error)
+    {
+        error.clear();
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open())
+        {
+            error = "cannot read devices file: " + path;
+            return std::nullopt;
+        }
+        std::vector<AllowedDevice> devices;
+        std::set<DeviceId> seen;
+        std::string line;
+        std::size_t line_number = 0;
+        while (std::getline(input, line))
+        {
+            ++line_number;
+            if (line.empty())
+            {
+                continue;
+            }
+            std::size_t const separator = line.find(' ');
+            if (separator == std::string::npos)
+            {
+                error = "devices file line " + std::to_string(line_number)
+                    + ": expected '<device id> <public key hex>'";
+                return std::nullopt;
+            }
+            std::string const id_text = line.substr(0, separator);
+            std::string const key_text = line.substr(separator + 1);
+            DeviceId id = 0;
+            bool const id_valid = !id_text.empty()
+                && id_text.find_first_not_of("0123456789") == std::string::npos
+                && std::from_chars(id_text.data(), id_text.data() + id_text.size(), id).ec == std::errc{};
+            if (!id_valid)
+            {
+                error = "devices file line " + std::to_string(line_number) + ": invalid decimal device id";
+                return std::nullopt;
+            }
+            if (key_text.size() != 64)
+            {
+                error = "devices file line " + std::to_string(line_number)
+                    + ": public key must be 64 hex characters";
+                return std::nullopt;
+            }
+            if (key_text.find_first_of("ABCDEF") != std::string::npos)
+            {
+                error = "devices file line " + std::to_string(line_number) + ": uppercase hex is not allowed";
+                return std::nullopt;
+            }
+            std::optional<std::vector<std::uint8_t>> key = tournament_bytes::decode_hex(key_text);
+            if (!key || key->size() != 32)
+            {
+                error = "devices file line " + std::to_string(line_number) + ": malformed public key hex";
+                return std::nullopt;
+            }
+            if (!seen.insert(id).second)
+            {
+                error = "devices file line " + std::to_string(line_number) + ": duplicate device id "
+                    + std::to_string(id);
+                return std::nullopt;
+            }
+            devices.push_back(AllowedDevice{id, std::move(*key)});
+        }
+        if (input.bad())
+        {
+            error = "error reading devices file: " + path;
+            return std::nullopt;
+        }
+        return devices;
     }
 
     bool generate_self_signed_host_cert(std::string const &certificate_path,
@@ -611,6 +736,10 @@ namespace tournament_net
         {
             shared->registry = std::move(registry_in);
             shared->config = config_in;
+            if (shared->config.max_connections <= 0)
+            {
+                shared->config.max_connections = NetConfig{}.max_connections;
+            }
         }
 
         std::shared_ptr<HostShared> shared;
@@ -643,6 +772,18 @@ namespace tournament_net
         {
             error = "transport already started";
             return false;
+        }
+        if (!impl_->shared->config.devices_file.empty())
+        {
+            std::string load_error;
+            std::optional<std::vector<AllowedDevice>> allowlist
+                = load_devices_file(impl_->shared->config.devices_file, load_error);
+            if (!allowlist)
+            {
+                error = load_error;
+                return false;
+            }
+            impl_->shared->allowlist = std::move(allowlist);
         }
         SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
         if (ctx == nullptr)

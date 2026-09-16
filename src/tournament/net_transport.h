@@ -16,6 +16,7 @@ namespace tournament_net
     using tournament_wire::AssignmentBatch;
     using tournament_wire::DeviceId;
     using tournament_wire::HelloMessage;
+    using tournament_wire::PublicKey;
     using tournament_wire::SignedResult;
 
     struct NetConfig
@@ -26,8 +27,19 @@ namespace tournament_net
         std::string private_key_path;
         std::string expected_adapter_id;
         std::uint64_t expected_schema_hash = 0;
+        std::uint64_t expected_engine_fingerprint = 0;
+        std::string devices_file;
+        int max_connections = 64;
         std::uint64_t io_timeout_ms = 10000;
     };
+
+    struct AllowedDevice
+    {
+        DeviceId id = 0;
+        PublicKey public_key;
+    };
+
+    std::optional<std::vector<AllowedDevice>> load_devices_file(std::string const &path, std::string &error);
 
     bool generate_self_signed_host_cert(std::string const &certificate_path,
                                         std::string const &private_key_path,

@@ -52,6 +52,39 @@ namespace tournament_audit
         return targets;
     }
 
+    std::vector<AuditTarget> select_targets_rated(tournament_provenance::ProvenanceLedger const &ledger,
+                                                  std::function<double(tournament_wire::DeviceId)> const &device_rate,
+                                                  std::vector<tournament_wire::GameId> const &forced,
+                                                  std::uint64_t rng_seed)
+    {
+        std::unordered_set<tournament_wire::GameId> const forced_ids(forced.begin(), forced.end());
+        std::unordered_set<tournament_wire::GameId> selected;
+        std::vector<AuditTarget> targets;
+        std::mt19937_64 engine(rng_seed);
+        for (tournament_provenance::ProvenanceRecord const *entry : ledger.entries())
+        {
+            if (forced_ids.find(entry->game_id) == forced_ids.end())
+            {
+                double const rate = std::max(0.0, std::min(1.0, device_rate(entry->device)));
+                std::uint64_t const threshold = static_cast<std::uint64_t>(rate * 1000000.0);
+                if (engine() % 1000000ULL >= threshold)
+                {
+                    continue;
+                }
+            }
+            if (selected.insert(entry->game_id).second)
+            {
+                targets.push_back(AuditTarget{entry->game_id, entry->device});
+            }
+        }
+        std::sort(targets.begin(), targets.end(),
+                  [](AuditTarget const &a, AuditTarget const &b)
+                  {
+                      return a.game < b.game;
+                  });
+        return targets;
+    }
+
     AuditReport audit_records(tournament_provenance::ProvenanceLedger const &ledger, std::vector<AuditTarget> const &targets,
                               tuning::RunConfig const &config, ReRun const &re_run)
     {

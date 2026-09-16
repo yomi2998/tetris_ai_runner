@@ -107,6 +107,7 @@ namespace tournament_wire
         std::uint32_t protocol = protocol_version;
         std::string adapter_id;
         std::uint64_t schema_hash = 0;
+        std::uint64_t engine_fingerprint = 0;
     };
 
     struct FramedMessage

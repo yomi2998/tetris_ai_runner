@@ -31,6 +31,7 @@
 #include "tournament/bytes.h"
 #include "tournament/checkpoint.h"
 #include "tournament/cmaes.h"
+#include "tournament/engine_identity.h"
 #include "tournament/journal.h"
 #if defined(TUNER_HAS_REMOTE)
 #include "tournament/net_transport.h"
@@ -74,6 +75,7 @@ namespace tournament_tuner
         std::string remote_address = "0.0.0.0";
         std::string remote_certificate = "tournament_host.cert";
         std::string remote_key = "tournament_host.key";
+        std::string devices_file;
         double audit_rate = 0.25;
         std::string journal_file = "tournament_journal.bin";
         int wait_clients_ms = 120000;
@@ -420,6 +422,7 @@ namespace tournament_tuner
         std::println("Flags: --remote-port N distributes matches to remote_client devices over TLS (certificate and key are generated on first use, clients verify the printed fingerprint)");
         std::println("Flags: --remote-cert P and --remote-key P override the certificate paths, --audit-rate R sets the audit sample rate (default 0.25, remote mode only)");
         std::println("Flags: --journal-file P sets the provenance journal path (default tournament_journal.bin, remote mode only), --wait-clients-ms N bounds the initial client wait (default 120000)");
+        std::println("Flags: --devices-file P restricts remote enrollment to the device ids and keys listed in P (default open enrollment)");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
         std::println("During runs: type view and Enter for one live game per wave, empty line to stop, bracket for live standings");
@@ -1097,6 +1100,17 @@ namespace tournament_tuner
                 return 1;
             }
             device_registry = std::make_shared<tournament_registry::DeviceRegistry>();
+            std::uint64_t engine_fingerprint = 0;
+            {
+                TojBackend probe_engine(shared_context);
+                auto probe_run = [&probe_engine](std::vector<tuning::BatchGame> const &games,
+                                                 tuning::RunConfig const &probe_config)
+                {
+                    return probe_engine.run_games(games, probe_config);
+                };
+                engine_fingerprint = tournament_identity::adapter_engine_fingerprint<tuning_toj::TojAdapter>(
+                    probe_run);
+            }
             tournament_net::NetConfig net_config;
             net_config.listen_address = cli.remote_address;
             net_config.port = static_cast<std::uint16_t>(cli.remote_port);
@@ -1104,6 +1118,8 @@ namespace tournament_tuner
             net_config.private_key_path = cli.remote_key;
             net_config.expected_adapter_id = std::string(tuning_toj::TojAdapter::schema().adapter_id);
             net_config.expected_schema_hash = tuning::schema_hash(tuning_toj::TojAdapter::schema());
+            net_config.devices_file = cli.devices_file;
+            net_config.expected_engine_fingerprint = engine_fingerprint;
             net_config.io_timeout_ms = 35000;
             net_transport = std::make_shared<tournament_net::HostTransport>(device_registry, net_config);
             std::string start_error;
@@ -1115,6 +1131,11 @@ namespace tournament_tuner
             std::uint16_t const port = net_transport->listening_port();
             std::println("remote: listening on {}:{} fingerprint {}", cli.remote_address,
                          static_cast<int>(port), *fingerprint);
+            std::println("remote: engine fingerprint {:016x}", engine_fingerprint);
+            if (!cli.devices_file.empty())
+            {
+                std::println("remote: enrollment restricted to {}", cli.devices_file);
+            }
             std::println("remote: start clients with remote_client --host <host> --port {} --device-id N --key-file K --fingerprint {}",
                          static_cast<int>(port), *fingerprint);
             for (int waited = 0; device_registry->active_devices().empty();)
@@ -1363,8 +1384,13 @@ namespace tournament_tuner
             std::optional<LocalRunner> audited_runner;
             if (provenance && !provenance->empty())
             {
+                auto device_rate = [&device_registry, &cli](std::uint64_t device)
+                {
+                    tournament_registry::DeviceStats const *stats = device_registry->stats(device);
+                    return (stats != nullptr && stats->audits_passed > 0) ? cli.audit_rate : 1.0;
+                };
                 std::vector<tournament_audit::AuditTarget> const audit_targets
-                    = tournament_audit::select_targets(*provenance, cli.audit_rate, {}, generation_seed);
+                    = tournament_audit::select_targets_rated(*provenance, device_rate, {}, generation_seed);
                 tournament_audit::AuditReport const audit_report
                     = tournament_audit::audit_records(*provenance, audit_targets, run_config, engine_rerun);
                 for (tournament_audit::AuditTarget const &target : audit_targets)
@@ -1750,6 +1776,10 @@ int main(int argc, char *argv[])
         else if (std::strcmp(argv[i], "--remote-key") == 0 && i + 1 < argc)
         {
             config.remote_key = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--devices-file") == 0 && i + 1 < argc)
+        {
+            config.devices_file = argv[++i];
         }
         else if (std::strcmp(argv[i], "--audit-rate") == 0 && i + 1 < argc)
         {

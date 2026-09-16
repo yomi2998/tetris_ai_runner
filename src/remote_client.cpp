@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include "tournament/engine_identity.h"
 #include "tournament/net_transport.h"
 #include "tournament/wire.h"
 #include "tuning/engine_match.h"
@@ -35,6 +36,7 @@ namespace remote_client
         std::string key_file;
         std::string fingerprint;
         bool quiet = false;
+        bool flip_outcomes = false;
         bool generate_key = false;
     };
 
@@ -42,7 +44,8 @@ namespace remote_client
     {
         std::println(stderr, "Usage:");
         std::println(stderr, "  {} --generate-key --key-file PATH", program);
-        std::println(stderr, "  {} --host HOST --port PORT --device-id N --key-file PATH --fingerprint FP [--quiet]", program);
+        std::println(stderr, "  {} --host HOST --port PORT --device-id N --key-file PATH --fingerprint FP [--quiet] [--flip-outcomes]", program);
+        std::println(stderr, "  --flip-outcomes is test-only: it flips every game outcome before signing");
     }
 
     int missing_value_error(char const *flag, char const *program)
@@ -140,8 +143,29 @@ namespace remote_client
             || detail.rfind("not connected", 0) == 0;
     }
 
+    tw::WireOutcome flip_wire_outcome(tw::WireOutcome const &outcome)
+    {
+        tw::WireOutcome flipped = outcome;
+        if (outcome.winner > 0)
+        {
+            flipped.winner = -1;
+            flipped.reason = tuning::WinReason::BSurvivor;
+        }
+        else if (outcome.winner < 0)
+        {
+            flipped.winner = 1;
+            flipped.reason = tuning::WinReason::ASurvivor;
+        }
+        else
+        {
+            flipped.winner = 1;
+            flipped.reason = outcome.capped ? tuning::WinReason::ACapApl : tuning::WinReason::ABothDeadApl;
+        }
+        return flipped;
+    }
+
     int run_assignment_loop(tnet::ClientConnection &connection, TojBackend const &backend,
-                            tw::KeyPair const &keys, bool quiet)
+                            tw::KeyPair const &keys, ClientConfig const &cli)
     {
         for (;;)
         {
@@ -189,7 +213,9 @@ namespace remote_client
             batch.outcomes.reserve(outcomes.size());
             for (tuning::GameOutcome const &outcome : outcomes)
             {
-                batch.outcomes.push_back(tw::to_wire(outcome));
+                tw::WireOutcome wire_outcome = tw::to_wire(outcome);
+                batch.outcomes.push_back(cli.flip_outcomes ? flip_wire_outcome(wire_outcome)
+                                                           : wire_outcome);
             }
             tw::SignedResult const signed_result{batch, tw::sign_result(keys, batch)};
             std::string send_detail;
@@ -198,7 +224,7 @@ namespace remote_client
                 std::println(stderr, "result send failed: {}", send_detail);
                 return 0;
             }
-            if (!quiet)
+            if (!cli.quiet)
             {
                 std::println(stderr, "assignment nonce={} games={} ok", batch.nonce, batch.outcomes.size());
             }
@@ -213,12 +239,6 @@ namespace remote_client
             return 1;
         }
         tuning::ParamSchema const schema = tuning_toj::TojAdapter::schema();
-        tw::HelloMessage hello;
-        hello.device = cli.device_id;
-        hello.public_key = keys.public_key;
-        hello.protocol = tw::protocol_version;
-        hello.adapter_id = std::string(schema.adapter_id);
-        hello.schema_hash = tuning::schema_hash(schema);
         auto shared_context = tuning_toj::TojAdapter::make_shared_context();
         if (!shared_context)
         {
@@ -226,6 +246,19 @@ namespace remote_client
             return 1;
         }
         TojBackend const backend(shared_context);
+        tw::HelloMessage hello;
+        hello.device = cli.device_id;
+        hello.public_key = keys.public_key;
+        hello.protocol = tw::protocol_version;
+        hello.adapter_id = std::string(schema.adapter_id);
+        hello.schema_hash = tuning::schema_hash(schema);
+        auto probe_run = [&backend](std::vector<tuning::BatchGame> const &games,
+                                    tuning::RunConfig const &probe_config)
+        {
+            return backend.run_games(games, probe_config);
+        };
+        hello.engine_fingerprint = tournament_identity::adapter_engine_fingerprint<tuning_toj::TojAdapter>(
+            probe_run);
         std::size_t backoff_step = 0;
         for (;;)
         {
@@ -252,7 +285,7 @@ namespace remote_client
                 continue;
             }
             backoff_step = 0;
-            int const loop_result = run_assignment_loop(connection, backend, keys, cli.quiet);
+            int const loop_result = run_assignment_loop(connection, backend, keys, cli);
             if (loop_result != 0)
             {
                 return loop_result;
@@ -282,6 +315,10 @@ int main(int argc, char *argv[])
         else if (std::strcmp(flag, "--quiet") == 0)
         {
             cli.quiet = true;
+        }
+        else if (std::strcmp(flag, "--flip-outcomes") == 0)
+        {
+            cli.flip_outcomes = true;
         }
         else if (std::strcmp(flag, "--host") == 0)
         {
@@ -352,6 +389,12 @@ int main(int argc, char *argv[])
         if (!have_key)
         {
             std::println(stderr, "--generate-key requires --key-file");
+            remote_client::print_usage(program);
+            return 1;
+        }
+        if (cli.flip_outcomes)
+        {
+            std::println(stderr, "--flip-outcomes is not valid with --generate-key");
             remote_client::print_usage(program);
             return 1;
         }

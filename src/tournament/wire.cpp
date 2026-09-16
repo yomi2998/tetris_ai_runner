@@ -357,6 +357,7 @@ namespace tournament_wire
         append_count(out, static_cast<std::uint32_t>(hello.adapter_id.size()));
         out.append(hello.adapter_id);
         append_u64(out, hello.schema_hash);
+        append_u64(out, hello.engine_fingerprint);
         return out;
     }
 
@@ -379,6 +380,7 @@ namespace tournament_wire
         }
         hello.adapter_id = reader.text(adapter_size);
         hello.schema_hash = reader.u64();
+        hello.engine_fingerprint = reader.u64();
         reader.expect_end();
         if (!reader.ok)
         {

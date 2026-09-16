@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -17,6 +18,7 @@
 #include <vector>
 
 #include "tournament/audit.h"
+#include "tournament/engine_identity.h"
 #include "tournament/net_transport.h"
 #include "tournament/provenance.h"
 #include "tournament/registry.h"
@@ -50,6 +52,7 @@ namespace tournament_host
         std::uint16_t port = 47001;
         std::string certificate = "tournament_host.cert";
         std::string private_key = "tournament_host.key";
+        std::string devices_file;
         int roster_size = 4;
         std::uint64_t generation_seed = 4242;
         double audit_rate = 1.0;
@@ -72,6 +75,7 @@ namespace tournament_host
         std::println("Flags: --address --port --certificate --private-key --roster-size --generation-seed --audit-rate");
         std::println("  --games-per-assignment --lease-ms --series-cap --wait-clients-ms --threads --iterations");
         std::println("  --max-rounds --max-games --max-draws");
+        std::println("  --devices-file P restricts enrollment to the device ids and keys listed in P");
         std::println("Defaults: address 0.0.0.0, port 47001, certificate tournament_host.cert, private key tournament_host.key,");
         std::println("  roster size 4, generation seed 4242, audit rate 1.0, games per assignment 4, lease 30000 ms,");
         std::println("  series cap 2, client wait 120000 ms, threads 1, iterations 40, max rounds 600, max games 10000,");
@@ -216,6 +220,14 @@ namespace tournament_host
                 }
                 config.private_key = argv[++i];
             }
+            else if (flag == "--devices-file")
+            {
+                if (i + 1 >= argc)
+                {
+                    return fail("flag --devices-file requires a value");
+                }
+                config.devices_file = argv[++i];
+            }
             else if (flag == "--roster-size")
             {
                 int value = 0;
@@ -340,6 +352,16 @@ namespace tournament_host
         config.private_key_path = cli.private_key;
         config.expected_adapter_id = std::string(tuning_toj::TojAdapter::kAdapterId);
         config.expected_schema_hash = tuning::schema_hash(schema);
+        config.devices_file = cli.devices_file;
+        auto probe_context = tuning_toj::TojAdapter::make_shared_context();
+        TojBackend probe_backend{probe_context};
+        auto probe_run = [&probe_backend](std::vector<tuning::BatchGame> const &games,
+                                          tuning::RunConfig const &probe_config)
+        {
+            return probe_backend.run_games(games, probe_config);
+        };
+        config.expected_engine_fingerprint
+            = tournament_identity::adapter_engine_fingerprint<tuning_toj::TojAdapter>(probe_run);
         config.io_timeout_ms = cli.lease_ms + 5000;
         return config;
     }
@@ -493,8 +515,13 @@ namespace tournament_host
 
         try
         {
-            std::vector<taud::AuditTarget> const targets = taud::select_targets(*provenance, cli.audit_rate, {},
-                cli.generation_seed);
+            auto device_rate = [&](tw::DeviceId device)
+            {
+                treg::DeviceStats const *stats = registry->stats(device);
+                return (stats != nullptr && stats->audits_passed > 0) ? cli.audit_rate : 1.0;
+            };
+            std::vector<taud::AuditTarget> const targets = taud::select_targets_rated(*provenance, device_rate,
+                {}, cli.generation_seed);
             taud::AuditReport const report = taud::audit_records(*provenance, targets, run_config, re_run);
             std::map<tw::DeviceId, bool> device_passed;
             for (taud::AuditVerdict const &verdict : report.verdicts)

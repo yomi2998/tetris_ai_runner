@@ -1,3 +1,4 @@
+#include "tournament/bytes.h"
 #include "tournament/net_transport.h"
 
 #include "tournament/provenance.h"
@@ -205,7 +206,7 @@ namespace
 
     ClientHarness make_client(HostHarness &host, tw::DeviceId id, std::string const &adapter = "test_adapter",
                               std::uint32_t protocol = tw::protocol_version, std::uint64_t schema_hash = 0,
-                              tw::KeyPair const *keys = nullptr)
+                              tw::KeyPair const *keys = nullptr, std::uint64_t engine_fingerprint = 0)
     {
         ClientHarness client;
         client.id = id;
@@ -223,6 +224,7 @@ namespace
         hello.protocol = protocol;
         hello.adapter_id = adapter;
         hello.schema_hash = schema_hash;
+        hello.engine_fingerprint = engine_fingerprint;
         client.status = client.conn->send_hello(hello, client.detail);
         return client;
     }
@@ -414,6 +416,140 @@ namespace
         check(reconnect.status == tnet::ClientConnection::HelloStatus::Accepted,
               "same key reconnect accepted: " + reconnect.detail);
         check(devices_contain(*host.transport, 1), "device listed after reconnect");
+    }
+
+    void test_load_devices_file()
+    {
+        std::string const hex_one = tournament_bytes::encode_hex(tw::generate_keypair().public_key);
+        std::string const hex_two = tournament_bytes::encode_hex(tw::generate_keypair().public_key);
+        std::string error;
+        std::filesystem::path const valid_path = temp_dir() / "devices_valid.txt";
+        write_file(valid_path, "1 " + hex_one + "\n\n2 " + hex_two + "\n");
+        auto const loaded = tnet::load_devices_file(valid_path.string(), error);
+        auto const key_one = tournament_bytes::decode_hex(hex_one);
+        auto const key_two = tournament_bytes::decode_hex(hex_two);
+        bool const exact = loaded.has_value() && loaded->size() == 2 && key_one.has_value() && key_two.has_value()
+            && (*loaded)[0].id == 1 && (*loaded)[0].public_key == *key_one
+            && (*loaded)[1].id == 2 && (*loaded)[1].public_key == *key_two;
+        check(exact, "valid devices file parses with exact key bytes");
+        error.clear();
+        bool const missing_ok = !tnet::load_devices_file((temp_dir() / "devices_missing.txt").string(), error)
+                                     .has_value()
+            && !error.empty();
+        check(missing_ok, "missing devices file fails with an error: " + error);
+        std::filesystem::path const malformed_path = temp_dir() / "devices_malformed.txt";
+        write_file(malformed_path, "1 " + hex_one + "\nnot a device line\n");
+        error.clear();
+        auto const malformed = tnet::load_devices_file(malformed_path.string(), error);
+        check(!malformed.has_value() && error.find("line 2") != std::string::npos,
+              "malformed line error names the line number: " + error);
+        std::string uppercase_hex = hex_two;
+        uppercase_hex[0] = 'A';
+        std::filesystem::path const uppercase_path = temp_dir() / "devices_uppercase.txt";
+        write_file(uppercase_path, "3 " + uppercase_hex + "\n");
+        error.clear();
+        auto const uppercase = tnet::load_devices_file(uppercase_path.string(), error);
+        check(!uppercase.has_value() && !error.empty(), "uppercase hex rejected: " + error);
+        std::filesystem::path const short_path = temp_dir() / "devices_short_key.txt";
+        write_file(short_path, "4 " + hex_one.substr(0, 62) + "\n");
+        error.clear();
+        auto const short_key = tnet::load_devices_file(short_path.string(), error);
+        check(!short_key.has_value() && !error.empty(), "wrong key length rejected: " + error);
+        std::filesystem::path const duplicate_path = temp_dir() / "devices_duplicate.txt";
+        write_file(duplicate_path, "1 " + hex_one + "\n1 " + hex_two + "\n");
+        error.clear();
+        auto const duplicate = tnet::load_devices_file(duplicate_path.string(), error);
+        check(!duplicate.has_value() && !error.empty(), "duplicate device id rejected: " + error);
+        std::filesystem::path const empty_path = temp_dir() / "devices_empty.txt";
+        write_file(empty_path, "");
+        error.clear();
+        auto const empty = tnet::load_devices_file(empty_path.string(), error);
+        check(empty.has_value() && empty->empty(), "existing empty devices file loads as empty allowlist");
+    }
+
+    void test_allowlist_enrollment()
+    {
+        HostHarness host("allowlist");
+        tw::KeyPair const allowed_keys = tw::generate_keypair();
+        tw::KeyPair const impostor_keys = tw::generate_keypair();
+        std::filesystem::path const devices_path = temp_dir() / "allowlist_devices.txt";
+        write_file(devices_path, "1 " + tournament_bytes::encode_hex(allowed_keys.public_key) + "\n");
+        tnet::NetConfig config;
+        config.devices_file = devices_path.string();
+        check(host.start(config), "host started with devices file allowlist");
+        ClientHarness member;
+        member.id = 1;
+        member.keys = allowed_keys;
+        member.conn = std::make_unique<tnet::ClientConnection>("127.0.0.1", host.transport->listening_port(),
+                                                               host.fingerprint);
+        tw::HelloMessage hello;
+        hello.device = 1;
+        hello.public_key = member.keys.public_key;
+        member.status = member.conn->send_hello(hello, member.detail);
+        check(member.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "allowlisted device enrolls: " + member.detail);
+        check(devices_contain(*host.transport, 1), "allowlisted device appears in transport devices()");
+        auto outsider = make_client(host, 2);
+        check(outsider.status == tnet::ClientConnection::HelloStatus::Rejected
+                  && outsider.detail == "device not in allowlist",
+              "unlisted device rejected: " + outsider.detail);
+        auto impostor = make_client(host, 1, "test_adapter", tw::protocol_version, 0, &impostor_keys);
+        check(impostor.status == tnet::ClientConnection::HelloStatus::Rejected
+                  && impostor.detail == "device key does not match allowlist",
+              "allowlisted id with foreign key rejected: " + impostor.detail);
+    }
+
+    void test_engine_fingerprint_pin()
+    {
+        HostHarness host("engine_pin");
+        tnet::NetConfig config;
+        config.expected_engine_fingerprint = 4242;
+        check(host.start(config), "host started with engine fingerprint pin");
+        auto matching = make_client(host, 1, "test_adapter", tw::protocol_version, 0, nullptr, 4242);
+        check(matching.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "hello with expected engine fingerprint accepted: " + matching.detail);
+        auto mismatching = make_client(host, 2, "test_adapter", tw::protocol_version, 0, nullptr, 4243);
+        check(mismatching.status == tnet::ClientConnection::HelloStatus::Rejected
+                  && mismatching.detail == "engine fingerprint mismatch",
+              "hello with wrong engine fingerprint rejected: " + mismatching.detail);
+        auto zero = make_client(host, 3);
+        check(zero.status == tnet::ClientConnection::HelloStatus::Rejected
+                  && zero.detail == "engine fingerprint mismatch",
+              "hello with zero engine fingerprint rejected under pin: " + zero.detail);
+        HostHarness unpinned("engine_open");
+        check(unpinned.start(tnet::NetConfig{}), "host started without engine fingerprint pin");
+        auto relaxed_zero = make_client(unpinned, 1);
+        check(relaxed_zero.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "unpinned host accepts fingerprint zero: " + relaxed_zero.detail);
+        auto relaxed_nonzero = make_client(unpinned, 2, "test_adapter", tw::protocol_version, 0, nullptr, 7);
+        check(relaxed_nonzero.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "unpinned host accepts any fingerprint: " + relaxed_nonzero.detail);
+    }
+
+    void test_connection_cap()
+    {
+        HostHarness host("cap");
+        tnet::NetConfig config;
+        config.max_connections = 1;
+        check(host.start(config), "host started with connection cap of one");
+        auto first = make_client(host, 1);
+        check(first.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "first client enrolls under cap: " + first.detail);
+        tnet::ClientConnection second("127.0.0.1", host.transport->listening_port(), host.fingerprint);
+        check(!second.connected(), "second client cannot connect when cap is full");
+        std::string capped_detail;
+        auto const capped_status = second.send_hello(tw::HelloMessage{}, capped_detail);
+        check(capped_status == tnet::ClientConnection::HelloStatus::Failed,
+              "capped client hello attempt fails: " + capped_detail);
+        HostHarness clamped("cap_clamp");
+        tnet::NetConfig clamped_config;
+        clamped_config.max_connections = 0;
+        check(clamped.start(clamped_config), "host started with nonpositive cap clamped to default");
+        auto one = make_client(clamped, 1);
+        auto two = make_client(clamped, 2);
+        check(one.status == tnet::ClientConnection::HelloStatus::Accepted
+                  && two.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "nonpositive cap clamped to default admits two clients: " + two.detail);
     }
 
     void test_remote_backend_flow()
@@ -642,6 +778,10 @@ int main()
     test_protocol_mismatch_rejected();
     test_pin_enforcement();
     test_duplicate_device_key_rules();
+    test_load_devices_file();
+    test_allowlist_enrollment();
+    test_engine_fingerprint_pin();
+    test_connection_cap();
     test_remote_backend_flow();
     test_dropper_reassignment();
     test_late_reply_discarded();
