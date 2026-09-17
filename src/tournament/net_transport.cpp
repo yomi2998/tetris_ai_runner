@@ -1009,6 +1009,14 @@ namespace tournament_net
                 }
             }
 
+            static bool host_is_name(std::string const &host)
+            {
+                sockaddr_in v4{};
+                sockaddr_in6 v6{};
+                return inet_pton(AF_INET, host.c_str(), &v4.sin_addr) != 1
+                    && inet_pton(AF_INET6, host.c_str(), &v6.sin6_addr) != 1;
+            }
+
             bool tcp_connect(std::string const &host, std::uint16_t port, std::string &error)
             {
                 addrinfo hints{};
@@ -1046,7 +1054,8 @@ namespace tournament_net
                 return true;
             }
 
-            bool tls_handshake_pinned(std::string const &expected_fingerprint, std::string &error)
+            bool tls_handshake_pinned(std::string const &host, std::string const &expected_fingerprint,
+                                      std::string &error)
             {
                 ctx = SSL_CTX_new(TLS_client_method());
                 if (ctx == nullptr)
@@ -1056,8 +1065,17 @@ namespace tournament_net
                 }
                 SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
                 ssl = SSL_new(ctx);
-                if (ssl == nullptr || SSL_set_fd(ssl, fd) != 1
-                    || !ssl_handshake(ssl, false, deadline_after(kHelloReplyTimeoutMs)))
+                if (ssl == nullptr || SSL_set_fd(ssl, fd) != 1)
+                {
+                    error = "TLS handshake failed";
+                    return false;
+                }
+                if (host_is_name(host) && SSL_set_tlsext_host_name(ssl, host.c_str()) != 1)
+                {
+                    error = "TLS server name configuration failed";
+                    return false;
+                }
+                if (!ssl_handshake(ssl, false, deadline_after(kHelloReplyTimeoutMs)))
                 {
                     error = "TLS handshake failed";
                     return false;
@@ -1112,6 +1130,11 @@ namespace tournament_net
                     return false;
                 }
                 SSL_set_verify(ssl, SSL_VERIFY_PEER, nullptr);
+                if (host_is_name(host) && SSL_set_tlsext_host_name(ssl, host.c_str()) != 1)
+                {
+                    error = "TLS server name configuration failed";
+                    return false;
+                }
                 if (!ssl_handshake(ssl, false, deadline_after(kHelloReplyTimeoutMs)))
                 {
                     error = "TLS handshake failed";
@@ -1853,7 +1876,7 @@ namespace tournament_net
             {
                 return false;
             }
-            if (!tls_handshake_pinned(expected_fingerprint, error))
+            if (!tls_handshake_pinned(host, expected_fingerprint, error))
             {
                 return false;
             }
@@ -1969,7 +1992,7 @@ namespace tournament_net
                     return false;
                 }
             }
-            else if (!tls_handshake_pinned(expected_fingerprint, error))
+            else if (!tls_handshake_pinned(host, expected_fingerprint, error))
             {
                 return false;
             }
