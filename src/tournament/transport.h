@@ -25,6 +25,7 @@ namespace tournament_transport
     {
         DeliveryStatus status = DeliveryStatus::Unreachable;
         SignedResult result{};
+        bool peer_active = false;
     };
 
     class Transport
@@ -32,7 +33,8 @@ namespace tournament_transport
     public:
         virtual ~Transport() = default;
         virtual std::vector<DeviceId> devices() const = 0;
-        virtual Delivery request(DeviceId device, AssignmentBatch const &assignment) = 0;
+        virtual Delivery request(DeviceId device, AssignmentBatch const &assignment,
+                                 std::uint64_t wait_ms) = 0;
     };
 
     class Clock

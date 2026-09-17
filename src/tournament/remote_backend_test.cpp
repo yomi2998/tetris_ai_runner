@@ -683,6 +683,78 @@ namespace
         check(threw, "exhausted assignment rounds throws runtime error");
     }
 
+    void test_round_budget_scales_with_demand()
+    {
+        ContextPtr context = tuning_toj::TojAdapter::make_shared_context();
+        TojBackend const engine{context};
+        std::vector<double> const theta_a = theta_for(0);
+        std::vector<double> const theta_b = theta_for(1);
+        std::vector<tuning::BatchGame> games;
+        for (std::uint64_t id = 1; id <= 10; ++id)
+        {
+            tuning::BatchGame game;
+            game.id = id;
+            game.theta_a = theta_a;
+            game.theta_b = theta_b;
+            game.seed_a = tuning::derive_game_seed(321, id, 0);
+            game.seed_b = tuning::derive_game_seed(321, id, 1);
+            games.push_back(std::move(game));
+        }
+        trem::RemoteConfig remote_config;
+        remote_config.games_per_assignment = 2;
+        remote_config.lease_ms = 1000000;
+        remote_config.max_assignment_rounds = 4;
+        remote_config.per_series_device_cap = 64;
+
+        std::vector<DeviceHarness> devices{make_device(1)};
+        Cluster cluster(devices, remote_config);
+        cluster.transport->add_device(1, honest_handler(devices[0].keys, engine));
+        std::vector<tuning::GameOutcome> const results = cluster.backend.run_games(games, fast_config());
+        check(outcomes_identical(results, engine.run_games(games, fast_config())),
+              "ten games on one capacity 1 device complete with correct results");
+        check(cluster.provenance->size() == 10, "demand beyond the configured round floor still completes");
+        check(cluster.registry->stats(1) != nullptr && cluster.registry->stats(1)->games_dropped == 0,
+              "honest single device records no drops across the scaled rounds");
+    }
+
+    void test_silent_device_exhaustion_counts_rounds()
+    {
+        std::vector<double> const theta_a = theta_for(0);
+        std::vector<double> const theta_b = theta_for(1);
+        std::vector<tuning::BatchGame> games;
+        for (std::uint64_t id = 1; id <= 2; ++id)
+        {
+            tuning::BatchGame game;
+            game.id = id;
+            game.theta_a = theta_a;
+            game.theta_b = theta_b;
+            game.seed_a = tuning::derive_game_seed(654, id, 0);
+            game.seed_b = tuning::derive_game_seed(654, id, 1);
+            games.push_back(std::move(game));
+        }
+        trem::RemoteConfig remote_config;
+        remote_config.games_per_assignment = 2;
+        remote_config.lease_ms = 1000000;
+        remote_config.max_assignment_rounds = 2;
+        remote_config.per_series_device_cap = 8;
+
+        std::vector<DeviceHarness> devices{make_device(1)};
+        Cluster cluster(devices, remote_config);
+        cluster.transport->add_device(
+            1, [](tw::AssignmentBatch const &) { return std::optional<tw::SignedResult>{}; });
+        std::string message;
+        try
+        {
+            cluster.backend.run_games(games, fast_config());
+        }
+        catch (std::runtime_error const &error)
+        {
+            message = error.what();
+        }
+        check(message.find("exhausted 3 assignment rounds") != std::string::npos,
+              "round budget is the floor plus the flight arithmetic: " + message);
+    }
+
     trem::RemoteConfig fabricated_remote_config()
     {
         trem::RemoteConfig remote_config;
@@ -786,6 +858,8 @@ int main()
     test_dropper_and_late_results();
     test_protocol_tamper_rejections();
     test_failure_modes();
+    test_round_budget_scales_with_demand();
+    test_silent_device_exhaustion_counts_rounds();
     test_concurrency_capacity_respected();
     test_unspecified_concurrency_acts_as_one();
     test_degenerate_capacity_liveness();

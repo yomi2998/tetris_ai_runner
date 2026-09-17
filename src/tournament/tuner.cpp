@@ -82,6 +82,8 @@ namespace tournament_tuner
         std::string journal_file = "tournament_journal.bin";
         std::string ban_file = "tournament_bans.txt";
         int wait_clients_ms = 120000;
+        std::uint64_t lease_ms = 30000;
+        int games_per_assignment = 4;
     };
 
     int thread_budget_for(int threads_arg)
@@ -425,6 +427,7 @@ namespace tournament_tuner
         std::println("Flags: --remote-port N distributes matches to remote_client devices over TLS (certificate and key are generated on first use, clients verify the printed fingerprint)");
         std::println("Flags: --remote-cert P and --remote-key P override the certificate paths, --audit-rate R sets the audit sample rate (default 0.25, remote mode only)");
         std::println("Flags: --journal-file P sets the provenance journal path (default tournament_journal.bin, remote mode only), --wait-clients-ms N bounds the initial client wait (default 120000)");
+        std::println("Flags: --lease-ms N sets the remote result lease (default 30000, remote mode only), --games-per-assignment N batches that many games per remote flight (default 4)");
         std::println("Flags: --ban-file P persists banned device keys across restarts (default tournament_bans.txt, empty string disables)");
         std::println("Flags: --devices-file P restricts remote enrollment to the device ids and keys listed in P (default open enrollment)");
         std::println("Search: iteration budgets only, no time budgets");
@@ -1083,6 +1086,7 @@ namespace tournament_tuner
         tournament_ban::BanFile ban_store(cli.ban_file);
 #if defined(TUNER_HAS_REMOTE)
         std::shared_ptr<tournament_net::HostTransport> net_transport;
+        std::shared_ptr<tournament_remote::DeviceTiming> remote_timing;
         if (cli.remote_port > 0)
         {
             if (!std::filesystem::exists(cli.remote_certificate)
@@ -1125,7 +1129,10 @@ namespace tournament_tuner
             net_config.expected_schema_hash = tuning::schema_hash(tuning_toj::TojAdapter::schema());
             net_config.devices_file = cli.devices_file;
             net_config.expected_engine_fingerprint = engine_fingerprint;
-            net_config.io_timeout_ms = 35000;
+            net_config.log = [](std::string const &message)
+            {
+                std::println("remote: {}", message);
+            };
             net_transport = std::make_shared<tournament_net::HostTransport>(device_registry, net_config);
             std::string start_error;
             if (!net_transport->start(start_error))
@@ -1137,6 +1144,24 @@ namespace tournament_tuner
             std::println("remote: listening on {}:{} fingerprint {}", cli.remote_address,
                          static_cast<int>(port), *fingerprint);
             std::println("remote: engine fingerprint {:016x}", engine_fingerprint);
+            remote_timing = std::make_shared<tournament_remote::DeviceTiming>();
+            {
+                TojBackend calibrate_engine(shared_context);
+                tuning::ParamSchema const &schema = tuning_toj::TojAdapter::schema();
+                tuning::BatchGame probe;
+                probe.id = tournament_runner::game_id_for(1, 0);
+                probe.theta_a.assign(schema.defaults.begin(), schema.defaults.end());
+                probe.theta_b.assign(schema.defaults.begin(), schema.defaults.end());
+                probe.seed_a = tuning::derive_game_seed(0xC0FFEEULL, probe.id, 0);
+                probe.seed_b = tuning::derive_game_seed(0xC0FFEEULL, probe.id, 1);
+                auto const began = std::chrono::steady_clock::now();
+                calibrate_engine.run_games({probe}, run_config);
+                auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - began).count();
+                remote_timing->seed_ms_per_game(static_cast<double>(elapsed));
+                std::println("remote: calibrated {} ms per game, lease {} ms, {} games per assignment",
+                             elapsed, cli.lease_ms, cli.games_per_assignment);
+            }
             if (!cli.devices_file.empty())
             {
                 std::println("remote: enrollment restricted to {}", cli.devices_file);
@@ -1272,9 +1297,18 @@ namespace tournament_tuner
             if (net_transport)
             {
                 provenance = std::make_shared<tournament_provenance::ProvenanceLedger>();
+                tournament_remote::RemoteConfig remote_config;
+                remote_config.games_per_assignment = cli.games_per_assignment;
+                remote_config.lease_ms = cli.lease_ms;
+                remote_config.nonce_seed = generation_seed_for(root_seed, generation);
+                remote_config.timing = remote_timing;
+                remote_config.log = [](std::string const &message)
+                {
+                    std::println("remote: {}", message);
+                };
                 remote_backend.emplace(tuning_toj::TojAdapter::schema(), net_transport, device_registry,
                                        provenance, std::make_shared<tournament_transport::SystemClock>(),
-                                       tournament_remote::RemoteConfig{});
+                                       remote_config);
                 backend = tournament_runtime::RuntimeBackend(
                     tuning_toj::TojAdapter::schema(),
                     [engine = *remote_backend](std::vector<tuning::BatchGame> const &games,
@@ -1872,6 +1906,44 @@ int main(int argc, char *argv[])
             try
             {
                 config.wait_clients_ms = std::stoi(argv[++i]);
+            }
+            catch (std::exception const &)
+            {
+                flag_error = true;
+            }
+        }
+        else if (std::strcmp(argv[i], "--lease-ms") == 0 && i + 1 < argc)
+        {
+            try
+            {
+                std::uint64_t const value = std::stoull(argv[++i]);
+                if (value == 0)
+                {
+                    flag_error = true;
+                }
+                else
+                {
+                    config.lease_ms = value;
+                }
+            }
+            catch (std::exception const &)
+            {
+                flag_error = true;
+            }
+        }
+        else if (std::strcmp(argv[i], "--games-per-assignment") == 0 && i + 1 < argc)
+        {
+            try
+            {
+                int const value = std::stoi(argv[++i]);
+                if (value <= 0)
+                {
+                    flag_error = true;
+                }
+                else
+                {
+                    config.games_per_assignment = value;
+                }
             }
             catch (std::exception const &)
             {

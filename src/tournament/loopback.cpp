@@ -29,7 +29,8 @@ namespace tournament_loopback
     }
 
     tournament_transport::Delivery LoopbackTransport::request(DeviceId device,
-                                                              AssignmentBatch const &assignment)
+                                                              AssignmentBatch const &assignment,
+                                                              std::uint64_t)
     {
         DeviceHandler handler;
         {

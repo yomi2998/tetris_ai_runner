@@ -601,6 +601,7 @@ namespace tournament_net
             std::condition_variable pending_cv;
             std::map<Nonce, PendingRequest> pending;
             std::atomic<bool> closed{false};
+            std::atomic<std::uint64_t> frames_received{0};
 
             bool write_frame(MessageKind kind, std::string const &payload, std::string &error)
             {
@@ -800,10 +801,12 @@ namespace tournament_net
             {
                 return conn.send_pong(payload);
             };
+            std::string reason = "peer closed connection";
             for (;;)
             {
                 if (conn->closed.load())
                 {
+                    reason = "local shutdown";
                     break;
                 }
                 FramedMessage message;
@@ -814,13 +817,17 @@ namespace tournament_net
                 }
                 if (message.kind != MessageKind::Result)
                 {
+                    reason = "protocol violation: frame kind "
+                        + std::to_string(static_cast<int>(message.kind));
                     break;
                 }
                 std::optional<SignedResult> result = tournament_wire::decode_result_message(as_bytes(message.payload));
                 if (!result)
                 {
+                    reason = "malformed result frame";
                     break;
                 }
+                conn->frames_received.fetch_add(1, std::memory_order_relaxed);
                 Nonce const nonce = result->batch.nonce;
                 bool fulfilled = false;
                 {
@@ -841,6 +848,10 @@ namespace tournament_net
             }
             conn->fail_all(DeliveryStatus::Malformed);
             conn->teardown();
+            if (shared->config.log)
+            {
+                shared->config.log("device " + std::to_string(conn->device) + " connection lost: " + reason);
+            }
             {
                 std::lock_guard<std::mutex> lock(shared->mutex);
                 auto it = shared->connections.find(conn->device);
@@ -915,6 +926,10 @@ namespace tournament_net
             {
                 std::string error;
                 conn->write_frame(MessageKind::Reject, tournament_wire::encode_reject(reason), error);
+                if (shared->config.log)
+                {
+                    shared->config.log("connection rejected: " + reason);
+                }
                 conn->teardown();
                 return;
             }
@@ -945,9 +960,19 @@ namespace tournament_net
                 slot = conn;
                 shared->readers.emplace_back(connection_reader, shared, conn);
             }
+            if (shared->config.log)
+            {
+                shared->config.log("device " + std::to_string(conn->device) + " enrolled over "
+                    + std::string(conn->wire.websocket ? "websocket" : "raw tls"));
+            }
             if (stale)
             {
                 stale->kill();
+                if (shared->config.log)
+                {
+                    shared->config.log("device " + std::to_string(conn->device)
+                        + " replaced its previous connection");
+                }
             }
         }
 
@@ -1803,7 +1828,8 @@ namespace tournament_net
         return ids;
     }
 
-    tournament_transport::Delivery HostTransport::request(DeviceId device, AssignmentBatch const &assignment)
+    tournament_transport::Delivery HostTransport::request(DeviceId device, AssignmentBatch const &assignment,
+                                                          std::uint64_t wait_ms)
     {
         std::shared_ptr<HostConnection> conn;
         {
@@ -1833,6 +1859,7 @@ namespace tournament_net
             std::lock_guard<std::mutex> lock(conn->pending_mutex);
             conn->pending.erase(nonce);
         };
+        std::uint64_t const frames_before = conn->frames_received.load(std::memory_order_relaxed);
         std::string error;
         if (!conn->write_frame(MessageKind::Assignment, tournament_wire::encode_assignment(assignment), error))
         {
@@ -1844,9 +1871,14 @@ namespace tournament_net
             conn->fail_all(DeliveryStatus::Malformed);
             conn->kill();
             erase_pending();
+            if (impl_->shared->config.log)
+            {
+                impl_->shared->config.log("device " + std::to_string(device)
+                    + " assignment write failed: " + error);
+            }
             return {DeliveryStatus::Malformed, {}};
         }
-        TimePoint const deadline = deadline_after(impl_->shared->config.io_timeout_ms);
+        TimePoint const deadline = deadline_after(wait_ms);
         {
             std::unique_lock<std::mutex> lock(conn->pending_mutex);
             PendingRequest &entry = conn->pending[nonce];
@@ -1864,7 +1896,16 @@ namespace tournament_net
             }
         }
         erase_pending();
-        return {DeliveryStatus::Timeout, {}};
+        tournament_transport::Delivery delivery;
+        delivery.status = DeliveryStatus::Timeout;
+        delivery.peer_active = conn->frames_received.load(std::memory_order_relaxed) != frames_before;
+        if (impl_->shared->config.log)
+        {
+            impl_->shared->config.log("device " + std::to_string(device) + " nonce " + std::to_string(nonce)
+                + " timed out after " + std::to_string(wait_ms) + " ms"
+                + (delivery.peer_active ? " (peer still sending)" : " (peer silent)"));
+        }
+        return delivery;
     }
 
     struct ClientConnection::Impl : ClientCore

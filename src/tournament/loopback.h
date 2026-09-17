@@ -25,7 +25,8 @@ namespace tournament_loopback
         void remove_device(DeviceId device);
 
         std::vector<DeviceId> devices() const override;
-        tournament_transport::Delivery request(DeviceId device, AssignmentBatch const &assignment) override;
+        tournament_transport::Delivery request(DeviceId device, AssignmentBatch const &assignment,
+                                               std::uint64_t wait_ms) override;
 
     private:
         mutable std::mutex mutex_;

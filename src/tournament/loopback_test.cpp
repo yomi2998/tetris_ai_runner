@@ -112,7 +112,7 @@ namespace
         });
 
         tw::AssignmentBatch const assignment = sample_assignment(42);
-        tt::Delivery const delivery = transport.request(42, assignment);
+        tt::Delivery const delivery = transport.request(42, assignment, 1000);
 
         check(delivery.status == tt::DeliveryStatus::Delivered, "delivered: status is delivered");
         check(received.has_value(), "delivered: the handler was invoked");
@@ -133,7 +133,7 @@ namespace
     {
         tl::LoopbackTransport transport;
         transport.add_device(5, silent_handler());
-        tt::Delivery const delivery = transport.request(5, sample_assignment(5));
+        tt::Delivery const delivery = transport.request(5, sample_assignment(5), 1000);
         check(delivery.status == tt::DeliveryStatus::Timeout,
               "timeout: a silent handler reports timeout");
         check(delivery.result.batch.nonce == 0 && delivery.result.batch.device == 0
@@ -147,13 +147,13 @@ namespace
         transport.add_device(3, silent_handler());
         transport.remove_device(3);
 
-        tt::Delivery const unknown = transport.request(77, sample_assignment(77));
+        tt::Delivery const unknown = transport.request(77, sample_assignment(77), 1000);
         check(unknown.status == tt::DeliveryStatus::Unreachable,
               "unreachable: an unknown id is unreachable");
         check(unknown.result.batch.nonce == 0 && unknown.result.batch.outcomes.empty(),
               "unreachable: an unknown id carries no result");
 
-        tt::Delivery const removed = transport.request(3, sample_assignment(3));
+        tt::Delivery const removed = transport.request(3, sample_assignment(3), 1000);
         check(removed.status == tt::DeliveryStatus::Unreachable,
               "unreachable: a removed id is unreachable");
     }
@@ -166,7 +166,7 @@ namespace
                              {
                                  throw std::runtime_error("device exploded");
                              });
-        tt::Delivery const delivery = transport.request(9, sample_assignment(9));
+        tt::Delivery const delivery = transport.request(9, sample_assignment(9), 1000);
         check(delivery.status == tt::DeliveryStatus::Malformed,
               "malformed: a throwing handler reports malformed");
         check(delivery.result.batch.nonce == 0 && delivery.result.batch.outcomes.empty(),
@@ -214,7 +214,7 @@ namespace
             {
                 for (tw::DeviceId const device : device_ids)
                 {
-                    local.emplace_back(device, transport.request(device, sample_assignment(device)));
+                    local.emplace_back(device, transport.request(device, sample_assignment(device), 1000));
                 }
             }
             std::lock_guard<std::mutex> lock(merged_mutex);
@@ -265,11 +265,11 @@ namespace
         std::vector<tt::Delivery> deliveries(2);
         std::thread first([&]
         {
-            deliveries[0] = transport.request(7, sample_assignment(7));
+            deliveries[0] = transport.request(7, sample_assignment(7), 1000);
         });
         std::thread second([&]
         {
-            deliveries[1] = transport.request(8, sample_assignment(8));
+            deliveries[1] = transport.request(8, sample_assignment(8), 1000);
         });
         first.join();
         second.join();

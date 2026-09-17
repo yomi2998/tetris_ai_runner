@@ -1,6 +1,7 @@
 #include "tournament/remote_backend.h"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -37,6 +38,109 @@ namespace tournament_remote
         }
     }
 
+    void DeviceTiming::seed_ms_per_game(double ms_per_game)
+    {
+        if (ms_per_game <= 0.0 || !std::isfinite(ms_per_game))
+        {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        seeded_ms_per_game_ = ms_per_game;
+    }
+
+    void DeviceTiming::record_dispatch(DeviceId device, std::uint64_t games)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        devices_[device].outstanding_games += games;
+    }
+
+    void DeviceTiming::record_delivery(DeviceId device, std::uint64_t games, std::uint64_t elapsed_ms)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        DeviceState &state = devices_[device];
+        state.silent = false;
+        state.last_wait_ms = 0;
+        state.outstanding_games = state.outstanding_games > games ? state.outstanding_games - games : 0;
+        if (games == 0 || elapsed_ms == 0)
+        {
+            return;
+        }
+        double const sample = static_cast<double>(elapsed_ms) / static_cast<double>(games);
+        if (!std::isfinite(sample) || sample <= 0.0)
+        {
+            return;
+        }
+        state.ms_per_game = state.ms_per_game > 0.0 ? state.ms_per_game * 0.5 + sample * 0.5 : sample;
+    }
+
+    void DeviceTiming::record_timeout(DeviceId device, bool peer_active, std::uint64_t waited_ms)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        DeviceState &state = devices_[device];
+        if (peer_active)
+        {
+            state.silent = false;
+            state.last_wait_ms = waited_ms;
+        }
+        else
+        {
+            state.silent = true;
+            state.last_wait_ms = 0;
+        }
+    }
+
+    void DeviceTiming::record_reset(DeviceId device)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        DeviceState &state = devices_[device];
+        state.outstanding_games = 0;
+        state.last_wait_ms = 0;
+        state.silent = false;
+    }
+
+    std::uint64_t DeviceTiming::wait_hint_ms(DeviceId device, std::uint64_t games,
+                                             std::uint64_t lease_ms) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        double ms_per_game = seeded_ms_per_game_;
+        std::uint64_t outstanding = 0;
+        std::uint64_t last_wait = 0;
+        bool silent = false;
+        auto const it = devices_.find(device);
+        if (it != devices_.end())
+        {
+            if (it->second.ms_per_game > 0.0)
+            {
+                ms_per_game = it->second.ms_per_game;
+            }
+            outstanding = it->second.outstanding_games;
+            last_wait = it->second.last_wait_ms;
+            silent = it->second.silent;
+        }
+        if (silent)
+        {
+            return lease_ms;
+        }
+        std::uint64_t wait = lease_ms;
+        if (ms_per_game > 0.0)
+        {
+            double const needed = ms_per_game * static_cast<double>(games + outstanding) * 2.0 + 60000.0;
+            if (needed < 3600000.0)
+            {
+                wait = static_cast<std::uint64_t>(needed);
+            }
+            else
+            {
+                wait = 3600000;
+            }
+        }
+        else if (last_wait > 0)
+        {
+            wait = last_wait > 1800000 ? 3600000 : last_wait * 2;
+        }
+        return std::min<std::uint64_t>(std::max<std::uint64_t>(wait, lease_ms), 3600000);
+    }
+
     RemoteBackend::RemoteBackend(tuning::ParamSchema schema,
                                  std::shared_ptr<tournament_transport::Transport> transport,
                                  std::shared_ptr<tournament_registry::DeviceRegistry> registry,
@@ -49,6 +153,7 @@ namespace tournament_remote
         , provenance_(std::move(provenance))
         , clock_(std::move(clock))
         , config_(config)
+        , timing_(config.timing ? config.timing : std::make_shared<DeviceTiming>())
         , nonce_counter_(std::make_shared<std::atomic<std::uint64_t>>(0))
     {
         if (!transport_ || !registry_ || !provenance_ || !clock_)
@@ -108,6 +213,7 @@ namespace tournament_remote
 
         std::size_t const chunk_size = static_cast<std::size_t>(config_.games_per_assignment);
         int round = 0;
+        int rounds_limit = 0;
         for (;;)
         {
             std::vector<std::size_t> pending;
@@ -124,16 +230,34 @@ namespace tournament_remote
                 break;
             }
             ++round;
-            if (round > config_.max_assignment_rounds)
-            {
-                throw std::runtime_error("remote execution exhausted "
-                    + std::to_string(config_.max_assignment_rounds) + " assignment rounds with "
-                    + std::to_string(pending.size()) + " unresolved games");
-            }
             std::vector<tournament_wire::DeviceId> devices = registry_->active_devices();
             if (devices.empty())
             {
                 throw std::runtime_error("no active devices for remote execution");
+            }
+            std::uint64_t capacity_total = 0;
+            for (tournament_wire::DeviceId device : devices)
+            {
+                capacity_total += std::max<std::uint32_t>(1u, registry_->concurrency(device));
+            }
+            if (rounds_limit == 0)
+            {
+                std::uint64_t const flights_needed = (static_cast<std::uint64_t>(total) + chunk_size - 1)
+                    / chunk_size;
+                std::uint64_t const capacity = std::max<std::uint64_t>(capacity_total, 1);
+                rounds_limit = config_.max_assignment_rounds
+                    + static_cast<int>((flights_needed + capacity - 1) / capacity);
+            }
+            if (round > rounds_limit)
+            {
+                throw std::runtime_error("remote execution exhausted "
+                    + std::to_string(rounds_limit) + " assignment rounds with "
+                    + std::to_string(pending.size()) + " unresolved games");
+            }
+            if (config_.log)
+            {
+                config_.log("round " + std::to_string(round) + ": " + std::to_string(pending.size())
+                    + " games pending across " + std::to_string(devices.size()) + " device(s)");
             }
 
             struct Flight
@@ -143,6 +267,7 @@ namespace tournament_remote
                 tournament_wire::DeviceId device = 0;
                 tournament_transport::Delivery delivery{};
                 std::uint64_t assigned_at_ms = 0;
+                std::uint64_t wait_ms = 0;
             };
             std::vector<std::uint32_t> capacities(devices.size(), 1);
             for (std::size_t i = 0; i < devices.size(); ++i)
@@ -233,7 +358,7 @@ namespace tournament_remote
                     {
                         chosen = cursor % devices.size();
                     }
-                    else if (round == config_.max_assignment_rounds)
+                    else if (round == rounds_limit)
                     {
                         chosen = unfailed_candidate;
                     }
@@ -254,6 +379,8 @@ namespace tournament_remote
                 {
                     flight.assignment.games.push_back(tournament_wire::to_wire(games[index]));
                 }
+                flight.wait_ms = timing_->wait_hint_ms(flight.device, flight.indices.size(), config_.lease_ms);
+                timing_->record_dispatch(flight.device, flight.indices.size());
                 flights.push_back(std::move(flight));
             }
 
@@ -264,7 +391,7 @@ namespace tournament_remote
                 flight.assigned_at_ms = clock_->now_ms();
                 workers.emplace_back([this, &flight]()
                 {
-                    flight.delivery = transport_->request(flight.device, flight.assignment);
+                    flight.delivery = transport_->request(flight.device, flight.assignment, flight.wait_ms);
                 });
             }
             for (std::thread &worker : workers)
@@ -300,6 +427,26 @@ namespace tournament_remote
                 }
                 std::uint64_t const now = clock_->now_ms();
                 bool const expired = now > flight.assigned_at_ms + config_.lease_ms;
+                if (flight.delivery.status == tournament_transport::DeliveryStatus::Delivered)
+                {
+                    if (accepted)
+                    {
+                        timing_->record_delivery(flight.device, static_cast<std::uint64_t>(attempted),
+                                                 now > flight.assigned_at_ms ? now - flight.assigned_at_ms : 0);
+                    }
+                    else
+                    {
+                        timing_->record_reset(flight.device);
+                    }
+                }
+                else if (flight.delivery.status == tournament_transport::DeliveryStatus::Timeout)
+                {
+                    timing_->record_timeout(flight.device, flight.delivery.peer_active, flight.wait_ms);
+                }
+                else
+                {
+                    timing_->record_reset(flight.device);
+                }
                 if (accepted && !expired)
                 {
                     for (std::size_t i = 0; i < flight.indices.size(); ++i)

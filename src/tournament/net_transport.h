@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -30,7 +31,7 @@ namespace tournament_net
         std::uint64_t expected_engine_fingerprint = 0;
         std::string devices_file;
         int max_connections = 64;
-        std::uint64_t io_timeout_ms = 10000;
+        std::function<void(std::string const &)> log;
     };
 
     struct AllowedDevice
@@ -62,7 +63,8 @@ namespace tournament_net
         std::uint16_t listening_port() const;
 
         std::vector<DeviceId> devices() const override;
-        Delivery request(DeviceId device, AssignmentBatch const &assignment) override;
+        Delivery request(DeviceId device, AssignmentBatch const &assignment,
+                         std::uint64_t wait_ms) override;
 
     private:
         struct Impl;

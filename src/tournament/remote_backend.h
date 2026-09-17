@@ -2,7 +2,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -15,6 +18,32 @@
 
 namespace tournament_remote
 {
+    using tournament_wire::DeviceId;
+
+    class DeviceTiming
+    {
+    public:
+        void seed_ms_per_game(double ms_per_game);
+        void record_dispatch(DeviceId device, std::uint64_t games);
+        void record_delivery(DeviceId device, std::uint64_t games, std::uint64_t elapsed_ms);
+        void record_timeout(DeviceId device, bool peer_active, std::uint64_t waited_ms);
+        void record_reset(DeviceId device);
+        std::uint64_t wait_hint_ms(DeviceId device, std::uint64_t games, std::uint64_t lease_ms) const;
+
+    private:
+        struct DeviceState
+        {
+            double ms_per_game = 0.0;
+            std::uint64_t outstanding_games = 0;
+            std::uint64_t last_wait_ms = 0;
+            bool silent = false;
+        };
+
+        mutable std::mutex mutex_;
+        double seeded_ms_per_game_ = 0.0;
+        std::map<DeviceId, DeviceState> devices_;
+    };
+
     struct RemoteConfig
     {
         int games_per_assignment = 4;
@@ -22,6 +51,8 @@ namespace tournament_remote
         int max_assignment_rounds = 4;
         int per_series_device_cap = 2;
         std::uint64_t nonce_seed = 0x5177ED5EEDC0FFEEULL;
+        std::shared_ptr<DeviceTiming> timing;
+        std::function<void(std::string const &)> log;
     };
 
     class RemoteBackend
@@ -49,6 +80,7 @@ namespace tournament_remote
         std::shared_ptr<tournament_provenance::ProvenanceLedger> provenance_;
         std::shared_ptr<tournament_transport::Clock> clock_;
         RemoteConfig config_;
+        std::shared_ptr<DeviceTiming> timing_;
         mutable std::shared_ptr<std::atomic<std::uint64_t>> nonce_counter_;
     };
 }

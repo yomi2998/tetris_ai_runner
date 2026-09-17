@@ -373,7 +373,10 @@ namespace tournament_host
         };
         config.expected_engine_fingerprint
             = tournament_identity::adapter_engine_fingerprint<tuning_toj::TojAdapter>(probe_run);
-        config.io_timeout_ms = cli.lease_ms + 5000;
+        config.log = [](std::string const &message)
+        {
+            std::println("net: {}", message);
+        };
         return config;
     }
 
@@ -471,17 +474,47 @@ namespace tournament_host
 
         auto provenance = std::make_shared<tprov::ProvenanceLedger>();
         auto clock = std::make_shared<tt::SystemClock>();
+        auto remote_timing = std::make_shared<trem::DeviceTiming>();
+        tuning::RunConfig run_config;
+        run_config.threads = cli.threads;
+        run_config.iterations_per_move = static_cast<std::size_t>(cli.iterations);
+        run_config.max_rounds = cli.max_rounds;
+        {
+            std::shared_ptr<m_tetris::TetrisContext> const calibrate_context
+                = tuning_toj::TojAdapter::make_shared_context();
+            if (!calibrate_context)
+            {
+                std::println(stderr, "cannot prepare the calibration engine context");
+                transport->stop();
+                return 1;
+            }
+            TojBackend const calibrate_engine{calibrate_context};
+            tuning::ParamSchema const &schema = tuning_toj::TojAdapter::schema();
+            tuning::BatchGame probe;
+            probe.id = trun::game_id_for(1, 0);
+            probe.theta_a.assign(schema.defaults.begin(), schema.defaults.end());
+            probe.theta_b.assign(schema.defaults.begin(), schema.defaults.end());
+            probe.seed_a = tuning::derive_game_seed(0xC0FFEEULL, probe.id, 0);
+            probe.seed_b = tuning::derive_game_seed(0xC0FFEEULL, probe.id, 1);
+            auto const began = std::chrono::steady_clock::now();
+            calibrate_engine.run_games({probe}, run_config);
+            auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - began).count();
+            remote_timing->seed_ms_per_game(static_cast<double>(elapsed));
+            std::println("calibrated {} ms per game, lease {} ms, {} games per assignment",
+                         elapsed, cli.lease_ms, cli.games_per_assignment);
+        }
         trem::RemoteConfig remote_config;
         remote_config.games_per_assignment = cli.games_per_assignment;
         remote_config.lease_ms = cli.lease_ms;
         remote_config.max_assignment_rounds = 4;
         remote_config.per_series_device_cap = cli.series_cap;
+        remote_config.timing = remote_timing;
+        remote_config.log = [](std::string const &message)
+        {
+            std::println("net: {}", message);
+        };
         trem::RemoteBackend backend(schema, transport, registry, provenance, clock, remote_config);
-
-        tuning::RunConfig run_config;
-        run_config.threads = cli.threads;
-        run_config.iterations_per_move = static_cast<std::size_t>(cli.iterations);
-        run_config.max_rounds = cli.max_rounds;
         trun::RunLimits limits;
         limits.wave_limit = 16;
         limits.max_games = cli.max_games;

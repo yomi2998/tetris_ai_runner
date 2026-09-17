@@ -1012,7 +1012,7 @@ namespace
         check(both_listed, "listener serves raw and websocket flavors as separate devices");
         tw::AssignmentBatch const assignment = make_assignment(77, 2, 5, 2);
         std::thread worker([&]() { honest_worker(ws_client); });
-        auto const delivery = host.transport->request(2, assignment);
+        auto const delivery = host.transport->request(2, assignment, 5000);
         check(delivery.status == tt::DeliveryStatus::Delivered, "assignment delivered to websocket client");
         bool const echo_ok = delivery.status == tt::DeliveryStatus::Delivered
             && delivery.result.batch.nonce == 77
@@ -1110,9 +1110,7 @@ namespace
     void test_dropper_reassignment()
     {
         HostHarness host("dropper");
-        tnet::NetConfig config;
-        config.io_timeout_ms = 500;
-        check(host.start(config), "host started for dropper test");
+        check(host.start(tnet::NetConfig{}), "host started for dropper test");
         auto dropper = make_client(host, 1);
         auto honest = make_client(host, 2);
         check(dropper.status == tnet::ClientConnection::HelloStatus::Accepted
@@ -1150,9 +1148,7 @@ namespace
     void test_late_reply_discarded()
     {
         HostHarness host("late");
-        tnet::NetConfig config;
-        config.io_timeout_ms = 200;
-        check(host.start(config), "host started for late reply test");
+        check(host.start(tnet::NetConfig{}), "host started for late reply test");
         auto client = make_client(host, 1);
         check(client.status == tnet::ClientConnection::HelloStatus::Accepted, "device enrolled for late reply test");
         std::thread worker([&]()
@@ -1175,13 +1171,14 @@ namespace
             }
         });
         tw::AssignmentBatch const assignment = make_assignment(101, 1, 7, 1);
-        auto const delivery = host.transport->request(1, assignment);
+        auto const delivery = host.transport->request(1, assignment, 200);
         check(delivery.status == tt::DeliveryStatus::Timeout, "late device request times out");
+        check(!delivery.peer_active, "silent late device reports no peer activity");
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
         check(client.conn->connected(), "connection survives late reply discard");
         tw::AssignmentBatch replay = assignment;
         replay.nonce = 202;
-        auto const second = host.transport->request(1, replay);
+        auto const second = host.transport->request(1, replay, 2000);
         check(second.status == tt::DeliveryStatus::Delivered, "subsequent request on same connection delivered");
         bool const echo_ok = second.status == tt::DeliveryStatus::Delivered
             && second.result.batch.nonce == 202
@@ -1190,6 +1187,74 @@ namespace
             && second.result.batch.outcomes[0].id == assignment.games[0].id
             && tw::verify_result(client.keys.public_key, second.result.batch, second.result.signature);
         check(echo_ok, "survivor reply echoes nonce, device and valid signature");
+        client.conn->close();
+        worker.join();
+    }
+
+    void test_request_wait_covers_slow_client()
+    {
+        HostHarness host("slow_wait");
+        check(host.start(tnet::NetConfig{}), "host started for slow client wait test");
+        auto client = make_client(host, 1);
+        check(client.status == tnet::ClientConnection::HelloStatus::Accepted, "device enrolled for slow wait test");
+        tw::AssignmentBatch const assignment = make_assignment(301, 1, 9, 2);
+        std::thread worker([&]()
+        {
+            std::string detail;
+            auto received = client.conn->next_assignment(5000, detail);
+            if (received)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                reply_with_fabricated(client, *received, detail);
+            }
+        });
+        auto const delivery = host.transport->request(1, assignment, 2000);
+        check(delivery.status == tt::DeliveryStatus::Delivered,
+              "generous wait delivers a slow but live result");
+        check(delivery.status == tt::DeliveryStatus::Delivered && delivery.result.batch.nonce == 301,
+              "slow client result carries the requested nonce");
+        client.conn->close();
+        worker.join();
+    }
+
+    void test_request_timeout_reports_peer_activity()
+    {
+        HostHarness host("peer_active");
+        check(host.start(tnet::NetConfig{}), "host started for peer activity test");
+        auto client = make_client(host, 1);
+        check(client.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "device enrolled for peer activity test");
+        tw::AssignmentBatch const assignment = make_assignment(401, 1, 11, 1);
+        std::thread worker([&]()
+        {
+            std::string detail;
+            auto received = client.conn->next_assignment(5000, detail);
+            if (!received)
+            {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            tw::AssignmentBatch stale = *received;
+            stale.nonce = 402;
+            reply_with_fabricated(client, stale, detail);
+            for (;;)
+            {
+                auto next = client.conn->next_assignment(5000, detail);
+                if (!next)
+                {
+                    return;
+                }
+                reply_with_fabricated(client, *next, detail);
+            }
+        });
+        auto const delivery = host.transport->request(1, assignment, 600);
+        check(delivery.status == tt::DeliveryStatus::Timeout,
+              "flight answered only with a wrong nonce still times out");
+        check(delivery.peer_active, "arriving stale traffic marks the peer active");
+        tw::AssignmentBatch replay = assignment;
+        replay.nonce = 403;
+        auto const second = host.transport->request(1, replay, 2000);
+        check(second.status == tt::DeliveryStatus::Delivered, "connection still delivers after stale traffic");
         client.conn->close();
         worker.join();
     }
@@ -1318,6 +1383,8 @@ int main()
     test_remote_backend_flow();
     test_dropper_reassignment();
     test_late_reply_discarded();
+    test_request_wait_covers_slow_client();
+    test_request_timeout_reports_peer_activity();
     test_concurrent_clients();
     test_stop_wakes_parked_accept();
     test_stop_wakes_idle_client();
