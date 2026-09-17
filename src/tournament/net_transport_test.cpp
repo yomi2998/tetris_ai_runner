@@ -732,6 +732,53 @@ namespace
         check(devices_contain(*host.transport, 1), "device listed after reconnect");
     }
 
+    void test_replacement_logs_local_shutdown()
+    {
+        HostHarness host("stale_log");
+        auto lines = std::make_shared<std::vector<std::string>>();
+        auto log_mutex = std::make_shared<std::mutex>();
+        tnet::NetConfig config;
+        config.log = [lines, log_mutex](std::string const &message)
+        {
+            std::lock_guard<std::mutex> lock(*log_mutex);
+            lines->push_back(message);
+        };
+        check(host.start(config), "host started for replacement logging test");
+        auto keys = tw::generate_keypair();
+        auto first = make_client(host, 1, "test_adapter", tw::protocol_version, 0, &keys);
+        check(first.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "first connection enrolled: " + first.detail);
+        auto second = make_client(host, 1, "test_adapter", tw::protocol_version, 0, &keys);
+        check(second.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "second connection with the same key enrolled: " + second.detail);
+        bool first_dead = false;
+        bool replaced_logged = false;
+        bool shutdown_logged = false;
+        for (int attempt = 0; attempt < 400; ++attempt)
+        {
+            if (!first_dead && !first.conn->connected())
+            {
+                first_dead = true;
+            }
+            std::lock_guard<std::mutex> lock(*log_mutex);
+            for (std::string const &line : *lines)
+            {
+                replaced_logged = replaced_logged || line.find("replaced its previous connection")
+                    != std::string::npos;
+                shutdown_logged = shutdown_logged || line.find("local shutdown") != std::string::npos;
+            }
+            if (first_dead && replaced_logged && shutdown_logged)
+            {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        check(first_dead, "stale connection closed after replacement");
+        check(replaced_logged, "replacement is logged");
+        check(shutdown_logged, "replaced connection loss is classified as a local shutdown, not a peer close");
+        second.conn->close();
+    }
+
     void test_load_devices_file()
     {
         std::string const hex_one = tournament_bytes::encode_hex(tw::generate_keypair().public_key);
@@ -1355,7 +1402,8 @@ namespace
             worker.detach();
         }
         check(!conn->connected(), "client reports disconnected after host stop");
-        check(*detail_box == "connection closed", "client detail reports connection closed: " + *detail_box);
+        check(detail_box->rfind("connection closed", 0) == 0,
+              "client detail reports connection closed: " + *detail_box);
     }
 }
 
@@ -1367,6 +1415,7 @@ int main()
     test_protocol_mismatch_rejected();
     test_pin_enforcement();
     test_duplicate_device_key_rules();
+    test_replacement_logs_local_shutdown();
     test_load_devices_file();
     test_allowlist_enrollment();
     test_blacklisted_reconnect_rejected();

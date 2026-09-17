@@ -1,6 +1,7 @@
 #include "tournament/net_transport.h"
 
 #include <openssl/asn1.h>
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/rand.h>
@@ -100,13 +101,64 @@ namespace tournament_net
             return lowered;
         }
 
+        struct SslFailure
+        {
+            int error = SSL_ERROR_NONE;
+            int errno_value = 0;
+            unsigned long queue = 0;
+        };
+
+        thread_local SslFailure t_ssl_failure{};
+
+        void record_ssl_failure(int error)
+        {
+            t_ssl_failure.error = error;
+            t_ssl_failure.errno_value = errno;
+            t_ssl_failure.queue = ERR_peek_last_error();
+        }
+
+        void clear_ssl_failure()
+        {
+            t_ssl_failure = SslFailure{};
+        }
+
+        std::string ssl_failure_reason()
+        {
+            switch (t_ssl_failure.error)
+            {
+            case SSL_ERROR_ZERO_RETURN:
+                return "peer closed the tls stream";
+            case SSL_ERROR_SYSCALL:
+                if (t_ssl_failure.queue == 0)
+                {
+                    return "socket error errno " + std::to_string(t_ssl_failure.errno_value);
+                }
+                return "socket io failure errno " + std::to_string(t_ssl_failure.errno_value) + ": "
+                    + ERR_reason_error_string(t_ssl_failure.queue);
+            case SSL_ERROR_SSL:
+                return "tls failure: "
+                    + std::string(ERR_reason_error_string(t_ssl_failure.queue) != nullptr
+                          ? ERR_reason_error_string(t_ssl_failure.queue)
+                          : "unknown reason");
+            case SSL_ERROR_WANT_READ:
+                return "read stalled past its deadline";
+            case SSL_ERROR_WANT_WRITE:
+                return "write stalled past its deadline";
+            default:
+                break;
+            }
+            return "ssl error code " + std::to_string(t_ssl_failure.error);
+        }
+
         bool ssl_write_all(SSL *ssl, char const *data, std::size_t size, TimePoint deadline)
         {
+            clear_ssl_failure();
             std::size_t sent = 0;
             while (sent < size)
             {
                 if (SteadyClock::now() > deadline)
                 {
+                    record_ssl_failure(SSL_ERROR_WANT_WRITE);
                     return false;
                 }
                 int const written = SSL_write(ssl, data + sent, static_cast<int>(size - sent));
@@ -120,6 +172,7 @@ namespace tournament_net
                 {
                     continue;
                 }
+                record_ssl_failure(code);
                 return false;
             }
             return true;
@@ -127,11 +180,13 @@ namespace tournament_net
 
         bool ssl_read_all(SSL *ssl, char *data, std::size_t size, TimePoint deadline)
         {
+            clear_ssl_failure();
             std::size_t received = 0;
             while (received < size)
             {
                 if (SteadyClock::now() > deadline)
                 {
+                    record_ssl_failure(SSL_ERROR_WANT_READ);
                     return false;
                 }
                 int const chunk = SSL_read(ssl, data + received, static_cast<int>(size - received));
@@ -145,6 +200,7 @@ namespace tournament_net
                 {
                     continue;
                 }
+                record_ssl_failure(code);
                 return false;
             }
             return true;
@@ -471,6 +527,12 @@ namespace tournament_net
             timeout.tv_usec = 0;
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
             setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
+        }
+
+        void clear_receive_timeout(int fd)
+        {
+            timeval timeout{};
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
         }
 
         std::string http_trim(std::string const &text)
@@ -813,6 +875,10 @@ namespace tournament_net
                 if (read_wire_frame(conn->ssl, conn->read_prefix, conn->wire, message, TimePoint::max(),
                                     send_pong) != FrameRead::Frame)
                 {
+                    reason = conn->closed.load() ? std::string("local shutdown")
+                        : (t_ssl_failure.error == SSL_ERROR_NONE
+                               ? std::string("malformed frame")
+                               : ssl_failure_reason());
                     break;
                 }
                 if (message.kind != MessageKind::Result)
@@ -947,6 +1013,7 @@ namespace tournament_net
                 conn->teardown();
                 return;
             }
+            clear_receive_timeout(conn->fd);
             std::shared_ptr<HostConnection> stale;
             {
                 std::lock_guard<std::mutex> lock(shared->mutex);
@@ -1188,6 +1255,7 @@ namespace tournament_net
 
             void finish_connect()
             {
+                clear_receive_timeout(fd);
                 connected.store(true);
                 reader = std::thread(&ClientCore::reader_loop, this);
             }
@@ -1198,12 +1266,18 @@ namespace tournament_net
                 {
                     return send_ws_pong(payload);
                 };
+                std::string reason;
                 for (;;)
                 {
                     FramedMessage message;
                     if (read_wire_frame(ssl, read_prefix, wire, message, TimePoint::max(), send_pong)
                         != FrameRead::Frame)
                     {
+                        reason = (closed.load() || stop_requested.load())
+                            ? std::string("local shutdown")
+                            : (t_ssl_failure.error == SSL_ERROR_NONE
+                                   ? std::string("malformed frame")
+                                   : ssl_failure_reason());
                         break;
                     }
                     {
@@ -1212,6 +1286,7 @@ namespace tournament_net
                     }
                     queue_cv.notify_all();
                 }
+                disconnect_reason = std::move(reason);
                 connected.store(false);
                 closed.store(true);
                 {
@@ -1265,7 +1340,9 @@ namespace tournament_net
                 }
                 if (queue.empty())
                 {
-                    error = "connection closed";
+                    error = disconnect_reason.empty()
+                        ? std::string("connection closed")
+                        : "connection closed: " + disconnect_reason;
                     return false;
                 }
                 out = std::move(queue.front());
@@ -1312,6 +1389,7 @@ namespace tournament_net
             std::atomic<bool> closed{false};
             std::atomic<bool> stop_requested{false};
             std::string connect_error;
+            std::string disconnect_reason;
         };
 
         bool client_connected(ClientCore const &core)
@@ -1325,9 +1403,11 @@ namespace tournament_net
             detail.clear();
             if (!core.connected.load() || core.closed.load())
             {
-                detail = core.connect_error.empty()
-                    ? "not connected"
-                    : "not connected: " + core.connect_error;
+                detail = !core.disconnect_reason.empty()
+                    ? "not connected: " + core.disconnect_reason
+                    : (core.connect_error.empty()
+                           ? std::string("not connected")
+                           : "not connected: " + core.connect_error);
                 return ClientConnectionBase::HelloStatus::Failed;
             }
             std::string error;
@@ -1401,9 +1481,11 @@ namespace tournament_net
             detail.clear();
             if (!core.connected.load() || core.closed.load())
             {
-                detail = core.connect_error.empty()
-                    ? "not connected"
-                    : "not connected: " + core.connect_error;
+                detail = !core.disconnect_reason.empty()
+                    ? "not connected: " + core.disconnect_reason
+                    : (core.connect_error.empty()
+                           ? std::string("not connected")
+                           : "not connected: " + core.connect_error);
                 return false;
             }
             std::string error;
