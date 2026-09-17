@@ -3,10 +3,12 @@
 #include <openssl/asn1.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
+#include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/ssl.h>
 #include <openssl/tls1.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -23,8 +25,10 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -146,16 +150,243 @@ namespace tournament_net
             return true;
         }
 
+        constexpr std::uint8_t kWsOpcodeContinuation = 0x0;
+        constexpr std::uint8_t kWsOpcodeBinary = 0x2;
+        constexpr std::uint8_t kWsOpcodeClose = 0x8;
+        constexpr std::uint8_t kWsOpcodePing = 0x9;
+        constexpr std::uint8_t kWsOpcodePong = 0xA;
+        constexpr std::size_t kMaxHttpHeadBytes = 8192;
+        constexpr std::uint64_t kWsMessageMax
+            = static_cast<std::uint64_t>(tournament_wire::max_frame_payload) + 5;
+
         enum class FrameRead
         {
             Frame,
             Closed,
         };
 
-        FrameRead read_frame(SSL *ssl, FramedMessage &out, TimePoint deadline)
+        std::string base64_encode(std::vector<std::uint8_t> const &bytes)
+        {
+            static char const alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            std::string encoded;
+            encoded.reserve((bytes.size() + 2) / 3 * 4);
+            std::size_t i = 0;
+            while (i + 3 <= bytes.size())
+            {
+                std::uint32_t const group = (static_cast<std::uint32_t>(bytes[i]) << 16)
+                    | (static_cast<std::uint32_t>(bytes[i + 1]) << 8)
+                    | static_cast<std::uint32_t>(bytes[i + 2]);
+                encoded.push_back(alphabet[(group >> 18) & 0x3F]);
+                encoded.push_back(alphabet[(group >> 12) & 0x3F]);
+                encoded.push_back(alphabet[(group >> 6) & 0x3F]);
+                encoded.push_back(alphabet[group & 0x3F]);
+                i += 3;
+            }
+            std::size_t const remaining = bytes.size() - i;
+            if (remaining == 1)
+            {
+                std::uint32_t const group = static_cast<std::uint32_t>(bytes[i]) << 16;
+                encoded.push_back(alphabet[(group >> 18) & 0x3F]);
+                encoded.push_back(alphabet[(group >> 12) & 0x3F]);
+                encoded.append("==");
+            }
+            else if (remaining == 2)
+            {
+                std::uint32_t const group = (static_cast<std::uint32_t>(bytes[i]) << 16)
+                    | (static_cast<std::uint32_t>(bytes[i + 1]) << 8);
+                encoded.push_back(alphabet[(group >> 18) & 0x3F]);
+                encoded.push_back(alphabet[(group >> 12) & 0x3F]);
+                encoded.push_back(alphabet[(group >> 6) & 0x3F]);
+                encoded.push_back('=');
+            }
+            return encoded;
+        }
+
+        bool stream_read_all(SSL *ssl, std::string &prefix, char *data, std::size_t size, TimePoint deadline)
+        {
+            if (!prefix.empty())
+            {
+                std::size_t const taken = std::min(size, prefix.size());
+                std::memcpy(data, prefix.data(), taken);
+                prefix.erase(0, taken);
+                data += taken;
+                size -= taken;
+            }
+            return size == 0 || ssl_read_all(ssl, data, size, deadline);
+        }
+
+        void ws_unmask(char *data, std::size_t size, std::uint8_t const *key)
+        {
+            for (std::size_t i = 0; i < size; ++i)
+            {
+                data[i] = static_cast<char>(static_cast<std::uint8_t>(data[i]) ^ key[i % 4]);
+            }
+        }
+
+        bool ws_write_frame(SSL *ssl, bool mask, std::uint8_t opcode, std::string const &payload, TimePoint deadline)
+        {
+            std::string frame;
+            frame.reserve(payload.size() + 14);
+            frame.push_back(static_cast<char>(0x80 | opcode));
+            std::uint8_t mask_key[4] = {};
+            char const mask_flag = mask ? static_cast<char>(0x80) : static_cast<char>(0);
+            std::size_t const length = payload.size();
+            if (length < 126)
+            {
+                frame.push_back(static_cast<char>(mask_flag | static_cast<char>(length)));
+            }
+            else if (length <= 0xFFFF)
+            {
+                frame.push_back(static_cast<char>(mask_flag | 126));
+                frame.push_back(static_cast<char>((length >> 8) & 0xFF));
+                frame.push_back(static_cast<char>(length & 0xFF));
+            }
+            else
+            {
+                frame.push_back(static_cast<char>(mask_flag | 127));
+                for (int shift = 56; shift >= 0; shift -= 8)
+                {
+                    frame.push_back(static_cast<char>((length >> shift) & 0xFF));
+                }
+            }
+            if (mask)
+            {
+                if (RAND_bytes(mask_key, sizeof mask_key) != 1)
+                {
+                    return false;
+                }
+                frame.append(reinterpret_cast<char const *>(mask_key), sizeof mask_key);
+            }
+            frame.append(payload);
+            if (mask)
+            {
+                ws_unmask(frame.data() + (frame.size() - payload.size()), payload.size(), mask_key);
+            }
+            return ssl_write_all(ssl, frame.data(), frame.size(), deadline);
+        }
+
+        using WsPongSender = std::function<bool(std::string const &)>;
+
+        FrameRead ws_read_message(SSL *ssl, std::string &prefix, bool expect_masked, TimePoint deadline,
+                                  WsPongSender const &send_pong, std::string &out)
+        {
+            std::string assembled;
+            bool fragmenting = false;
+            for (;;)
+            {
+                char header[2] = {};
+                if (!stream_read_all(ssl, prefix, header, sizeof header, deadline))
+                {
+                    return FrameRead::Closed;
+                }
+                bool const fin = (header[0] & 0x80) != 0;
+                std::uint8_t const opcode = static_cast<std::uint8_t>(header[0] & 0x0F);
+                bool const masked = (header[1] & 0x80) != 0;
+                std::uint64_t const length7 = static_cast<std::uint8_t>(header[1] & 0x7F);
+                if (masked != expect_masked)
+                {
+                    return FrameRead::Closed;
+                }
+                if (opcode >= 0x8)
+                {
+                    if (!fin || length7 > 125)
+                    {
+                        return FrameRead::Closed;
+                    }
+                    std::uint8_t mask_key[4] = {};
+                    if (masked
+                        && !stream_read_all(ssl, prefix, reinterpret_cast<char *>(mask_key), 4, deadline))
+                    {
+                        return FrameRead::Closed;
+                    }
+                    std::string control(static_cast<std::size_t>(length7), '\0');
+                    if (length7 > 0
+                        && !stream_read_all(ssl, prefix, control.data(), control.size(), deadline))
+                    {
+                        return FrameRead::Closed;
+                    }
+                    if (masked)
+                    {
+                        ws_unmask(control.data(), control.size(), mask_key);
+                    }
+                    if (opcode == kWsOpcodePing)
+                    {
+                        if (!send_pong || !send_pong(control))
+                        {
+                            return FrameRead::Closed;
+                        }
+                    }
+                    else if (opcode == kWsOpcodeClose)
+                    {
+                        return FrameRead::Closed;
+                    }
+                    continue;
+                }
+                if (opcode != kWsOpcodeBinary && opcode != kWsOpcodeContinuation)
+                {
+                    return FrameRead::Closed;
+                }
+                if (opcode == kWsOpcodeContinuation ? !fragmenting : fragmenting)
+                {
+                    return FrameRead::Closed;
+                }
+                std::uint64_t length = length7;
+                if (length7 == 126)
+                {
+                    char extended[2] = {};
+                    if (!stream_read_all(ssl, prefix, extended, sizeof extended, deadline))
+                    {
+                        return FrameRead::Closed;
+                    }
+                    length = (static_cast<std::uint64_t>(static_cast<std::uint8_t>(extended[0])) << 8)
+                        | static_cast<std::uint64_t>(static_cast<std::uint8_t>(extended[1]));
+                }
+                else if (length7 == 127)
+                {
+                    char extended[8] = {};
+                    if (!stream_read_all(ssl, prefix, extended, sizeof extended, deadline))
+                    {
+                        return FrameRead::Closed;
+                    }
+                    length = 0;
+                    for (char byte : extended)
+                    {
+                        length = (length << 8) | static_cast<std::uint64_t>(static_cast<std::uint8_t>(byte));
+                    }
+                }
+                if (length > kWsMessageMax
+                    || static_cast<std::uint64_t>(assembled.size()) + length > kWsMessageMax)
+                {
+                    return FrameRead::Closed;
+                }
+                std::uint8_t mask_key[4] = {};
+                if (masked && !stream_read_all(ssl, prefix, reinterpret_cast<char *>(mask_key), 4, deadline))
+                {
+                    return FrameRead::Closed;
+                }
+                std::string chunk(static_cast<std::size_t>(length), '\0');
+                if (length > 0 && !stream_read_all(ssl, prefix, chunk.data(), chunk.size(), deadline))
+                {
+                    return FrameRead::Closed;
+                }
+                if (masked)
+                {
+                    ws_unmask(chunk.data(), chunk.size(), mask_key);
+                }
+                assembled.append(chunk);
+                fragmenting = true;
+                if (fin)
+                {
+                    out = std::move(assembled);
+                    return FrameRead::Frame;
+                }
+            }
+        }
+
+        FrameRead read_frame(SSL *ssl, std::string &prefix, FramedMessage &out, TimePoint deadline)
         {
             char header[5] = {};
-            if (!ssl_read_all(ssl, header, sizeof header, deadline))
+            if (!stream_read_all(ssl, prefix, header, sizeof header, deadline))
             {
                 return FrameRead::Closed;
             }
@@ -179,10 +410,58 @@ namespace tournament_net
             return FrameRead::Frame;
         }
 
-        bool ssl_write_frame(SSL *ssl, MessageKind kind, std::string const &payload, TimePoint deadline)
+        struct WireMode
+        {
+            bool websocket = false;
+            bool peer_masks = false;
+
+            bool send_masked() const
+            {
+                return websocket && !peer_masks;
+            }
+        };
+
+        FrameRead read_wire_frame(SSL *ssl, std::string &prefix, WireMode wire, FramedMessage &out,
+                                  TimePoint deadline, WsPongSender const &send_pong)
+        {
+            if (!wire.websocket)
+            {
+                return read_frame(ssl, prefix, out, deadline);
+            }
+            std::string message;
+            if (ws_read_message(ssl, prefix, wire.peer_masks, deadline, send_pong, message) != FrameRead::Frame)
+            {
+                return FrameRead::Closed;
+            }
+            if (message.size() < 5)
+            {
+                return FrameRead::Closed;
+            }
+            unsigned char const *raw = reinterpret_cast<unsigned char const *>(message.data());
+            std::uint32_t const length = static_cast<std::uint32_t>(raw[0])
+                | (static_cast<std::uint32_t>(raw[1]) << 8)
+                | (static_cast<std::uint32_t>(raw[2]) << 16)
+                | (static_cast<std::uint32_t>(raw[3]) << 24);
+            std::uint8_t const kind = raw[4];
+            if (length > tournament_wire::max_frame_payload || kind < 1 || kind > 5
+                || message.size() != static_cast<std::size_t>(length) + 5)
+            {
+                return FrameRead::Closed;
+            }
+            out.kind = static_cast<MessageKind>(kind);
+            out.payload = message.substr(5);
+            return FrameRead::Frame;
+        }
+
+        bool write_wire_frame(SSL *ssl, WireMode wire, MessageKind kind, std::string const &payload,
+                              TimePoint deadline)
         {
             std::string const frame = tournament_wire::frame_message(kind, payload);
-            return ssl_write_all(ssl, frame.data(), frame.size(), deadline);
+            if (!wire.websocket)
+            {
+                return ssl_write_all(ssl, frame.data(), frame.size(), deadline);
+            }
+            return ws_write_frame(ssl, wire.send_masked(), kWsOpcodeBinary, frame, deadline);
         }
 
         void set_socket_timeouts(int fd)
@@ -192,6 +471,91 @@ namespace tournament_net
             timeout.tv_usec = 0;
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
             setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
+        }
+
+        std::string http_trim(std::string const &text)
+        {
+            std::size_t const begin = text.find_first_not_of(" \t");
+            if (begin == std::string::npos)
+            {
+                return {};
+            }
+            std::size_t const end = text.find_last_not_of(" \t");
+            return text.substr(begin, end - begin + 1);
+        }
+
+        std::string http_lower(std::string const &text)
+        {
+            std::string lowered;
+            lowered.reserve(text.size());
+            for (char c : text)
+            {
+                if (c >= 'A' && c <= 'Z')
+                {
+                    c = static_cast<char>(c - 'A' + 'a');
+                }
+                lowered.push_back(c);
+            }
+            return lowered;
+        }
+
+        struct HttpHead
+        {
+            std::string first_line;
+            std::map<std::string, std::string> fields;
+        };
+
+        bool read_http_head(SSL *ssl, std::string &prefix, TimePoint deadline, HttpHead &head, std::string &rest)
+        {
+            std::string text = std::move(prefix);
+            prefix.clear();
+            while (text.find("\r\n\r\n") == std::string::npos)
+            {
+                if (text.size() > kMaxHttpHeadBytes || SteadyClock::now() > deadline)
+                {
+                    return false;
+                }
+                char chunk[512] = {};
+                int const received = SSL_read(ssl, chunk, sizeof chunk);
+                if (received <= 0)
+                {
+                    int const code = SSL_get_error(ssl, received);
+                    if (code == SSL_ERROR_WANT_READ || code == SSL_ERROR_WANT_WRITE)
+                    {
+                        continue;
+                    }
+                    return false;
+                }
+                text.append(chunk, static_cast<std::size_t>(received));
+            }
+            std::size_t const terminator = text.find("\r\n\r\n");
+            rest = text.substr(terminator + 4);
+            std::size_t const first_end = text.find("\r\n");
+            if (first_end == std::string::npos || first_end > terminator)
+            {
+                return false;
+            }
+            head.first_line = text.substr(0, first_end);
+            std::size_t position = first_end + 2;
+            while (position < terminator)
+            {
+                std::size_t const line_end = text.find("\r\n", position);
+                if (line_end == std::string::npos || line_end > terminator)
+                {
+                    break;
+                }
+                std::string const line = text.substr(position, line_end - position);
+                position = line_end + 2;
+                std::size_t const colon = line.find(':');
+                if (colon == std::string::npos)
+                {
+                    continue;
+                }
+                std::string const name = http_lower(http_trim(line.substr(0, colon)));
+                std::string const value = http_trim(line.substr(colon + 1));
+                head.fields.emplace(name, value);
+            }
+            return true;
         }
 
         bool ssl_handshake(SSL *ssl, bool server, TimePoint deadline)
@@ -230,6 +594,8 @@ namespace tournament_net
             DeviceId device = 0;
             int fd = -1;
             SSL *ssl = nullptr;
+            WireMode wire;
+            std::string read_prefix;
             std::mutex write_mutex;
             std::mutex pending_mutex;
             std::condition_variable pending_cv;
@@ -244,12 +610,27 @@ namespace tournament_net
                     error = "connection closed";
                     return false;
                 }
-                if (ssl_write_frame(ssl, kind, payload, deadline_after(kWriteTimeoutMs)))
+                if (write_wire_frame(ssl, wire, kind, payload, deadline_after(kWriteTimeoutMs)))
                 {
                     return true;
                 }
                 error = "frame write failed";
                 return false;
+            }
+
+            bool send_pong(std::string const &payload)
+            {
+                if (!wire.websocket)
+                {
+                    return true;
+                }
+                std::lock_guard<std::mutex> lock(write_mutex);
+                if (closed.load())
+                {
+                    return false;
+                }
+                return ws_write_frame(ssl, wire.send_masked(), kWsOpcodePong, payload,
+                                      deadline_after(kWriteTimeoutMs));
             }
 
             void fail_all(DeliveryStatus status)
@@ -318,8 +699,13 @@ namespace tournament_net
 
         bool validate_hello(HostShared &shared, HostConnection &conn, std::string &reason)
         {
+            WsPongSender const send_pong = [&conn](std::string const &payload)
+            {
+                return conn.send_pong(payload);
+            };
             FramedMessage message;
-            if (read_frame(conn.ssl, message, deadline_after(kHandshakeTimeoutMs)) != FrameRead::Frame)
+            if (read_wire_frame(conn.ssl, conn.read_prefix, conn.wire, message,
+                                deadline_after(kHandshakeTimeoutMs), send_pong) != FrameRead::Frame)
             {
                 reason = "no hello frame received";
                 return false;
@@ -410,6 +796,10 @@ namespace tournament_net
 
         void connection_reader(std::shared_ptr<HostShared> shared, std::shared_ptr<HostConnection> conn)
         {
+            WsPongSender const send_pong = [&conn = *conn](std::string const &payload)
+            {
+                return conn.send_pong(payload);
+            };
             for (;;)
             {
                 if (conn->closed.load())
@@ -417,7 +807,8 @@ namespace tournament_net
                     break;
                 }
                 FramedMessage message;
-                if (read_frame(conn->ssl, message, TimePoint::max()) != FrameRead::Frame)
+                if (read_wire_frame(conn->ssl, conn->read_prefix, conn->wire, message, TimePoint::max(),
+                                    send_pong) != FrameRead::Frame)
                 {
                     break;
                 }
@@ -460,12 +851,61 @@ namespace tournament_net
             }
         }
 
+        bool ws_server_handshake(HostConnection &conn)
+        {
+            TimePoint const deadline = deadline_after(kHandshakeTimeoutMs);
+            HttpHead head;
+            std::string rest;
+            if (!read_http_head(conn.ssl, conn.read_prefix, deadline, head, rest))
+            {
+                return false;
+            }
+            conn.read_prefix = std::move(rest);
+            auto const upgrade = head.fields.find("upgrade");
+            auto const key = head.fields.find("sec-websocket-key");
+            if (upgrade == head.fields.end() || http_lower(upgrade->second) != "websocket")
+            {
+                return false;
+            }
+            if (key == head.fields.end() || key->second.empty())
+            {
+                return false;
+            }
+            std::string const response = "HTTP/1.1 101 Switching Protocols\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Accept: " + websocket_accept_token(key->second) + "\r\n"
+                "\r\n";
+            return ssl_write_all(conn.ssl, response.data(), response.size(), deadline);
+        }
+
+        bool negotiate_wire(HostConnection &conn)
+        {
+            char probe[4] = {};
+            if (!ssl_read_all(conn.ssl, probe, sizeof probe, deadline_after(kHandshakeTimeoutMs)))
+            {
+                return false;
+            }
+            conn.read_prefix.assign(probe, sizeof probe);
+            if (std::memcmp(probe, "GET ", sizeof probe) != 0)
+            {
+                return true;
+            }
+            conn.wire = WireMode{true, true};
+            return ws_server_handshake(conn);
+        }
+
         void handle_connection(std::shared_ptr<HostShared> shared, std::shared_ptr<HostConnection> conn)
         {
             set_socket_timeouts(conn->fd);
             conn->ssl = SSL_new(shared->ctx);
             if (conn->ssl == nullptr || SSL_set_fd(conn->ssl, conn->fd) != 1
                 || !ssl_handshake(conn->ssl, true, deadline_after(kHandshakeTimeoutMs)))
+            {
+                conn->teardown();
+                return;
+            }
+            if (!negotiate_wire(*conn))
             {
                 conn->teardown();
                 return;
@@ -483,8 +923,8 @@ namespace tournament_net
                 std::lock_guard<std::mutex> write_lock(conn->write_mutex);
                 if (!conn->closed.load())
                 {
-                    accept_sent = ssl_write_frame(conn->ssl, MessageKind::Accept, "",
-                                                  deadline_after(kWriteTimeoutMs));
+                    accept_sent = write_wire_frame(conn->ssl, conn->wire, MessageKind::Accept, "",
+                                                   deadline_after(kWriteTimeoutMs));
                 }
             }
             if (!accept_sent)
@@ -556,6 +996,394 @@ namespace tournament_net
                 conn->fd = fd;
                 shared->live_connections.push_back(conn);
                 std::thread(handle_connection, shared, conn).detach();
+            }
+        }
+
+        struct ClientCore
+        {
+            ~ClientCore()
+            {
+                if (ctx != nullptr)
+                {
+                    SSL_CTX_free(ctx);
+                }
+            }
+
+            bool tcp_connect(std::string const &host, std::uint16_t port, std::string &error)
+            {
+                addrinfo hints{};
+                hints.ai_family = AF_UNSPEC;
+                hints.ai_socktype = SOCK_STREAM;
+                addrinfo *listing = nullptr;
+                if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &listing) != 0)
+                {
+                    error = "address resolution failed for " + host;
+                    return false;
+                }
+                for (addrinfo const *entry = listing; entry != nullptr && fd < 0; entry = entry->ai_next)
+                {
+                    int candidate = socket(entry->ai_family, entry->ai_socktype, entry->ai_protocol);
+                    if (candidate < 0)
+                    {
+                        continue;
+                    }
+                    if (::connect(candidate, entry->ai_addr, entry->ai_addrlen) == 0)
+                    {
+                        fd = candidate;
+                    }
+                    else
+                    {
+                        ::close(candidate);
+                    }
+                }
+                freeaddrinfo(listing);
+                if (fd < 0)
+                {
+                    error = "tcp connect failed to " + host;
+                    return false;
+                }
+                set_socket_timeouts(fd);
+                return true;
+            }
+
+            bool tls_handshake_pinned(std::string const &expected_fingerprint, std::string &error)
+            {
+                ctx = SSL_CTX_new(TLS_client_method());
+                if (ctx == nullptr)
+                {
+                    error = "TLS client context creation failed";
+                    return false;
+                }
+                SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+                ssl = SSL_new(ctx);
+                if (ssl == nullptr || SSL_set_fd(ssl, fd) != 1
+                    || !ssl_handshake(ssl, false, deadline_after(kHelloReplyTimeoutMs)))
+                {
+                    error = "TLS handshake failed";
+                    return false;
+                }
+                X509 *certificate = SSL_get1_peer_certificate(ssl);
+                if (certificate == nullptr)
+                {
+                    error = "server presented no certificate";
+                    return false;
+                }
+                unsigned char *der = nullptr;
+                int const length = i2d_X509(certificate, &der);
+                X509_free(certificate);
+                if (length <= 0 || der == nullptr)
+                {
+                    if (der != nullptr)
+                    {
+                        OPENSSL_free(der);
+                    }
+                    error = "peer certificate encoding failed";
+                    return false;
+                }
+                std::vector<std::uint8_t> digest(SHA256_DIGEST_LENGTH);
+                SHA256(der, static_cast<std::size_t>(length), digest.data());
+                OPENSSL_free(der);
+                if (normalize_fingerprint(expected_fingerprint) != tournament_bytes::encode_hex(digest))
+                {
+                    error = "certificate fingerprint mismatch";
+                    return false;
+                }
+                return true;
+            }
+
+            bool tls_handshake_ca(std::string const &host, std::string &error)
+            {
+                ctx = SSL_CTX_new(TLS_client_method());
+                if (ctx == nullptr)
+                {
+                    error = "TLS client context creation failed";
+                    return false;
+                }
+                SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+                if (SSL_CTX_set_default_verify_paths(ctx) != 1)
+                {
+                    error = "default verify paths unavailable";
+                    return false;
+                }
+                ssl = SSL_new(ctx);
+                if (ssl == nullptr || SSL_set_fd(ssl, fd) != 1)
+                {
+                    error = "TLS client setup failed";
+                    return false;
+                }
+                SSL_set_verify(ssl, SSL_VERIFY_PEER, nullptr);
+                if (!ssl_handshake(ssl, false, deadline_after(kHelloReplyTimeoutMs)))
+                {
+                    error = "TLS handshake failed";
+                    return false;
+                }
+                if (SSL_get_verify_result(ssl) != X509_V_OK)
+                {
+                    error = "certificate verification failed";
+                    return false;
+                }
+                X509 *certificate = SSL_get1_peer_certificate(ssl);
+                if (certificate == nullptr)
+                {
+                    error = "server presented no certificate";
+                    return false;
+                }
+                int const matched = X509_check_host(certificate, host.c_str(), host.size(), 0, nullptr);
+                X509_free(certificate);
+                if (matched != 1)
+                {
+                    error = "certificate hostname mismatch";
+                    return false;
+                }
+                return true;
+            }
+
+            void finish_connect()
+            {
+                connected.store(true);
+                reader = std::thread(&ClientCore::reader_loop, this);
+            }
+
+            void reader_loop()
+            {
+                WsPongSender const send_pong = [this](std::string const &payload)
+                {
+                    return send_ws_pong(payload);
+                };
+                for (;;)
+                {
+                    FramedMessage message;
+                    if (read_wire_frame(ssl, read_prefix, wire, message, TimePoint::max(), send_pong)
+                        != FrameRead::Frame)
+                    {
+                        break;
+                    }
+                    {
+                        std::lock_guard<std::mutex> lock(queue_mutex);
+                        queue.push_back(std::move(message));
+                    }
+                    queue_cv.notify_all();
+                }
+                connected.store(false);
+                closed.store(true);
+                {
+                    std::lock_guard<std::mutex> lock(queue_mutex);
+                }
+                queue_cv.notify_all();
+            }
+
+            bool write_frame(MessageKind kind, std::string const &payload, std::string &error)
+            {
+                std::lock_guard<std::mutex> lock(write_mutex);
+                if (closed.load())
+                {
+                    error = "connection closed";
+                    return false;
+                }
+                if (write_wire_frame(ssl, wire, kind, payload, deadline_after(kWriteTimeoutMs)))
+                {
+                    return true;
+                }
+                error = "frame write failed";
+                return false;
+            }
+
+            bool send_ws_pong(std::string const &payload)
+            {
+                if (!wire.websocket)
+                {
+                    return true;
+                }
+                std::lock_guard<std::mutex> lock(write_mutex);
+                if (closed.load())
+                {
+                    return false;
+                }
+                return ws_write_frame(ssl, wire.send_masked(), kWsOpcodePong, payload,
+                                      deadline_after(kWriteTimeoutMs));
+            }
+
+            bool pop_frame(FramedMessage &out, TimePoint deadline, std::string &error)
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex);
+                bool const ready = queue_cv.wait_until(lock, deadline, [&]()
+                {
+                    return !queue.empty() || !connected.load();
+                });
+                if (!ready && queue.empty())
+                {
+                    error = "timed out waiting for frame";
+                    return false;
+                }
+                if (queue.empty())
+                {
+                    error = "connection closed";
+                    return false;
+                }
+                out = std::move(queue.front());
+                queue.pop_front();
+                return true;
+            }
+
+            void mark_disconnected()
+            {
+                connected.store(false);
+                if (!closed.exchange(true) && fd >= 0)
+                {
+                    shutdown(fd, SHUT_RDWR);
+                }
+            }
+
+            void release_socket()
+            {
+                std::lock_guard<std::mutex> lock(write_mutex);
+                if (ssl != nullptr)
+                {
+                    SSL_shutdown(ssl);
+                    SSL_free(ssl);
+                    ssl = nullptr;
+                }
+                if (fd >= 0)
+                {
+                    ::close(fd);
+                    fd = -1;
+                }
+            }
+
+            int fd = -1;
+            SSL *ssl = nullptr;
+            SSL_CTX *ctx = nullptr;
+            WireMode wire;
+            std::string read_prefix;
+            std::thread reader;
+            std::mutex queue_mutex;
+            std::condition_variable queue_cv;
+            std::deque<FramedMessage> queue;
+            std::mutex write_mutex;
+            std::atomic<bool> connected{false};
+            std::atomic<bool> closed{false};
+            std::atomic<bool> stop_requested{false};
+            std::string connect_error;
+        };
+
+        bool client_connected(ClientCore const &core)
+        {
+            return core.connected.load() && !core.closed.load();
+        }
+
+        ClientConnectionBase::HelloStatus client_send_hello(ClientCore &core, HelloMessage const &hello,
+                                                            std::string &detail)
+        {
+            detail.clear();
+            if (!core.connected.load() || core.closed.load())
+            {
+                detail = core.connect_error.empty()
+                    ? "not connected"
+                    : "not connected: " + core.connect_error;
+                return ClientConnectionBase::HelloStatus::Failed;
+            }
+            std::string error;
+            if (!core.write_frame(MessageKind::Hello, tournament_wire::encode_hello(hello), error))
+            {
+                detail = "hello write failed: " + error;
+                core.mark_disconnected();
+                return ClientConnectionBase::HelloStatus::Failed;
+            }
+            FramedMessage message;
+            std::string wait_error;
+            if (!core.pop_frame(message, deadline_after(kHelloReplyTimeoutMs), wait_error))
+            {
+                detail = wait_error;
+                return ClientConnectionBase::HelloStatus::Failed;
+            }
+            if (message.kind == MessageKind::Accept)
+            {
+                return ClientConnectionBase::HelloStatus::Accepted;
+            }
+            if (message.kind == MessageKind::Reject)
+            {
+                auto const reason = tournament_wire::decode_reject(as_bytes(message.payload));
+                detail = reason.value_or("malformed reject payload");
+                return ClientConnectionBase::HelloStatus::Rejected;
+            }
+            detail = "unexpected frame kind while awaiting accept";
+            return ClientConnectionBase::HelloStatus::Failed;
+        }
+
+        std::optional<AssignmentBatch> client_next_assignment(ClientCore &core, std::uint64_t timeout_ms,
+                                                              std::string &detail)
+        {
+            detail.clear();
+            if (!core.connected.load() && core.queue.empty())
+            {
+                detail = core.connect_error.empty()
+                    ? "not connected"
+                    : "not connected: " + core.connect_error;
+                return std::nullopt;
+            }
+            FramedMessage message;
+            std::string error;
+            if (!core.pop_frame(message, deadline_after(timeout_ms), error))
+            {
+                detail = error;
+                return std::nullopt;
+            }
+            if (message.kind == MessageKind::Assignment)
+            {
+                auto const batch = tournament_wire::decode_assignment(as_bytes(message.payload));
+                if (!batch)
+                {
+                    detail = "assignment payload failed to decode";
+                    return std::nullopt;
+                }
+                return batch;
+            }
+            if (message.kind == MessageKind::Reject)
+            {
+                auto const reason = tournament_wire::decode_reject(as_bytes(message.payload));
+                detail = std::string("rejected: ") + reason.value_or("malformed reject payload");
+                return std::nullopt;
+            }
+            detail = "unexpected frame kind while awaiting assignment";
+            return std::nullopt;
+        }
+
+        bool client_send_result(ClientCore &core, SignedResult const &result, std::string &detail)
+        {
+            detail.clear();
+            if (!core.connected.load() || core.closed.load())
+            {
+                detail = core.connect_error.empty()
+                    ? "not connected"
+                    : "not connected: " + core.connect_error;
+                return false;
+            }
+            std::string error;
+            if (!core.write_frame(MessageKind::Result, tournament_wire::encode_result_message(result), error))
+            {
+                detail = "result write failed: " + error;
+                core.mark_disconnected();
+                return false;
+            }
+            return true;
+        }
+
+        void client_close(ClientCore &core)
+        {
+            bool const first = !core.stop_requested.exchange(true);
+            if (first && core.fd >= 0)
+            {
+                shutdown(core.fd, SHUT_RDWR);
+            }
+            if (core.reader.joinable())
+            {
+                core.reader.join();
+            }
+            core.connected.store(false);
+            core.closed.store(true);
+            if (first)
+            {
+                core.release_socket();
             }
         }
     }
@@ -740,6 +1568,15 @@ namespace tournament_net
         return tournament_bytes::encode_hex(digest);
     }
 
+    std::string websocket_accept_token(std::string const &sec_websocket_key)
+    {
+        static std::string const guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        std::string const input = sec_websocket_key + guid;
+        std::vector<std::uint8_t> digest(SHA_DIGEST_LENGTH);
+        SHA1(reinterpret_cast<unsigned char const *>(input.data()), input.size(), digest.data());
+        return base64_encode(digest);
+    }
+
     struct HostTransport::Impl
     {
         Impl(std::shared_ptr<tournament_registry::DeviceRegistry> registry_in, NetConfig config_in)
@@ -812,33 +1649,64 @@ namespace tournament_net
             error = "certificate or private key rejected from configured paths";
             return false;
         }
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0)
+        addrinfo hints{};
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_PASSIVE;
+        addrinfo *resolved = nullptr;
+        if (getaddrinfo(impl_->shared->config.listen_address.c_str(),
+                        std::to_string(impl_->shared->config.port).c_str(), &hints, &resolved) != 0
+            || resolved == nullptr)
         {
             SSL_CTX_free(ctx);
-            error = "listening socket creation failed";
+            error = "address resolution failed for " + impl_->shared->config.listen_address;
             return false;
         }
-        int const reuse = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof reuse);
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_port = htons(impl_->shared->config.port);
-        if (inet_pton(AF_INET, impl_->shared->config.listen_address.c_str(), &address.sin_addr) != 1
-            || bind(fd, reinterpret_cast<sockaddr const *>(&address), sizeof address) != 0
-            || listen(fd, kListenBacklog) != 0)
+        int fd = -1;
+        for (addrinfo const *entry = resolved; entry != nullptr && fd < 0; entry = entry->ai_next)
         {
-            close(fd);
+            int candidate = socket(entry->ai_family, entry->ai_socktype, entry->ai_protocol);
+            if (candidate < 0)
+            {
+                continue;
+            }
+            int const reuse = 1;
+            setsockopt(candidate, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof reuse);
+            if (entry->ai_family == AF_INET6)
+            {
+                int const v6only = 0;
+                setsockopt(candidate, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof v6only);
+            }
+            if (bind(candidate, entry->ai_addr, entry->ai_addrlen) == 0
+                && listen(candidate, kListenBacklog) == 0)
+            {
+                fd = candidate;
+            }
+            else
+            {
+                close(candidate);
+            }
+        }
+        freeaddrinfo(resolved);
+        if (fd < 0)
+        {
             SSL_CTX_free(ctx);
             error = "bind or listen failed on " + impl_->shared->config.listen_address;
             return false;
         }
-        sockaddr_in bound{};
+        sockaddr_storage bound{};
         socklen_t bound_length = sizeof bound;
         std::uint16_t assigned = 0;
         if (getsockname(fd, reinterpret_cast<sockaddr *>(&bound), &bound_length) == 0)
         {
-            assigned = ntohs(bound.sin_port);
+            if (bound.ss_family == AF_INET6)
+            {
+                assigned = ntohs(reinterpret_cast<sockaddr_in6 const *>(&bound)->sin6_port);
+            }
+            else
+            {
+                assigned = ntohs(reinterpret_cast<sockaddr_in const *>(&bound)->sin_port);
+            }
         }
         impl_->shared->ctx = ctx;
         impl_->listen_fd = fd;
@@ -976,194 +1844,22 @@ namespace tournament_net
         return {DeliveryStatus::Timeout, {}};
     }
 
-    struct ClientConnection::Impl
+    struct ClientConnection::Impl : ClientCore
     {
-        ~Impl()
-        {
-            if (ctx != nullptr)
-            {
-                SSL_CTX_free(ctx);
-            }
-        }
-
         bool establish(std::string const &host, std::uint16_t port, std::string const &expected_fingerprint,
                        std::string &error)
         {
-            addrinfo hints{};
-            hints.ai_family = AF_UNSPEC;
-            hints.ai_socktype = SOCK_STREAM;
-            addrinfo *listing = nullptr;
-            if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &listing) != 0)
+            if (!tcp_connect(host, port, error))
             {
-                error = "address resolution failed for " + host;
                 return false;
             }
-            for (addrinfo const *entry = listing; entry != nullptr && fd < 0; entry = entry->ai_next)
+            if (!tls_handshake_pinned(expected_fingerprint, error))
             {
-                int candidate = socket(entry->ai_family, entry->ai_socktype, entry->ai_protocol);
-                if (candidate < 0)
-                {
-                    continue;
-                }
-                if (::connect(candidate, entry->ai_addr, entry->ai_addrlen) == 0)
-                {
-                    fd = candidate;
-                }
-                else
-                {
-                    ::close(candidate);
-                }
-            }
-            freeaddrinfo(listing);
-            if (fd < 0)
-            {
-                error = "tcp connect failed to " + host;
                 return false;
             }
-            set_socket_timeouts(fd);
-            ctx = SSL_CTX_new(TLS_client_method());
-            if (ctx == nullptr)
-            {
-                error = "TLS client context creation failed";
-                return false;
-            }
-            SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
-            ssl = SSL_new(ctx);
-            if (ssl == nullptr || SSL_set_fd(ssl, fd) != 1
-                || !ssl_handshake(ssl, false, deadline_after(kHelloReplyTimeoutMs)))
-            {
-                error = "TLS handshake failed";
-                return false;
-            }
-            X509 *certificate = SSL_get1_peer_certificate(ssl);
-            if (certificate == nullptr)
-            {
-                error = "server presented no certificate";
-                return false;
-            }
-            unsigned char *der = nullptr;
-            int const length = i2d_X509(certificate, &der);
-            X509_free(certificate);
-            if (length <= 0 || der == nullptr)
-            {
-                if (der != nullptr)
-                {
-                    OPENSSL_free(der);
-                }
-                error = "peer certificate encoding failed";
-                return false;
-            }
-            std::vector<std::uint8_t> digest(SHA256_DIGEST_LENGTH);
-            SHA256(der, static_cast<std::size_t>(length), digest.data());
-            OPENSSL_free(der);
-            if (normalize_fingerprint(expected_fingerprint) != tournament_bytes::encode_hex(digest))
-            {
-                error = "certificate fingerprint mismatch";
-                return false;
-            }
-            connected.store(true);
-            reader = std::thread(&Impl::reader_loop, this);
+            finish_connect();
             return true;
         }
-
-        void reader_loop()
-        {
-            for (;;)
-            {
-                FramedMessage message;
-                if (read_frame(ssl, message, TimePoint::max()) != FrameRead::Frame)
-                {
-                    break;
-                }
-                {
-                    std::lock_guard<std::mutex> lock(queue_mutex);
-                    queue.push_back(std::move(message));
-                }
-                queue_cv.notify_all();
-            }
-            connected.store(false);
-            closed.store(true);
-            {
-                std::lock_guard<std::mutex> lock(queue_mutex);
-            }
-            queue_cv.notify_all();
-        }
-
-        bool write_frame(MessageKind kind, std::string const &payload, std::string &error)
-        {
-            std::lock_guard<std::mutex> lock(write_mutex);
-            if (closed.load())
-            {
-                error = "connection closed";
-                return false;
-            }
-            if (ssl_write_frame(ssl, kind, payload, deadline_after(kWriteTimeoutMs)))
-            {
-                return true;
-            }
-            error = "frame write failed";
-            return false;
-        }
-
-        bool pop_frame(FramedMessage &out, TimePoint deadline, std::string &error)
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex);
-            bool const ready = queue_cv.wait_until(lock, deadline, [&]()
-            {
-                return !queue.empty() || !connected.load();
-            });
-            if (!ready && queue.empty())
-            {
-                error = "timed out waiting for frame";
-                return false;
-            }
-            if (queue.empty())
-            {
-                error = "connection closed";
-                return false;
-            }
-            out = std::move(queue.front());
-            queue.pop_front();
-            return true;
-        }
-
-        void mark_disconnected()
-        {
-            connected.store(false);
-            if (!closed.exchange(true) && fd >= 0)
-            {
-                shutdown(fd, SHUT_RDWR);
-            }
-        }
-
-        void release_socket()
-        {
-            std::lock_guard<std::mutex> lock(write_mutex);
-            if (ssl != nullptr)
-            {
-                SSL_shutdown(ssl);
-                SSL_free(ssl);
-                ssl = nullptr;
-            }
-            if (fd >= 0)
-            {
-                ::close(fd);
-                fd = -1;
-            }
-        }
-
-        int fd = -1;
-        SSL *ssl = nullptr;
-        SSL_CTX *ctx = nullptr;
-        std::thread reader;
-        std::mutex queue_mutex;
-        std::condition_variable queue_cv;
-        std::deque<FramedMessage> queue;
-        std::mutex write_mutex;
-        std::atomic<bool> connected{false};
-        std::atomic<bool> closed{false};
-        std::atomic<bool> stop_requested{false};
-        std::string connect_error;
     };
 
     ClientConnection::ClientConnection(std::string host, std::uint16_t port, std::string expected_fingerprint)
@@ -1186,102 +1882,22 @@ namespace tournament_net
 
     bool ClientConnection::connected() const
     {
-        return impl_->connected.load() && !impl_->closed.load();
+        return client_connected(*impl_);
     }
 
     ClientConnection::HelloStatus ClientConnection::send_hello(HelloMessage const &hello, std::string &detail)
     {
-        detail.clear();
-        if (!impl_->connected.load() || impl_->closed.load())
-        {
-            detail = impl_->connect_error.empty()
-                ? "not connected"
-                : "not connected: " + impl_->connect_error;
-            return HelloStatus::Failed;
-        }
-        std::string error;
-        if (!impl_->write_frame(MessageKind::Hello, tournament_wire::encode_hello(hello), error))
-        {
-            detail = "hello write failed: " + error;
-            impl_->mark_disconnected();
-            return HelloStatus::Failed;
-        }
-        FramedMessage message;
-        std::string wait_error;
-        if (!impl_->pop_frame(message, deadline_after(kHelloReplyTimeoutMs), wait_error))
-        {
-            detail = wait_error;
-            return HelloStatus::Failed;
-        }
-        if (message.kind == MessageKind::Accept)
-        {
-            return HelloStatus::Accepted;
-        }
-        if (message.kind == MessageKind::Reject)
-        {
-            auto const reason = tournament_wire::decode_reject(as_bytes(message.payload));
-            detail = reason.value_or("malformed reject payload");
-            return HelloStatus::Rejected;
-        }
-        detail = "unexpected frame kind while awaiting accept";
-        return HelloStatus::Failed;
+        return client_send_hello(*impl_, hello, detail);
     }
 
     std::optional<AssignmentBatch> ClientConnection::next_assignment(std::uint64_t timeout_ms, std::string &detail)
     {
-        detail.clear();
-        if (!impl_->connected.load() && impl_->queue.empty())
-        {
-            detail = impl_->connect_error.empty()
-                ? "not connected"
-                : "not connected: " + impl_->connect_error;
-            return std::nullopt;
-        }
-        FramedMessage message;
-        std::string error;
-        if (!impl_->pop_frame(message, deadline_after(timeout_ms), error))
-        {
-            detail = error;
-            return std::nullopt;
-        }
-        if (message.kind == MessageKind::Assignment)
-        {
-            auto const batch = tournament_wire::decode_assignment(as_bytes(message.payload));
-            if (!batch)
-            {
-                detail = "assignment payload failed to decode";
-                return std::nullopt;
-            }
-            return batch;
-        }
-        if (message.kind == MessageKind::Reject)
-        {
-            auto const reason = tournament_wire::decode_reject(as_bytes(message.payload));
-            detail = std::string("rejected: ") + reason.value_or("malformed reject payload");
-            return std::nullopt;
-        }
-        detail = "unexpected frame kind while awaiting assignment";
-        return std::nullopt;
+        return client_next_assignment(*impl_, timeout_ms, detail);
     }
 
     bool ClientConnection::send_result(SignedResult const &result, std::string &detail)
     {
-        detail.clear();
-        if (!impl_->connected.load() || impl_->closed.load())
-        {
-            detail = impl_->connect_error.empty()
-                ? "not connected"
-                : "not connected: " + impl_->connect_error;
-            return false;
-        }
-        std::string error;
-        if (!impl_->write_frame(MessageKind::Result, tournament_wire::encode_result_message(result), error))
-        {
-            detail = "result write failed: " + error;
-            impl_->mark_disconnected();
-            return false;
-        }
-        return true;
+        return client_send_result(*impl_, result, detail);
     }
 
     void ClientConnection::close()
@@ -1290,20 +1906,128 @@ namespace tournament_net
         {
             return;
         }
-        bool const first = !impl_->stop_requested.exchange(true);
-        if (first && impl_->fd >= 0)
+        client_close(*impl_);
+    }
+
+    struct WsClientConnection::Impl : ClientCore
+    {
+        bool ws_upgrade(std::string const &host, std::uint16_t port, std::string const &path, std::string &error)
         {
-            shutdown(impl_->fd, SHUT_RDWR);
+            TimePoint const deadline = deadline_after(kHelloReplyTimeoutMs);
+            std::vector<std::uint8_t> nonce(16);
+            if (RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) != 1)
+            {
+                error = "websocket key generation failed";
+                return false;
+            }
+            std::string const key = base64_encode(nonce);
+            std::string const request = "GET " + (path.empty() ? std::string("/") : path) + " HTTP/1.1\r\n"
+                "Host: " + host + ":" + std::to_string(port) + "\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Key: " + key + "\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "\r\n";
+            if (!ssl_write_all(ssl, request.data(), request.size(), deadline))
+            {
+                error = "websocket upgrade request failed";
+                return false;
+            }
+            HttpHead head;
+            std::string rest;
+            if (!read_http_head(ssl, read_prefix, deadline, head, rest))
+            {
+                error = "websocket upgrade response incomplete";
+                return false;
+            }
+            read_prefix = std::move(rest);
+            if (head.first_line.size() < 12 || head.first_line.compare(8, 4, " 101") != 0)
+            {
+                error = "websocket upgrade refused";
+                return false;
+            }
+            auto const accept = head.fields.find("sec-websocket-accept");
+            if (accept == head.fields.end() || accept->second != websocket_accept_token(key))
+            {
+                error = "websocket accept key mismatch";
+                return false;
+            }
+            return true;
         }
-        if (impl_->reader.joinable())
+
+        bool establish(std::string const &host, std::uint16_t port, std::string const &expected_fingerprint,
+                       std::string const &path, bool ca_verified, std::string &error)
         {
-            impl_->reader.join();
+            if (!tcp_connect(host, port, error))
+            {
+                return false;
+            }
+            if (ca_verified)
+            {
+                if (!tls_handshake_ca(host, error))
+                {
+                    return false;
+                }
+            }
+            else if (!tls_handshake_pinned(expected_fingerprint, error))
+            {
+                return false;
+            }
+            wire = WireMode{true, false};
+            if (!ws_upgrade(host, port, path, error))
+            {
+                return false;
+            }
+            finish_connect();
+            return true;
         }
-        impl_->connected.store(false);
-        impl_->closed.store(true);
-        if (first)
+    };
+
+    WsClientConnection::WsClientConnection(std::string host, std::uint16_t port, std::string expected_fingerprint,
+                                           std::string path, bool ca_verified)
+        : impl_(std::make_unique<Impl>())
+    {
+        ignore_sigpipe_once();
+        std::string error;
+        if (!impl_->establish(host, port, expected_fingerprint, path, ca_verified, error))
         {
-            impl_->release_socket();
+            impl_->connect_error = error;
+            impl_->connected.store(false);
+            impl_->closed.store(true);
         }
+    }
+
+    WsClientConnection::~WsClientConnection()
+    {
+        close();
+    }
+
+    bool WsClientConnection::connected() const
+    {
+        return client_connected(*impl_);
+    }
+
+    WsClientConnection::HelloStatus WsClientConnection::send_hello(HelloMessage const &hello, std::string &detail)
+    {
+        return client_send_hello(*impl_, hello, detail);
+    }
+
+    std::optional<AssignmentBatch> WsClientConnection::next_assignment(std::uint64_t timeout_ms, std::string &detail)
+    {
+        return client_next_assignment(*impl_, timeout_ms, detail);
+    }
+
+    bool WsClientConnection::send_result(SignedResult const &result, std::string &detail)
+    {
+        return client_send_result(*impl_, result, detail);
+    }
+
+    void WsClientConnection::close()
+    {
+        if (!impl_)
+        {
+            return;
+        }
+        client_close(*impl_);
     }
 }

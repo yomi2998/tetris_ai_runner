@@ -44,6 +44,8 @@ namespace remote_client
         bool quiet = false;
         bool flip_outcomes = false;
         bool generate_key = false;
+        bool websocket = false;
+        bool ca_verified = false;
     };
 
     void print_usage(char const *program)
@@ -51,8 +53,11 @@ namespace remote_client
         std::println(stderr, "Usage:");
         std::println(stderr, "  {} --generate-key --key-file PATH", program);
         std::println(stderr, "  {} --host HOST --port PORT --device-id N --key-file PATH --fingerprint FP [--assignments N] [--quiet] [--flip-outcomes]", program);
+        std::println(stderr, "  {} --host HOST --port PORT --device-id N --key-file PATH --ws [--ca] [--assignments N] [--quiet]", program);
         std::println(stderr, "  --assignments N is the number of assignments the client processes concurrently and advertises to the host (default 1, 1..64)");
         std::println(stderr, "  --flip-outcomes is test-only: it flips every game outcome before signing");
+        std::println(stderr, "  --ws speaks WebSocket instead of the raw protocol, for hosts reached through an HTTPS proxy such as Cloudflare");
+        std::println(stderr, "  --ca with --ws verifies the server certificate against system roots for the hostname, for proxied connections; without it --ws pins the host fingerprint like the raw protocol");
     }
 
     int missing_value_error(char const *flag, char const *program)
@@ -171,7 +176,7 @@ namespace remote_client
         return flipped;
     }
 
-    int run_assignment_loop(tnet::ClientConnection &connection, TojBackend const &backend,
+    int run_assignment_loop(tnet::ClientConnectionBase &connection, TojBackend const &backend,
                             tw::KeyPair const &keys, ClientConfig const &cli)
     {
         for (;;)
@@ -271,7 +276,7 @@ namespace remote_client
         return true;
     }
 
-    int run_assignment_loop_concurrent(tnet::ClientConnection &connection, TojBackend const &backend,
+    int run_assignment_loop_concurrent(tnet::ClientConnectionBase &connection, TojBackend const &backend,
                                        tw::KeyPair const &keys, ClientConfig const &cli)
     {
         AssignmentQueue queue;
@@ -450,23 +455,42 @@ namespace remote_client
         std::size_t backoff_step = 0;
         for (;;)
         {
-            tnet::ClientConnection connection(cli.host, cli.port, cli.fingerprint);
-            std::string detail;
-            tnet::ClientConnection::HelloStatus status = tnet::ClientConnection::HelloStatus::Failed;
-            if (connection.connected())
+            std::unique_ptr<tnet::ClientConnectionBase> connection;
+            if (cli.websocket)
             {
-                status = connection.send_hello(hello, detail);
+                if (cli.ca_verified)
+                {
+                    connection = std::make_unique<tnet::WsClientConnection>(cli.host, cli.port,
+                                                                             std::string(), "/tournament",
+                                                                             true);
+                }
+                else
+                {
+                    connection = std::make_unique<tnet::WsClientConnection>(cli.host, cli.port,
+                                                                             cli.fingerprint);
+                }
             }
             else
             {
-                detail = "tls connect failed";
+                connection = std::make_unique<tnet::ClientConnection>(cli.host, cli.port,
+                                                                       cli.fingerprint);
             }
-            if (status == tnet::ClientConnection::HelloStatus::Rejected)
+            std::string detail;
+            tnet::ClientConnectionBase::HelloStatus status = tnet::ClientConnectionBase::HelloStatus::Failed;
+            if (connection->connected())
+            {
+                status = connection->send_hello(hello, detail);
+            }
+            else
+            {
+                detail = cli.websocket ? "websocket connect failed" : "tls connect failed";
+            }
+            if (status == tnet::ClientConnectionBase::HelloStatus::Rejected)
             {
                 std::println(stderr, "host refused this device: {}", detail);
                 return 1;
             }
-            if (status != tnet::ClientConnection::HelloStatus::Accepted)
+            if (status != tnet::ClientConnectionBase::HelloStatus::Accepted)
             {
                 std::println(stderr, "connect to {}:{} failed: {}", cli.host, cli.port, detail);
                 sleep_backoff(backoff_step);
@@ -474,8 +498,8 @@ namespace remote_client
             }
             backoff_step = 0;
             int const loop_result = cli.max_concurrent_assignments > 1
-                ? run_assignment_loop_concurrent(connection, backend, keys, cli)
-                : run_assignment_loop(connection, backend, keys, cli);
+                ? run_assignment_loop_concurrent(*connection, backend, keys, cli)
+                : run_assignment_loop(*connection, backend, keys, cli);
             if (loop_result != 0)
             {
                 return loop_result;
@@ -505,6 +529,14 @@ int main(int argc, char *argv[])
         else if (std::strcmp(flag, "--quiet") == 0)
         {
             cli.quiet = true;
+        }
+        else if (std::strcmp(flag, "--ws") == 0)
+        {
+            cli.websocket = true;
+        }
+        else if (std::strcmp(flag, "--ca") == 0)
+        {
+            cli.ca_verified = true;
         }
         else if (std::strcmp(flag, "--flip-outcomes") == 0)
         {
@@ -605,9 +637,21 @@ int main(int argc, char *argv[])
         }
         return remote_client::run_generate_key(cli.key_file);
     }
-    if (!have_host || !have_port || !have_device || !have_key || !have_fingerprint)
+    if (!have_host || !have_port || !have_device || !have_key)
     {
-        std::println(stderr, "run mode requires --host --port --device-id --key-file --fingerprint");
+        std::println(stderr, "run mode requires --host --port --device-id --key-file");
+        remote_client::print_usage(program);
+        return 1;
+    }
+    if (cli.ca_verified && !cli.websocket)
+    {
+        std::println(stderr, "--ca requires --ws");
+        remote_client::print_usage(program);
+        return 1;
+    }
+    if (!have_fingerprint && !(cli.websocket && cli.ca_verified))
+    {
+        std::println(stderr, "run mode requires --fingerprint, or --ws --ca for proxied connections");
         remote_client::print_usage(program);
         return 1;
     }

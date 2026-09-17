@@ -10,14 +10,27 @@
 #include "tuning/domain.h"
 #include "tuning/match.h"
 
+#include <openssl/crypto.h>
+#include <openssl/sha.h>
+#include <openssl/ssl.h>
+#include <openssl/tls1.h>
+#include <openssl/x509.h>
+
+#include <netdb.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <print>
 #include <string>
 #include <thread>
@@ -199,10 +212,24 @@ namespace
     {
         tw::DeviceId id = 0;
         tw::KeyPair keys{};
-        std::unique_ptr<tnet::ClientConnection> conn;
+        std::unique_ptr<tnet::ClientConnectionBase> conn;
         tnet::ClientConnection::HelloStatus status = tnet::ClientConnection::HelloStatus::Failed;
         std::string detail;
     };
+
+    void send_intro_hello(ClientHarness &client, std::string const &adapter, std::uint32_t protocol,
+                          std::uint64_t schema_hash, std::uint64_t engine_fingerprint, std::uint32_t concurrency)
+    {
+        tw::HelloMessage hello;
+        hello.device = client.id;
+        hello.public_key = client.keys.public_key;
+        hello.protocol = protocol;
+        hello.adapter_id = adapter;
+        hello.schema_hash = schema_hash;
+        hello.engine_fingerprint = engine_fingerprint;
+        hello.max_concurrent_assignments = concurrency;
+        client.status = client.conn->send_hello(hello, client.detail);
+    }
 
     ClientHarness make_client(HostHarness &host, tw::DeviceId id, std::string const &adapter = "test_adapter",
                               std::uint32_t protocol = tw::protocol_version, std::uint64_t schema_hash = 0,
@@ -219,15 +246,26 @@ namespace
             client.detail = "tls connection failed";
             return client;
         }
-        tw::HelloMessage hello;
-        hello.device = id;
-        hello.public_key = client.keys.public_key;
-        hello.protocol = protocol;
-        hello.adapter_id = adapter;
-        hello.schema_hash = schema_hash;
-        hello.engine_fingerprint = engine_fingerprint;
-        hello.max_concurrent_assignments = concurrency;
-        client.status = client.conn->send_hello(hello, client.detail);
+        send_intro_hello(client, adapter, protocol, schema_hash, engine_fingerprint, concurrency);
+        return client;
+    }
+
+    ClientHarness make_ws_client(HostHarness &host, tw::DeviceId id, std::string const &adapter = "test_adapter",
+                                 std::uint32_t protocol = tw::protocol_version, std::uint64_t schema_hash = 0,
+                                 tw::KeyPair const *keys = nullptr, std::uint64_t engine_fingerprint = 0,
+                                 std::uint32_t concurrency = 0)
+    {
+        ClientHarness client;
+        client.id = id;
+        client.keys = keys != nullptr ? *keys : tw::generate_keypair();
+        client.conn = std::make_unique<tnet::WsClientConnection>("127.0.0.1", host.transport->listening_port(),
+                                                                 host.fingerprint);
+        if (!client.conn->connected())
+        {
+            client.detail = "websocket connection failed";
+            return client;
+        }
+        send_intro_hello(client, adapter, protocol, schema_hash, engine_fingerprint, concurrency);
         return client;
     }
 
@@ -315,6 +353,280 @@ namespace
             stopper.detach();
         }
         return completed;
+    }
+
+    struct ProbeFrame
+    {
+        int opcode = 0;
+        bool fin = true;
+        std::string payload;
+    };
+
+    struct WsProbe
+    {
+        int fd = -1;
+        SSL_CTX *ctx = nullptr;
+        SSL *ssl = nullptr;
+
+        ~WsProbe()
+        {
+            if (ssl != nullptr)
+            {
+                SSL_shutdown(ssl);
+                SSL_free(ssl);
+            }
+            if (ctx != nullptr)
+            {
+                SSL_CTX_free(ctx);
+            }
+            if (fd >= 0)
+            {
+                ::close(fd);
+            }
+        }
+
+        bool connect(std::uint16_t port, std::string const &fingerprint)
+        {
+            addrinfo hints{};
+            hints.ai_family = AF_UNSPEC;
+            hints.ai_socktype = SOCK_STREAM;
+            addrinfo *listing = nullptr;
+            if (getaddrinfo("127.0.0.1", std::to_string(port).c_str(), &hints, &listing) != 0)
+            {
+                return false;
+            }
+            for (addrinfo const *entry = listing; entry != nullptr && fd < 0; entry = entry->ai_next)
+            {
+                int candidate = socket(entry->ai_family, entry->ai_socktype, entry->ai_protocol);
+                if (candidate < 0)
+                {
+                    continue;
+                }
+                if (::connect(candidate, entry->ai_addr, entry->ai_addrlen) == 0)
+                {
+                    fd = candidate;
+                }
+                else
+                {
+                    ::close(candidate);
+                }
+            }
+            freeaddrinfo(listing);
+            if (fd < 0)
+            {
+                return false;
+            }
+            timeval timeout{};
+            timeout.tv_sec = 5;
+            timeout.tv_usec = 0;
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
+            ctx = SSL_CTX_new(TLS_client_method());
+            SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+            ssl = SSL_new(ctx);
+            if (ssl == nullptr || SSL_set_fd(ssl, fd) != 1 || SSL_connect(ssl) != 1)
+            {
+                return false;
+            }
+            X509 *certificate = SSL_get1_peer_certificate(ssl);
+            if (certificate == nullptr)
+            {
+                return false;
+            }
+            unsigned char *der = nullptr;
+            int const length = i2d_X509(certificate, &der);
+            X509_free(certificate);
+            if (length <= 0 || der == nullptr)
+            {
+                return false;
+            }
+            std::vector<std::uint8_t> digest(SHA256_DIGEST_LENGTH);
+            SHA256(der, static_cast<std::size_t>(length), digest.data());
+            OPENSSL_free(der);
+            return tournament_bytes::encode_hex(digest) == fingerprint;
+        }
+
+        bool send(std::string const &bytes)
+        {
+            std::size_t sent = 0;
+            while (sent < bytes.size())
+            {
+                int const written = SSL_write(ssl, bytes.data() + sent, static_cast<int>(bytes.size() - sent));
+                if (written > 0)
+                {
+                    sent += static_cast<std::size_t>(written);
+                    continue;
+                }
+                return false;
+            }
+            return true;
+        }
+
+        bool read_exact(char *data, std::size_t size)
+        {
+            std::size_t received = 0;
+            while (received < size)
+            {
+                int const chunk = SSL_read(ssl, data + received, static_cast<int>(size - received));
+                if (chunk > 0)
+                {
+                    received += static_cast<std::size_t>(chunk);
+                    continue;
+                }
+                return false;
+            }
+            return true;
+        }
+
+        std::optional<std::string> read_http_head()
+        {
+            std::string head;
+            char chunk[512] = {};
+            while (head.find("\r\n\r\n") == std::string::npos)
+            {
+                if (head.size() > 8192)
+                {
+                    return std::nullopt;
+                }
+                int const received = SSL_read(ssl, chunk, sizeof chunk);
+                if (received <= 0)
+                {
+                    return std::nullopt;
+                }
+                head.append(chunk, static_cast<std::size_t>(received));
+            }
+            return head;
+        }
+
+        std::optional<ProbeFrame> read_frame()
+        {
+            char header[2] = {};
+            if (!read_exact(header, sizeof header))
+            {
+                return std::nullopt;
+            }
+            ProbeFrame frame;
+            frame.fin = (header[0] & 0x80) != 0;
+            frame.opcode = header[0] & 0x0F;
+            bool const masked = (header[1] & 0x80) != 0;
+            std::uint64_t length = static_cast<std::uint8_t>(header[1] & 0x7F);
+            if (length == 126)
+            {
+                char extended[2] = {};
+                if (!read_exact(extended, sizeof extended))
+                {
+                    return std::nullopt;
+                }
+                length = (static_cast<std::uint64_t>(static_cast<std::uint8_t>(extended[0])) << 8)
+                    | static_cast<std::uint64_t>(static_cast<std::uint8_t>(extended[1]));
+            }
+            else if (length == 127)
+            {
+                char extended[8] = {};
+                if (!read_exact(extended, sizeof extended))
+                {
+                    return std::nullopt;
+                }
+                length = 0;
+                for (char byte : extended)
+                {
+                    length = (length << 8) | static_cast<std::uint64_t>(static_cast<std::uint8_t>(byte));
+                }
+            }
+            std::uint8_t mask_key[4] = {};
+            if (masked && !read_exact(reinterpret_cast<char *>(mask_key), sizeof mask_key))
+            {
+                return std::nullopt;
+            }
+            std::string payload(static_cast<std::size_t>(length), '\0');
+            if (length > 0 && !read_exact(payload.data(), payload.size()))
+            {
+                return std::nullopt;
+            }
+            if (masked)
+            {
+                for (std::size_t i = 0; i < payload.size(); ++i)
+                {
+                    payload[i] = static_cast<char>(static_cast<std::uint8_t>(payload[i]) ^ mask_key[i % 4]);
+                }
+            }
+            frame.payload = std::move(payload);
+            return frame;
+        }
+
+        bool connection_dead()
+        {
+            for (int attempt = 0; attempt < 8; ++attempt)
+            {
+                if (!read_frame().has_value())
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+
+    std::string ws_client_frame(int opcode, std::string const &payload, bool mask, bool fin)
+    {
+        std::string frame;
+        frame.push_back(static_cast<char>((fin ? 0x80 : 0) | opcode));
+        std::uint8_t const mask_key[4] = {0x11, 0x22, 0x33, 0x44};
+        char const mask_flag = mask ? static_cast<char>(0x80) : static_cast<char>(0);
+        if (payload.size() < 126)
+        {
+            frame.push_back(static_cast<char>(mask_flag | static_cast<char>(payload.size())));
+        }
+        else if (payload.size() <= 0xFFFF)
+        {
+            frame.push_back(static_cast<char>(mask_flag | 126));
+            frame.push_back(static_cast<char>((payload.size() >> 8) & 0xFF));
+            frame.push_back(static_cast<char>(payload.size() & 0xFF));
+        }
+        else
+        {
+            frame.push_back(static_cast<char>(mask_flag | 127));
+            for (int shift = 56; shift >= 0; shift -= 8)
+            {
+                frame.push_back(static_cast<char>((payload.size() >> shift) & 0xFF));
+            }
+        }
+        if (mask)
+        {
+            frame.append(reinterpret_cast<char const *>(mask_key), sizeof mask_key);
+        }
+        frame.append(payload);
+        if (mask)
+        {
+            char *body = frame.data() + (frame.size() - payload.size());
+            for (std::size_t i = 0; i < payload.size(); ++i)
+            {
+                body[i] = static_cast<char>(static_cast<std::uint8_t>(body[i]) ^ mask_key[i % 4]);
+            }
+        }
+        return frame;
+    }
+
+    std::string const ws_upgrade_request = "GET / HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+
+    bool ws_upgrade(WsProbe &probe, HostHarness &host)
+    {
+        if (!probe.connect(host.transport->listening_port(), host.fingerprint))
+        {
+            return false;
+        }
+        if (!probe.send(ws_upgrade_request))
+        {
+            return false;
+        }
+        auto const head = probe.read_http_head();
+        return head.has_value() && head->find(" 101") != std::string::npos;
     }
 
     void test_certificate_helpers()
@@ -599,6 +911,171 @@ namespace
               "reconnect updates the advertised concurrency: " + reconnected.detail);
     }
 
+    void test_websocket_accept_token()
+    {
+        check(tnet::websocket_accept_token("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+              "websocket accept token matches the RFC 6455 handshake example");
+        check(tnet::websocket_accept_token(std::string(24, 'A')) != "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+              "websocket accept token depends on the request key");
+    }
+
+    void test_websocket_handshake_and_frames()
+    {
+        HostHarness host("ws_probe");
+        check(host.start(tnet::NetConfig{}), "host started for websocket probe tests");
+        WsProbe probe;
+        check(probe.connect(host.transport->listening_port(), host.fingerprint), "probe tls connection established");
+        check(probe.send(ws_upgrade_request), "probe sent websocket upgrade request");
+        auto const head = probe.read_http_head();
+        check(head.has_value() && head->find("HTTP/1.1 101") != std::string::npos,
+              "upgrade response is a 101 switching protocols reply");
+        check(head.has_value()
+                  && head->find("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos,
+              "upgrade response carries the RFC 6455 accept token for the sample key");
+        check(probe.send(ws_client_frame(9, "ping payload", true, true)), "probe sent masked ping frame");
+        auto const pong = probe.read_frame();
+        check(pong.has_value() && pong->opcode == 10 && pong->payload == "ping payload",
+              "server answered masked ping with echoing pong");
+        tw::HelloMessage hello;
+        hello.device = 1;
+        hello.public_key = tw::generate_keypair().public_key;
+        std::string const framed = tw::frame_message(tw::MessageKind::Hello, tw::encode_hello(hello));
+        std::string const first = framed.substr(0, 7);
+        std::string const second = framed.substr(7);
+        check(probe.send(ws_client_frame(2, first, true, false)), "probe sent masked binary first fragment");
+        check(probe.send(ws_client_frame(9, "mid", true, true)), "probe sent masked ping between fragments");
+        auto const mid_pong = probe.read_frame();
+        check(mid_pong.has_value() && mid_pong->opcode == 10 && mid_pong->payload == "mid",
+              "server answered ping interleaved mid-message");
+        check(probe.send(ws_client_frame(0, second, true, true)), "probe sent masked continuation fragment");
+        auto const accept_frame = probe.read_frame();
+        check(accept_frame.has_value() && accept_frame->opcode == 2 && accept_frame->payload.size() == 5
+                  && accept_frame->payload[4] == static_cast<char>(tw::MessageKind::Accept),
+              "fragmented masked hello delivered as one message and accepted");
+        check(devices_contain(*host.transport, 1), "hand-rolled websocket client enrolled on the host");
+    }
+
+    void test_websocket_unmasked_frame_rejected()
+    {
+        HostHarness host("ws_unmasked");
+        check(host.start(tnet::NetConfig{}), "host started for unmasked frame test");
+        WsProbe probe;
+        check(ws_upgrade(probe, host), "probe completed websocket upgrade for unmasked test");
+        tw::HelloMessage hello;
+        hello.device = 1;
+        hello.public_key = tw::generate_keypair().public_key;
+        std::string const framed = tw::frame_message(tw::MessageKind::Hello, tw::encode_hello(hello));
+        check(probe.send(ws_client_frame(2, framed, false, true)), "probe sent unmasked binary frame");
+        check(probe.connection_dead(), "unmasked client frame closed the connection");
+        check(host.transport->devices().empty(), "unmasked frame client never enrolled");
+    }
+
+    void test_websocket_oversized_frame_rejected()
+    {
+        HostHarness host("ws_oversized");
+        check(host.start(tnet::NetConfig{}), "host started for oversized frame test");
+        WsProbe probe;
+        check(ws_upgrade(probe, host), "probe completed websocket upgrade for oversized test");
+        std::string oversized;
+        oversized.push_back(static_cast<char>(0x82));
+        oversized.push_back(static_cast<char>(0x80 | 127));
+        for (int shift = 56; shift >= 0; shift -= 8)
+        {
+            oversized.push_back(static_cast<char>((0x200000ULL >> shift) & 0xFF));
+        }
+        oversized.append("\x11\x22\x33\x44", 4);
+        check(probe.send(oversized), "probe sent oversized frame header");
+        check(probe.connection_dead(), "oversized frame closed the connection");
+        check(host.transport->devices().empty(), "oversized frame client never enrolled");
+    }
+
+    void test_websocket_client_round_trip()
+    {
+        HostHarness host("ws_roundtrip");
+        check(host.start(tnet::NetConfig{}), "host started for websocket round trip test");
+        auto raw_client = make_client(host, 1);
+        check(raw_client.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "raw client completes hello on the shared listener: " + raw_client.detail);
+        auto ws_client = make_ws_client(host, 2);
+        check(ws_client.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "websocket client completes hello on the same listener: " + ws_client.detail);
+        bool both_listed = false;
+        for (int attempt = 0; attempt < 200 && !both_listed; ++attempt)
+        {
+            std::vector<tw::DeviceId> const devices = host.transport->devices();
+            both_listed = devices.size() == 2 && devices[0] == 1 && devices[1] == 2;
+            if (!both_listed)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }
+        check(both_listed, "listener serves raw and websocket flavors as separate devices");
+        tw::AssignmentBatch const assignment = make_assignment(77, 2, 5, 2);
+        std::thread worker([&]() { honest_worker(ws_client); });
+        auto const delivery = host.transport->request(2, assignment);
+        check(delivery.status == tt::DeliveryStatus::Delivered, "assignment delivered to websocket client");
+        bool const echo_ok = delivery.status == tt::DeliveryStatus::Delivered
+            && delivery.result.batch.nonce == 77
+            && delivery.result.batch.device == 2
+            && delivery.result.batch.outcomes.size() == 2
+            && tw::verify_result(ws_client.keys.public_key, delivery.result.batch, delivery.result.signature);
+        check(echo_ok, "websocket client returned matching signed result for masked frames");
+        ws_client.conn->close();
+        raw_client.conn->close();
+        worker.join();
+    }
+
+    void test_remote_backend_flow_websocket()
+    {
+        HostHarness host("backend_ws");
+        check(host.start(tnet::NetConfig{}), "host started for websocket backend flow");
+        auto client1 = make_ws_client(host, 1);
+        auto client2 = make_ws_client(host, 2);
+        check(client1.status == tnet::ClientConnection::HelloStatus::Accepted
+                  && client2.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "both devices enrolled over websocket: " + client2.detail);
+        trem::RemoteConfig remote_config;
+        remote_config.games_per_assignment = 2;
+        remote_config.lease_ms = 600000;
+        remote_config.max_assignment_rounds = 4;
+        remote_config.per_series_device_cap = 8;
+        trem::RemoteBackend backend(test_schema(), host.transport, host.registry, host.provenance,
+                                    std::make_shared<tt::SystemClock>(), remote_config);
+        auto const games = make_games(4, 6, 777);
+        std::thread worker1([&]() { honest_worker(client1); });
+        std::thread worker2([&]() { honest_worker(client2); });
+        auto const results = backend.run_games(games, fast_config());
+        client1.conn->close();
+        client2.conn->close();
+        worker1.join();
+        worker2.join();
+        check(results.size() == 6, "six outcomes returned over websocket");
+        check(outcomes_match_fabrication(results, games),
+              "fabricated outcomes returned in request order over websocket");
+        check(host.provenance->size() == 6, "provenance holds six records over websocket");
+        check(host.provenance->games_of_device(1).size() + host.provenance->games_of_device(2).size() == 6,
+              "all provenance records come from websocket devices");
+    }
+
+    void test_dual_stack_listener()
+    {
+        HostHarness host("dual_stack");
+        tnet::NetConfig config;
+        config.listen_address = "::";
+        if (!host.start(config))
+        {
+            check(false, "host started on ipv6 wildcard listener");
+            return;
+        }
+        check(host.transport->listening_port() != 0, "ipv6 wildcard listener assigned a port");
+        auto raw_client = make_client(host, 1);
+        check(raw_client.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "ipv4 raw client completes hello on ipv6 wildcard listener: " + raw_client.detail);
+        auto ws_client = make_ws_client(host, 2);
+        check(ws_client.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "ipv4 websocket client completes hello on ipv6 wildcard listener: " + ws_client.detail);
+    }
+
     void test_remote_backend_flow()
     {
         HostHarness host("backend");
@@ -831,6 +1308,13 @@ int main()
     test_engine_fingerprint_pin();
     test_connection_cap();
     test_concurrency_advertised();
+    test_websocket_accept_token();
+    test_websocket_handshake_and_frames();
+    test_websocket_unmasked_frame_rejected();
+    test_websocket_oversized_frame_rejected();
+    test_websocket_client_round_trip();
+    test_remote_backend_flow_websocket();
+    test_dual_stack_listener();
     test_remote_backend_flow();
     test_dropper_reassignment();
     test_late_reply_discarded();

@@ -47,6 +47,8 @@ namespace tournament_net
 
     std::optional<std::string> certificate_fingerprint(std::string const &certificate_path);
 
+    std::string websocket_accept_token(std::string const &sec_websocket_key);
+
     class HostTransport : public tournament_transport::Transport
     {
     public:
@@ -67,16 +69,9 @@ namespace tournament_net
         std::unique_ptr<Impl> impl_;
     };
 
-    class ClientConnection
+    class ClientConnectionBase
     {
     public:
-        ClientConnection(std::string host, std::uint16_t port, std::string expected_fingerprint);
-        ~ClientConnection();
-        ClientConnection(ClientConnection const &) = delete;
-        ClientConnection &operator=(ClientConnection const &) = delete;
-
-        bool connected() const;
-
         enum class HelloStatus
         {
             Accepted,
@@ -84,12 +79,48 @@ namespace tournament_net
             Failed,
         };
 
-        HelloStatus send_hello(HelloMessage const &hello, std::string &detail);
+        virtual ~ClientConnectionBase() = default;
 
-        std::optional<AssignmentBatch> next_assignment(std::uint64_t timeout_ms, std::string &detail);
-        bool send_result(SignedResult const &result, std::string &detail);
+        virtual bool connected() const = 0;
+        virtual HelloStatus send_hello(HelloMessage const &hello, std::string &detail) = 0;
+        virtual std::optional<AssignmentBatch> next_assignment(std::uint64_t timeout_ms, std::string &detail) = 0;
+        virtual bool send_result(SignedResult const &result, std::string &detail) = 0;
+        virtual void close() = 0;
+    };
 
-        void close();
+    class ClientConnection : public ClientConnectionBase
+    {
+    public:
+        ClientConnection(std::string host, std::uint16_t port, std::string expected_fingerprint);
+        ~ClientConnection() override;
+        ClientConnection(ClientConnection const &) = delete;
+        ClientConnection &operator=(ClientConnection const &) = delete;
+
+        bool connected() const override;
+        HelloStatus send_hello(HelloMessage const &hello, std::string &detail) override;
+        std::optional<AssignmentBatch> next_assignment(std::uint64_t timeout_ms, std::string &detail) override;
+        bool send_result(SignedResult const &result, std::string &detail) override;
+        void close() override;
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
+
+    class WsClientConnection : public ClientConnectionBase
+    {
+    public:
+        WsClientConnection(std::string host, std::uint16_t port, std::string expected_fingerprint,
+                           std::string path = "/", bool ca_verified = false);
+        ~WsClientConnection() override;
+        WsClientConnection(WsClientConnection const &) = delete;
+        WsClientConnection &operator=(WsClientConnection const &) = delete;
+
+        bool connected() const override;
+        HelloStatus send_hello(HelloMessage const &hello, std::string &detail) override;
+        std::optional<AssignmentBatch> next_assignment(std::uint64_t timeout_ms, std::string &detail) override;
+        bool send_result(SignedResult const &result, std::string &detail) override;
+        void close() override;
 
     private:
         struct Impl;
