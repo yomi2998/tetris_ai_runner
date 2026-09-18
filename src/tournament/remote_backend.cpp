@@ -36,6 +36,22 @@ namespace tournament_remote
                 = tournament_runner::normalize_outcome(outcome.winner, true);
             return tournament_runner::reason_matches_winner(outcome.reason, winner);
         }
+
+        std::string delivery_status_name(tournament_transport::DeliveryStatus status)
+        {
+            switch (status)
+            {
+            case tournament_transport::DeliveryStatus::Delivered:
+                return "result failed verification";
+            case tournament_transport::DeliveryStatus::Unreachable:
+                return "device unreachable";
+            case tournament_transport::DeliveryStatus::Timeout:
+                return "no result before the wait window closed";
+            case tournament_transport::DeliveryStatus::Malformed:
+                return "malformed reply";
+            }
+            return "unknown delivery status";
+        }
     }
 
     void DeviceTiming::seed_ms_per_game(double ms_per_game)
@@ -267,6 +283,7 @@ namespace tournament_remote
                 tournament_wire::DeviceId device = 0;
                 tournament_transport::Delivery delivery{};
                 std::uint64_t assigned_at_ms = 0;
+                std::uint64_t completed_at_ms = 0;
                 std::uint64_t wait_ms = 0;
             };
             std::vector<std::uint32_t> capacities(devices.size(), 1);
@@ -392,6 +409,7 @@ namespace tournament_remote
                 workers.emplace_back([this, &flight]()
                 {
                     flight.delivery = transport_->request(flight.device, flight.assignment, flight.wait_ms);
+                    flight.completed_at_ms = clock_->now_ms();
                 });
             }
             for (std::thread &worker : workers)
@@ -425,14 +443,20 @@ namespace tournament_remote
                         }
                     }
                 }
-                std::uint64_t const now = clock_->now_ms();
-                bool const expired = now > flight.assigned_at_ms + config_.lease_ms;
+                std::uint64_t const elapsed_ms = flight.completed_at_ms > flight.assigned_at_ms
+                    ? flight.completed_at_ms - flight.assigned_at_ms
+                    : 0;
+                bool const expired = elapsed_ms > flight.wait_ms;
                 if (flight.delivery.status == tournament_transport::DeliveryStatus::Delivered)
                 {
-                    if (accepted)
+                    if (accepted && !expired)
                     {
                         timing_->record_delivery(flight.device, static_cast<std::uint64_t>(attempted),
-                                                 now > flight.assigned_at_ms ? now - flight.assigned_at_ms : 0);
+                                                 elapsed_ms);
+                    }
+                    else if (accepted && expired)
+                    {
+                        timing_->record_timeout(flight.device, true, flight.wait_ms);
                     }
                     else
                     {
@@ -461,7 +485,7 @@ namespace tournament_remote
                         record.game = flight.assignment.games[i];
                         record.reported = outcome;
                         record.assigned_at_ms = flight.assigned_at_ms;
-                        record.accepted_at_ms = now;
+                        record.accepted_at_ms = flight.completed_at_ms;
                         provenance_->record(std::move(record));
                         results[index] = tournament_wire::from_wire(outcome);
                         done[index] = true;
@@ -475,6 +499,19 @@ namespace tournament_remote
                     for (std::size_t index : flight.indices)
                     {
                         failed_on[games[index].id].insert(flight.device);
+                    }
+                    if (config_.log)
+                    {
+                        std::string const why = flight.delivery.status
+                                != tournament_transport::DeliveryStatus::Delivered
+                            ? delivery_status_name(flight.delivery.status)
+                            : (expired
+                                  ? "result arrived " + std::to_string(elapsed_ms)
+                                        + " ms after dispatch, past the " + std::to_string(flight.wait_ms)
+                                        + " ms window"
+                                  : delivery_status_name(flight.delivery.status));
+                        config_.log("device " + std::to_string(flight.device) + " nonce "
+                            + std::to_string(flight.assignment.nonce) + " dropped: " + why);
                     }
                 }
             }

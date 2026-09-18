@@ -717,6 +717,75 @@ namespace
               "honest single device records no drops across the scaled rounds");
     }
 
+    void test_slow_sibling_does_not_expire_fast_results()
+    {
+        ContextPtr context = tuning_toj::TojAdapter::make_shared_context();
+        TojBackend const engine{context};
+        std::vector<double> const theta_a = theta_for(0);
+        std::vector<double> const theta_b = theta_for(1);
+        std::vector<tuning::BatchGame> games;
+        for (std::uint64_t id = 1; id <= 4; ++id)
+        {
+            tuning::BatchGame game;
+            game.id = id;
+            game.theta_a = theta_a;
+            game.theta_b = theta_b;
+            game.seed_a = tuning::derive_game_seed(777, id, 0);
+            game.seed_b = tuning::derive_game_seed(777, id, 1);
+            games.push_back(std::move(game));
+        }
+        trem::RemoteConfig remote_config;
+        remote_config.games_per_assignment = 2;
+        remote_config.lease_ms = 100;
+        remote_config.max_assignment_rounds = 4;
+        remote_config.per_series_device_cap = 8;
+        std::vector<std::string> log_lines;
+        remote_config.log = [&log_lines](std::string const &message)
+        {
+            log_lines.push_back(message);
+        };
+
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2)};
+        Cluster cluster(devices, remote_config);
+        std::shared_ptr<tt::ManualClock> const clock = cluster.clock;
+        tw::KeyPair const slow_keys = devices[0].keys;
+        tw::KeyPair const fast_keys = devices[1].keys;
+        auto fast_delivered = std::make_shared<std::atomic<bool>>(false);
+        cluster.transport->add_device(
+            1, [slow_keys, engine, clock, fast_delivered](tw::AssignmentBatch const &assignment)
+            {
+                while (!fast_delivered->load())
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                clock->advance(100000);
+                return run_assignment_honestly(slow_keys, assignment, engine);
+            });
+        cluster.transport->add_device(
+            2, [fast_keys, engine, fast_delivered](tw::AssignmentBatch const &assignment)
+            {
+                std::optional<tw::SignedResult> const held
+                    = run_assignment_honestly(fast_keys, assignment, engine);
+                fast_delivered->store(true);
+                return held;
+            });
+        std::vector<tuning::GameOutcome> const results = cluster.backend.run_games(games, fast_config());
+        check(outcomes_identical(results, engine.run_games(games, fast_config())),
+              "a slow sibling no longer expires the fast device's on-time results");
+        check(cluster.provenance->games_of_device(2).size() == 4,
+              "the fast device covers every game including the slow device's share");
+        check(cluster.provenance->games_of_device(1).empty(),
+              "the beyond-window device has nothing accepted");
+        check(cluster.registry->stats(1) != nullptr && cluster.registry->stats(1)->games_dropped >= 2,
+              "the beyond-window device records drops");
+        bool window_logged = false;
+        for (std::string const &line : log_lines)
+        {
+            window_logged = window_logged || line.find("past the") != std::string::npos;
+        }
+        check(window_logged, "window expiry drops are logged with arrival and window timings");
+    }
+
     void test_silent_device_exhaustion_counts_rounds()
     {
         std::vector<double> const theta_a = theta_for(0);
@@ -859,6 +928,7 @@ int main()
     test_protocol_tamper_rejections();
     test_failure_modes();
     test_round_budget_scales_with_demand();
+    test_slow_sibling_does_not_expire_fast_results();
     test_silent_device_exhaustion_counts_rounds();
     test_concurrency_capacity_respected();
     test_unspecified_concurrency_acts_as_one();

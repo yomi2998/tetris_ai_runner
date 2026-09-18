@@ -84,6 +84,7 @@ namespace tournament_tuner
         int wait_clients_ms = 120000;
         std::uint64_t lease_ms = 30000;
         int games_per_assignment = 4;
+        int series_cap = 2;
     };
 
     int thread_budget_for(int threads_arg)
@@ -428,6 +429,7 @@ namespace tournament_tuner
         std::println("Flags: --remote-cert P and --remote-key P override the certificate paths, --audit-rate R sets the audit sample rate (default 0.25, remote mode only)");
         std::println("Flags: --journal-file P sets the provenance journal path (default tournament_journal.bin, remote mode only), --wait-clients-ms N bounds the initial client wait (default 120000)");
         std::println("Flags: --lease-ms N sets the remote result lease (default 30000, remote mode only), --games-per-assignment N batches that many games per remote flight (default 4)");
+        std::println("Flags: --series-cap N caps one device's accepted games per series (default 2, raise it for small device pools so late bracket series can spread)");
         std::println("Flags: --ban-file P persists banned device keys across restarts (default tournament_bans.txt, empty string disables)");
         std::println("Flags: --devices-file P restricts remote enrollment to the device ids and keys listed in P (default open enrollment)");
         std::println("Search: iteration budgets only, no time budgets");
@@ -1300,6 +1302,7 @@ namespace tournament_tuner
                 tournament_remote::RemoteConfig remote_config;
                 remote_config.games_per_assignment = cli.games_per_assignment;
                 remote_config.lease_ms = cli.lease_ms;
+                remote_config.per_series_device_cap = cli.series_cap;
                 remote_config.nonce_seed = generation_seed_for(root_seed, generation);
                 remote_config.timing = remote_timing;
                 remote_config.log = [](std::string const &message)
@@ -1943,6 +1946,25 @@ int main(int argc, char *argv[])
                 else
                 {
                     config.games_per_assignment = value;
+                }
+            }
+            catch (std::exception const &)
+            {
+                flag_error = true;
+            }
+        }
+        else if (std::strcmp(argv[i], "--series-cap") == 0 && i + 1 < argc)
+        {
+            try
+            {
+                int const value = std::stoi(argv[++i]);
+                if (value <= 0)
+                {
+                    flag_error = true;
+                }
+                else
+                {
+                    config.series_cap = value;
                 }
             }
             catch (std::exception const &)
