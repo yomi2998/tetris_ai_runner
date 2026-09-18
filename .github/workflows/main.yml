@@ -69,6 +69,30 @@ jobs:
             ${{ env.RELEASE_FOLDER }}/*
           prerelease: ${{ startsWith(github.ref, 'refs/tags/pre') }}
 
+  test-linux:
+    runs-on: ubuntu-24.04
+    needs: get-info
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+      - name: Install OpenSSL development headers
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - name: CMake Configure
+        env:
+          CC: gcc-14
+          CXX: g++-14
+        run: |
+          cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}/build" -DCMAKE_BUILD_TYPE=Release
+      - name: Build all targets
+        run: |
+          cmake --build "${{ github.workspace }}/build" -j "$(nproc)"
+      - name: Run test suite
+        run: |
+          ctest --test-dir "${{ github.workspace }}/build" --output-on-failure
+
   build-windows:
     runs-on: windows-latest
     needs: get-info

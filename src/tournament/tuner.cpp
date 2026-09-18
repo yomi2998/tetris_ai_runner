@@ -49,6 +49,7 @@
 #include "tournament/runner.h"
 #include "tournament/runtime_backend.h"
 #include "tournament/scheduler.h"
+#include "tournament/toj_conformance.h"
 #include "tournament/transport.h"
 #include "tuning/domain.h"
 #include "tuning/engine_match.h"
@@ -566,6 +567,7 @@ namespace tournament_tuner
         std::println("Flags: --trust-file P persists device audit trust across restarts (default tournament_trust.txt, empty string disables)");
         std::println("Flags: --audit-workers N bounds the local audit re-run lanes (default 2, each lane runs single-threaded re-plays)");
         std::println("Flags: --ban-file P persists banned device keys across restarts (default tournament_bans.txt, empty string disables)");
+        std::println("Flags: --unban K removes the ban record and the trust record for the 64 hex character device public key K from the ban and trust files, then exits");
         std::println("Flags: --devices-file P restricts remote enrollment to the device ids and keys listed in P (default open enrollment)");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
@@ -644,6 +646,59 @@ namespace tournament_tuner
         {
             std::println(stderr, "checkpoint payload is malformed: {}", error.what());
             return 1;
+        }
+        return 0;
+    }
+
+    int run_unban(char const *key_hex, std::string const &ban_file, std::string const &trust_file)
+    {
+        std::optional<std::vector<std::uint8_t>> const decoded
+            = tournament_bytes::decode_hex(std::string(key_hex));
+        if (!decoded.has_value() || decoded->size() != 32)
+        {
+            std::println(stderr, "--unban expects a 64 hex character device public key");
+            return 1;
+        }
+        tournament_wire::PublicKey const key(*decoded);
+        if (ban_file.empty())
+        {
+            std::println(stderr, "--unban needs a ban file, but --ban-file is empty");
+            return 1;
+        }
+        tournament_ban::BanFile store(ban_file);
+        bool removed = false;
+        std::string error;
+        if (!store.remove(key, removed, error))
+        {
+            std::println(stderr, "cannot update {}: {}", ban_file, error);
+            return 1;
+        }
+        if (removed)
+        {
+            std::println("removed ban record for {} from {}", key_hex, ban_file);
+        }
+        else
+        {
+            std::println("no ban record for {} in {}", key_hex, ban_file);
+        }
+        if (!trust_file.empty())
+        {
+            bool trust_removed = false;
+            std::string trust_error;
+            if (!tournament_registry::remove_trust_record(trust_file, key, trust_removed,
+                                                          trust_error))
+            {
+                std::println(stderr, "cannot update {}: {}", trust_file, trust_error);
+                return 1;
+            }
+            if (trust_removed)
+            {
+                std::println("removed trust record for {} from {}", key_hex, trust_file);
+            }
+            else
+            {
+                std::println("no trust record for {} in {}", key_hex, trust_file);
+            }
         }
         return 0;
     }
@@ -1265,8 +1320,8 @@ namespace tournament_tuner
                 {
                     return probe_engine.run_games(games, probe_config);
                 };
-                engine_fingerprint = tournament_identity::adapter_engine_fingerprint<tuning_toj::TojAdapter>(
-                    probe_run);
+                engine_fingerprint = tournament_identity::toj_conformance_fingerprint(shared_context,
+                                                                                      probe_run);
             }
             tournament_net::NetConfig net_config;
             net_config.listen_address = cli.remote_address;
@@ -1329,6 +1384,7 @@ namespace tournament_tuner
                 }
                 std::println("remote: {} banned device key(s) loaded from {}",
                              ban_records.size(), cli.ban_file);
+                device_registry->set_ban_file(cli.ban_file);
             }
             if (!cli.trust_file.empty())
             {
@@ -2076,6 +2132,7 @@ int main(int argc, char *argv[])
     std::vector<char const *> positional;
     positional.push_back(argv[0]);
     bool flag_error = false;
+    std::string unban_key;
     std::string config_path = "tournament_tuner.json";
     bool config_explicit = false;
     for (int i = 1; i < argc; ++i)
@@ -2162,6 +2219,10 @@ int main(int argc, char *argv[])
         else if (std::strcmp(argv[i], "--ban-file") == 0 && i + 1 < argc)
         {
             config.ban_file = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--unban") == 0 && i + 1 < argc)
+        {
+            unban_key = argv[++i];
         }
         else if (std::strcmp(argv[i], "--wait-clients-ms") == 0 && i + 1 < argc)
         {
@@ -2263,6 +2324,10 @@ int main(int argc, char *argv[])
     {
         tournament_tuner::print_usage(program.c_str());
         return 1;
+    }
+    if (!unban_key.empty())
+    {
+        return tournament_tuner::run_unban(unban_key.c_str(), config.ban_file, config.trust_file);
     }
     int const argn = static_cast<int>(positional.size());
     try

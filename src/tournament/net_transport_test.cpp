@@ -871,11 +871,13 @@ namespace
               "hello with expected engine fingerprint accepted: " + matching.detail);
         auto mismatching = make_client(host, 2, "test_adapter", tw::protocol_version, 0, nullptr, 4243);
         check(mismatching.status == tnet::ClientConnection::HelloStatus::Rejected
-                  && mismatching.detail == "engine fingerprint mismatch",
+                  && mismatching.detail.rfind("engine fingerprint mismatch", 0) == 0
+                  && mismatching.detail.find("0000000000001093") != std::string::npos
+                  && mismatching.detail.find("0000000000001092") != std::string::npos,
               "hello with wrong engine fingerprint rejected: " + mismatching.detail);
         auto zero = make_client(host, 3);
         check(zero.status == tnet::ClientConnection::HelloStatus::Rejected
-                  && zero.detail == "engine fingerprint mismatch",
+                  && zero.detail.rfind("engine fingerprint mismatch", 0) == 0,
               "hello with zero engine fingerprint rejected under pin: " + zero.detail);
         HostHarness unpinned("engine_open");
         check(unpinned.start(tnet::NetConfig{}), "host started without engine fingerprint pin");

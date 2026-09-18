@@ -161,6 +161,37 @@ int main()
         check(!file.append(record, error), "append with wrong key size fails");
     }
 
+    {
+        std::filesystem::path const removal = temp.path / "removal.txt";
+        tb::BanFile writer(removal.string());
+        tb::BanRecord first = sample_record(2);
+        tb::BanRecord second = sample_record(9);
+        second.public_key = std::vector<std::uint8_t>(32, 0xAB);
+        std::string error;
+        check(writer.append(first, error) && writer.append(second, error),
+              "remove setup: two bans appended");
+
+        tb::BanFile file(removal.string());
+        bool removed = false;
+        check(file.remove(first.public_key, removed, error) && removed,
+              "remove deletes the matching key");
+        std::vector<tb::BanRecord> loaded;
+        check(file.load(loaded, error) && loaded.size() == 1
+                  && loaded[0].public_key == second.public_key,
+              "remove keeps the other records intact");
+
+        removed = false;
+        check(file.remove(first.public_key, removed, error) && !removed,
+              "remove of an absent key reports nothing removed");
+        std::filesystem::path const stray = removal.string() + ".tmp";
+        check(!std::filesystem::exists(stray), "remove leaves no temporary file behind");
+
+        tb::BanFile missing((temp.path / "never_created.txt").string());
+        removed = false;
+        check(missing.remove(first.public_key, removed, error) && !removed,
+              "remove on a missing file reports nothing removed");
+    }
+
     std::println("ban file: {} checks, {} failures", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

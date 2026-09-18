@@ -1,6 +1,8 @@
 #include "tournament/ban_file.h"
 
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 #include <utility>
 
 #include "tournament/bytes.h"
@@ -150,6 +152,64 @@ namespace tournament_ban
             return false;
         }
         ++appended_;
+        return true;
+    }
+
+    bool BanFile::remove(PublicKey const &public_key, bool &removed, std::string &error) const
+    {
+        removed = false;
+        if (public_key.size() != 32)
+        {
+            error = "ban record public key must be 32 bytes";
+            return false;
+        }
+        std::vector<BanRecord> records;
+        if (!load(records, error))
+        {
+            return false;
+        }
+        std::vector<BanRecord> kept;
+        kept.reserve(records.size());
+        for (BanRecord const &record : records)
+        {
+            if (record.public_key != public_key)
+            {
+                kept.push_back(record);
+            }
+        }
+        if (kept.size() == records.size())
+        {
+            return true;
+        }
+        std::string const temporary = path_ + ".tmp";
+        {
+            std::ofstream output(temporary, std::ios::trunc);
+            if (!output.good())
+            {
+                error = "cannot open " + temporary + " for writing";
+                return false;
+            }
+            for (BanRecord const &record : kept)
+            {
+                output << record.device << ' ' << encode_hex(record.public_key) << ' '
+                       << record.generation << ' ' << record.failed_verdicts << ' '
+                       << record.caught_at_ms << '\n';
+            }
+            output.flush();
+            if (!output.good())
+            {
+                error = "cannot write " + temporary;
+                return false;
+            }
+        }
+        std::error_code rename_error;
+        std::filesystem::rename(temporary, path_, rename_error);
+        if (rename_error)
+        {
+            error = "cannot replace " + path_;
+            return false;
+        }
+        removed = true;
         return true;
     }
 

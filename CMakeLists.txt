@@ -277,6 +277,15 @@ add_executable(tournament_config_file_test
 )
 target_include_directories(tournament_config_file_test PRIVATE src third_party/nlohmann/include)
 
+add_executable(tournament_toj_conformance_test
+    src/tournament/toj_conformance_test.cpp
+    src/tournament/wire.cpp
+    src/tournament/scheduler.cpp
+    $<TARGET_OBJECTS:tournament_toj_objects>
+)
+target_include_directories(tournament_toj_conformance_test PRIVATE src)
+target_link_libraries(tournament_toj_conformance_test PRIVATE Threads::Threads)
+
 if (OPENSSL_FOUND)
     add_executable(tournament_wire_test
         src/tournament/wire.cpp
@@ -287,6 +296,7 @@ if (OPENSSL_FOUND)
     target_link_libraries(tournament_wire_test PRIVATE OpenSSL::Crypto)
 
     add_executable(tournament_registry_test
+        src/tournament/ban_file.cpp
         src/tournament/registry.cpp
         src/tournament/wire_crypto.cpp
         src/tournament/registry_test.cpp
@@ -347,6 +357,7 @@ if (OPENSSL_FOUND)
     target_link_libraries(tournament_wire_frame_test PRIVATE OpenSSL::Crypto)
 
     add_executable(tournament_net_transport_test
+        src/tournament/ban_file.cpp
         src/tournament/net_transport.cpp
         src/tournament/net_transport_test.cpp
         src/tournament/remote_backend.cpp
@@ -362,6 +373,7 @@ if (OPENSSL_FOUND)
 
     add_executable(remote_client
         src/remote_client.cpp
+        src/tournament/ban_file.cpp
         src/tournament/config_file.cpp
         src/tournament/net_transport.cpp
         src/tournament/registry.cpp
@@ -397,6 +409,7 @@ if (OPENSSL_FOUND)
         src/tournament/wire.cpp
         src/tournament/wire_crypto.cpp
         src/tournament/loopback.cpp
+        src/tournament/ban_file.cpp
         src/tournament/registry.cpp
         src/tournament/audit.cpp
         src/tournament/repair.cpp
@@ -429,6 +442,7 @@ add_test(NAME tuning_engine_match_test COMMAND tuning_engine_match_test)
 add_test(NAME tetris_memory_budget_test COMMAND tetris_memory_budget_test)
 add_test(NAME tournament_journal_test COMMAND tournament_journal_test)
 add_test(NAME tournament_config_file_test COMMAND tournament_config_file_test)
+add_test(NAME tournament_toj_conformance_test COMMAND tournament_toj_conformance_test)
 
 if (OPENSSL_FOUND)
     add_test(NAME tournament_wire_test COMMAND tournament_wire_test)

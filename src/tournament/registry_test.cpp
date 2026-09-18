@@ -10,6 +10,7 @@
 #include <system_error>
 #include <vector>
 
+#include "tournament/ban_file.h"
 #include "tournament/bytes.h"
 
 namespace
@@ -37,6 +38,20 @@ namespace
     tw::PublicKey key_for(std::uint8_t tag)
     {
         return {tag, static_cast<std::uint8_t>(tag + 1), static_cast<std::uint8_t>(tag + 2)};
+    }
+
+    tw::PublicKey full_key(std::uint8_t tag)
+    {
+        return std::vector<std::uint8_t>(32, tag);
+    }
+
+    std::filesystem::path fresh_dir(char const *label)
+    {
+        std::filesystem::path const dir = std::filesystem::temp_directory_path()
+            / (std::string(label) + "_"
+               + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(dir);
+        return dir;
     }
 
     void test_enroll_and_lookups()
@@ -297,6 +312,95 @@ namespace
     }
 }
 
+    void test_ban_file_live_reload()
+    {
+        std::filesystem::path const dir = fresh_dir("tournament_registry_reload");
+        std::string const path = (dir / "bans.txt").string();
+        tournament_ban::BanFile store(path);
+        tournament_ban::BanRecord record;
+        record.device = 5;
+        record.public_key = full_key(0x50);
+        record.generation = 1;
+        record.failed_verdicts = 2;
+        record.caught_at_ms = 3;
+        std::string error;
+        check(store.append(record, error), "live reload: ban appended");
+
+        tr::DeviceRegistry registry;
+        check(registry.ban_key(full_key(0x50)), "live reload: initial ban applied in memory");
+        registry.set_ban_file(path);
+        check(registry.key_banned(full_key(0x50)), "live reload: ban visible after the first check");
+        check(!registry.key_banned(full_key(0x60)), "live reload: other keys unaffected");
+
+        bool removed = false;
+        check(store.remove(full_key(0x50), removed, error) && removed,
+              "live reload: ban removed from the file");
+        check(!registry.key_banned(full_key(0x50)),
+              "live reload: unban picked up without a restart");
+
+        tournament_ban::BanRecord other;
+        other.device = 6;
+        other.public_key = full_key(0x60);
+        other.generation = 2;
+        other.failed_verdicts = 1;
+        other.caught_at_ms = 4;
+        check(store.append(other, error), "live reload: new ban appended while running");
+        check(registry.key_banned(full_key(0x60)),
+              "live reload: new ban picked up without a restart");
+
+        std::error_code cleanup;
+        std::filesystem::remove_all(dir, cleanup);
+    }
+
+    void test_remove_trust_record()
+    {
+        std::filesystem::path const dir = fresh_dir("tournament_registry_unban");
+        std::string const path = (dir / "trust.txt").string();
+        {
+            std::ofstream output(path, std::ios::trunc);
+            output << "5 " << std::string(64, '5') << " 7 1\n";
+            output << "6 " << std::string(64, '6') << " 3 2\n";
+        }
+        bool removed = false;
+        std::string error;
+        check(tr::remove_trust_record(path, full_key(0x55), removed, error) && removed,
+              "unban: trust record for the key is removed");
+        {
+            std::ifstream input(path);
+            std::string line;
+            std::vector<std::string> lines;
+            while (std::getline(input, line))
+            {
+                if (!line.empty())
+                {
+                    lines.push_back(line);
+                }
+            }
+            check(lines.size() == 1 && lines[0].find(std::string(64, '6')) != std::string::npos,
+                  "unban: the other trust record is untouched");
+        }
+        removed = false;
+        check(tr::remove_trust_record(path, full_key(0x55), removed, error) && !removed,
+              "unban: absent key reports nothing removed");
+        removed = false;
+        check(tr::remove_trust_record((dir / "missing.txt").string(), full_key(0x55), removed,
+                                      error) && !removed,
+              "unban: missing trust file is not an error");
+
+        std::string const malformed = (dir / "bad.txt").string();
+        {
+            std::ofstream output(malformed, std::ios::trunc);
+            output << "5 " << std::string(64, '5') << " 7 1\nnot a trust line\n";
+        }
+        removed = false;
+        check(!tr::remove_trust_record(malformed, full_key(0x55), removed, error)
+                  && error.find("line 2") != std::string::npos,
+              "unban: malformed trust file fails with its line number");
+
+        std::error_code cleanup;
+        std::filesystem::remove_all(dir, cleanup);
+    }
+
 int main()
 {
     test_enroll_and_lookups();
@@ -309,6 +413,8 @@ int main()
     test_size_counts_enrollments();
     test_stats_independent();
     test_trust_persistence();
+    test_ban_file_live_reload();
+    test_remove_trust_record();
     std::println("{} checks, {} failures", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

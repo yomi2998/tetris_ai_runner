@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "tournament/toj_conformance.h"
 #include "tournament/wire.h"
 #include "tuning/domain.h"
 #include "tuning/engine_match.h"
@@ -228,7 +229,13 @@ namespace repro_probe
     {
         try
         {
-            TojBackend backend;
+            auto const shared_context = tuning_toj::TojAdapter::make_shared_context();
+            if (!shared_context)
+            {
+                std::println(stderr, "probe failed: cannot prepare shared TOJ context");
+                return 1;
+            }
+            TojBackend backend(shared_context);
             std::vector<tuning::BatchGame> const games = build_games(config);
             tuning::RunConfig const run_config = run_config_for(config);
             std::println("config games={} iterations={} max_rounds={} threads={} seed={}",
@@ -236,6 +243,14 @@ namespace repro_probe
             std::vector<tuning::GameOutcome> const outcomes = backend.run_games(games, run_config);
             print_outcomes(outcomes);
             std::println("checksum {:016x}", outcome_checksum(outcomes));
+            auto probe_run = [&backend](std::vector<tuning::BatchGame> const &probe_games,
+                                        tuning::RunConfig const &probe_config)
+            {
+                return backend.run_games(probe_games, probe_config);
+            };
+            std::uint64_t const conformance
+                = tournament_identity::toj_conformance_fingerprint(shared_context, probe_run);
+            std::println("conformance {:016x}", conformance);
             return 0;
         }
         catch (std::exception const &error)

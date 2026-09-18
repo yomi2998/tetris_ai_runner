@@ -19,6 +19,7 @@
 #include "tournament/config_file.h"
 #include "tournament/engine_identity.h"
 #include "tournament/net_transport.h"
+#include "tournament/toj_conformance.h"
 #include "tournament/wire.h"
 #include "tuning/engine_match.h"
 #include "tuning/toj_adapter.h"
@@ -532,8 +533,8 @@ namespace remote_client
         {
             return backend.run_games(games, probe_config);
         };
-        hello.engine_fingerprint = tournament_identity::adapter_engine_fingerprint<tuning_toj::TojAdapter>(
-            probe_run);
+        hello.engine_fingerprint = tournament_identity::toj_conformance_fingerprint(shared_context,
+                                                                                    probe_run);
         hello.max_concurrent_assignments = cli.max_concurrent_assignments;
         std::size_t backoff_step = 0;
         for (;;)

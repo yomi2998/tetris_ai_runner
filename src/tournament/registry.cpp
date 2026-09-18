@@ -5,6 +5,7 @@
 #include <sstream>
 #include <system_error>
 
+#include "tournament/ban_file.h"
 #include "tournament/bytes.h"
 
 namespace tournament_registry
@@ -95,6 +96,7 @@ namespace tournament_registry
     bool DeviceRegistry::key_banned(PublicKey const &public_key) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        refresh_bans_locked();
         for (PublicKey const &banned : banned_keys_)
         {
             if (banned == public_key)
@@ -103,6 +105,61 @@ namespace tournament_registry
             }
         }
         return false;
+    }
+
+    void DeviceRegistry::set_ban_file(std::string const &path)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ban_file_ = path;
+        ban_checked_ = false;
+    }
+
+    void DeviceRegistry::refresh_bans_locked() const
+    {
+        if (ban_file_.empty())
+        {
+            return;
+        }
+        std::error_code stat_error;
+        std::filesystem::file_time_type const written
+            = std::filesystem::last_write_time(ban_file_, stat_error);
+        if (stat_error)
+        {
+            if (stat_error == std::errc::no_such_file_or_directory && !banned_keys_.empty())
+            {
+                banned_keys_.clear();
+                ban_checked_ = true;
+                ban_stamp_ = 0;
+                ban_bytes_ = 0;
+            }
+            return;
+        }
+        std::uintmax_t const bytes = std::filesystem::file_size(ban_file_, stat_error);
+        if (stat_error)
+        {
+            return;
+        }
+        std::uint64_t const stamp
+            = static_cast<std::uint64_t>(written.time_since_epoch().count());
+        if (ban_checked_ && stamp == ban_stamp_ && bytes == ban_bytes_)
+        {
+            return;
+        }
+        tournament_ban::BanFile store(ban_file_);
+        std::vector<tournament_ban::BanRecord> records;
+        std::string load_error;
+        if (!store.load(records, load_error))
+        {
+            return;
+        }
+        banned_keys_.clear();
+        for (tournament_ban::BanRecord &record : records)
+        {
+            banned_keys_.push_back(std::move(record.public_key));
+        }
+        ban_stamp_ = stamp;
+        ban_bytes_ = bytes;
+        ban_checked_ = true;
     }
 
     bool DeviceRegistry::set_concurrency(DeviceId device, std::uint32_t concurrent_assignments)
@@ -299,5 +356,79 @@ namespace tournament_registry
     {
         std::lock_guard<std::mutex> lock(mutex_);
         return devices_.size();
+    }
+
+    bool remove_trust_record(std::string const &path, PublicKey const &public_key, bool &removed,
+                             std::string &error)
+    {
+        removed = false;
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open())
+        {
+            return true;
+        }
+        std::vector<TrustRecord> kept;
+        std::string line;
+        std::size_t line_number = 0;
+        while (std::getline(input, line))
+        {
+            ++line_number;
+            if (line.empty())
+            {
+                continue;
+            }
+            std::istringstream fields(line);
+            std::string device_text;
+            std::string key_text;
+            int passed = 0;
+            int failed = 0;
+            if (!(fields >> device_text >> key_text >> passed >> failed) || key_text.size() != 64)
+            {
+                error = path + " line " + std::to_string(line_number)
+                    + ": expected '<device id> <64 hex public key> <audits passed> <audits failed>'";
+                return false;
+            }
+            std::optional<std::vector<std::uint8_t>> const key = tournament_bytes::decode_hex(key_text);
+            if (!key || key->size() != 32)
+            {
+                error = path + " line " + std::to_string(line_number) + ": malformed public key hex";
+                return false;
+            }
+            if (*key == public_key)
+            {
+                removed = true;
+                continue;
+            }
+            TrustRecord record;
+            record.public_key = *key;
+            DeviceId parsed_device = 0;
+            std::istringstream(device_text) >> parsed_device;
+            record.device = parsed_device;
+            record.audits_passed = passed;
+            record.audits_failed = failed;
+            kept.push_back(record);
+        }
+        if (!removed)
+        {
+            return true;
+        }
+        std::string const temporary = path + ".tmp";
+        {
+            std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+            for (TrustRecord const &record : kept)
+            {
+                output << record.device << ' '
+                       << tournament_bytes::encode_hex(record.public_key) << ' '
+                       << record.audits_passed << ' ' << record.audits_failed << '\n';
+            }
+        }
+        std::error_code rename_error;
+        std::filesystem::rename(temporary, path, rename_error);
+        if (rename_error)
+        {
+            error = "cannot replace " + path;
+            return false;
+        }
+        return true;
     }
 }

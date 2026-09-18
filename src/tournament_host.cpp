@@ -20,6 +20,7 @@
 
 #include "tournament/audit.h"
 #include "tournament/ban_file.h"
+#include "tournament/bytes.h"
 #include "tournament/config_file.h"
 #include "tournament/engine_identity.h"
 #include "tournament/net_transport.h"
@@ -28,6 +29,7 @@
 #include "tournament/remote_backend.h"
 #include "tournament/repair.h"
 #include "tournament/runner.h"
+#include "tournament/toj_conformance.h"
 #include "tournament/transport.h"
 #include "tuning/domain.h"
 #include "tuning/engine_match.h"
@@ -71,6 +73,7 @@ namespace tournament_host
         std::int64_t max_draws = 10000;
         int audit_workers = 2;
         std::string trust_file = "tournament_trust.txt";
+        std::string unban_key;
     };
 
     void print_usage(char const *program)
@@ -91,6 +94,7 @@ namespace tournament_host
         std::println("Config keys: address, port, certificate, private_key, devices_file, ban_file, roster_size, generation_seed, audit_rate, games_per_assignment, lease_ms, series_cap, wait_clients_ms, threads, iterations, max_rounds, max_games, max_draws, trust_file");
         std::println("Flags: --trust-file P persists device audit trust across restarts (default tournament_trust.txt, empty string disables)");
         std::println("Flags: --audit-workers N bounds the local audit re-run lanes (default 2, each lane runs single-threaded re-plays)");
+        std::println("Flags: --unban K removes the ban record and the trust record for the 64 hex character device public key K from the ban and trust files, then exits");
     }
 
     bool apply_config_file(HostConfig &config, nlohmann::json const &values, std::string &error)
@@ -474,6 +478,14 @@ namespace tournament_host
                 }
                 ++i;
             }
+            else if (flag == "--unban")
+            {
+                if (i + 1 >= argc)
+                {
+                    return fail("flag --unban requires a value");
+                }
+                config.unban_key = argv[++i];
+            }
             else if (flag == "--config")
             {
                 if (i + 1 >= argc)
@@ -488,6 +500,58 @@ namespace tournament_host
             }
         }
         return true;
+    }
+
+    int run_unban(char const *key_hex, std::string const &ban_file, std::string const &trust_file)
+    {
+        std::optional<std::vector<std::uint8_t>> const decoded
+            = tournament_bytes::decode_hex(std::string(key_hex));
+        if (!decoded.has_value() || decoded->size() != 32)
+        {
+            std::println(stderr, "--unban expects a 64 hex character device public key");
+            return 1;
+        }
+        tw::PublicKey const key(*decoded);
+        if (ban_file.empty())
+        {
+            std::println(stderr, "--unban needs a ban file, but --ban-file is empty");
+            return 1;
+        }
+        tournament_ban::BanFile store(ban_file);
+        bool removed = false;
+        std::string error;
+        if (!store.remove(key, removed, error))
+        {
+            std::println(stderr, "cannot update {}: {}", ban_file, error);
+            return 1;
+        }
+        if (removed)
+        {
+            std::println("removed ban record for {} from {}", key_hex, ban_file);
+        }
+        else
+        {
+            std::println("no ban record for {} in {}", key_hex, ban_file);
+        }
+        if (!trust_file.empty())
+        {
+            bool trust_removed = false;
+            std::string trust_error;
+            if (!treg::remove_trust_record(trust_file, key, trust_removed, trust_error))
+            {
+                std::println(stderr, "cannot update {}: {}", trust_file, trust_error);
+                return 1;
+            }
+            if (trust_removed)
+            {
+                std::println("removed trust record for {} from {}", key_hex, trust_file);
+            }
+            else
+            {
+                std::println("no trust record for {} in {}", key_hex, trust_file);
+            }
+        }
+        return 0;
     }
 
     bool file_exists(std::string const &path)
@@ -515,7 +579,7 @@ namespace tournament_host
             return probe_backend.run_games(games, probe_config);
         };
         config.expected_engine_fingerprint
-            = tournament_identity::adapter_engine_fingerprint<tuning_toj::TojAdapter>(probe_run);
+            = tournament_identity::toj_conformance_fingerprint(probe_context, probe_run);
         config.log = [](std::string const &message)
         {
             std::println("net: {}", message);
@@ -572,6 +636,7 @@ namespace tournament_host
                 registry->ban_key(record.public_key);
             }
             std::println("{} banned device key(s) loaded from {}", ban_records.size(), cli.ban_file);
+            registry->set_ban_file(cli.ban_file);
         }
         if (!cli.trust_file.empty())
         {
@@ -593,7 +658,8 @@ namespace tournament_host
                 std::println("starting a fresh trust file at {}", cli.trust_file);
             }
         }
-        auto transport = std::make_shared<tnet::HostTransport>(registry, net_config_for(cli));
+        tnet::NetConfig const net_config = net_config_for(cli);
+        auto transport = std::make_shared<tnet::HostTransport>(registry, net_config);
         std::string start_error;
         if (!transport->start(start_error))
         {
@@ -602,6 +668,7 @@ namespace tournament_host
         }
         std::uint16_t const bound_port = transport->listening_port();
         std::println("listening on {}:{} fingerprint {}", cli.address, bound_port, *fingerprint);
+        std::println("engine fingerprint {:016x}", net_config.expected_engine_fingerprint);
         std::println("start clients: remote_client --host {} --port {} --device-id N --key-file K --fingerprint {}",
             cli.address, bound_port, *fingerprint);
 
@@ -892,6 +959,11 @@ int main(int argc, char *argv[])
     if (!tournament_host::parse_flags(argc, argv, config))
     {
         return 1;
+    }
+    if (!config.unban_key.empty())
+    {
+        return tournament_host::run_unban(config.unban_key.c_str(), config.ban_file,
+                                          config.trust_file);
     }
     return tournament_host::run_host(config);
 }

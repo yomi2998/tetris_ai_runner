@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -462,6 +463,10 @@ namespace tournament_rating
                 }
                 return max_grad;
             };
+            std::vector<double> best_r;
+            double best_grad = 0.0;
+            double first_grad = 0.0;
+            bool have_best = false;
             for (int iter = 0; iter < options.max_newton_iterations; ++iter)
             {
                 double const max_grad = full_gradient();
@@ -473,9 +478,25 @@ namespace tournament_rating
                     out.max_abs_gradient = max_grad;
                     return out;
                 }
+                if (have_best && !(max_grad < best_grad) && best_grad < first_grad)
+                {
+                    out.ok = true;
+                    out.ratings = best_r;
+                    out.iterations = iter - 1;
+                    out.max_abs_gradient = best_grad;
+                    return out;
+                }
+                if (!have_best)
+                {
+                    first_grad = max_grad;
+                }
+                best_r = r;
+                best_grad = max_grad;
+                have_best = true;
                 update_weights(problem, r);
                 if (!cg_solve(problem, grad, delta, options))
                 {
+                    out.iterations = iter;
                     out.error = "conjugate gradient solve failed at newton iteration "
                         + std::to_string(iter);
                     return out;
@@ -483,6 +504,7 @@ namespace tournament_rating
                 double const dir = std::inner_product(grad.begin(), grad.end(), delta.begin(), 0.0);
                 if (!(dir > 0.0))
                 {
+                    out.iterations = iter;
                     out.error = "newton step is not an ascent direction at newton iteration "
                         + std::to_string(iter);
                     return out;
@@ -505,6 +527,7 @@ namespace tournament_rating
                 }
                 if (!accepted)
                 {
+                    out.iterations = iter;
                     out.error = "line search failed at newton iteration " + std::to_string(iter);
                     return out;
                 }
@@ -519,8 +542,18 @@ namespace tournament_rating
                 out.max_abs_gradient = max_grad;
                 return out;
             }
+            if (have_best && !(max_grad < best_grad) && best_grad < first_grad)
+            {
+                out.ok = true;
+                out.ratings = best_r;
+                out.iterations = options.max_newton_iterations - 1;
+                out.max_abs_gradient = best_grad;
+                return out;
+            }
+            out.iterations = options.max_newton_iterations;
+            out.max_abs_gradient = max_grad;
             out.error = "did not converge within " + std::to_string(options.max_newton_iterations)
-                + " newton iterations (max |gradient| = " + std::to_string(max_grad) + ")";
+                + " newton iterations (max |gradient| = " + std::format("{:.3e}", max_grad) + ")";
             return out;
         }
 
@@ -724,6 +757,8 @@ namespace tournament_rating
         if (!solution.ok)
         {
             out.error = solution.error;
+            out.diagnostics.newton_iterations = solution.iterations;
+            out.diagnostics.max_abs_gradient = solution.max_abs_gradient;
             return out;
         }
         return assemble(built.aggregates, solution, options);

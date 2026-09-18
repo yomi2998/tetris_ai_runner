@@ -19,7 +19,7 @@ namespace tournament_rating
     struct Options
     {
         double l2_lambda = 0.01;
-        double gradient_tolerance = 1e-8;
+        double gradient_tolerance = 1e-6;
         int max_newton_iterations = 100;
         double cg_relative_tolerance = 1e-12;
         int cg_max_iterations = 1000;

@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -820,7 +821,10 @@ namespace tournament_net
             if (shared.config.expected_engine_fingerprint != 0
                 && hello->engine_fingerprint != shared.config.expected_engine_fingerprint)
             {
-                reason = "engine fingerprint mismatch";
+                reason = "engine fingerprint mismatch: client "
+                    + std::format("{:016x}", hello->engine_fingerprint) + ", host expects "
+                    + std::format("{:016x}", shared.config.expected_engine_fingerprint)
+                    + ": inconforming build";
                 return false;
             }
             if (!shared.registry)

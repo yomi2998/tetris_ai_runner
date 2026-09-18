@@ -28,6 +28,7 @@ namespace tournament_ban
 
         bool load(std::vector<BanRecord> &records, std::string &error) const;
         bool append(BanRecord const &record, std::string &error);
+        bool remove(PublicKey const &public_key, bool &removed, std::string &error) const;
         std::size_t record_count() const;
 
     private:

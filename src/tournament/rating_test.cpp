@@ -376,6 +376,35 @@ namespace
         return records;
     }
 
+    void test_convergence_floor()
+    {
+        auto const records = bridge_dataset();
+        tournament_rating::Options unattainable;
+        unattainable.gradient_tolerance = 1e-12;
+        auto const floored = tournament_rating::fit(records, unattainable);
+        check(floored.ok, "convergence floor: unattainable tolerance still fits at the reachable floor");
+        if (floored.ok)
+        {
+            check(floored.diagnostics.newton_iterations >= 1
+                      && floored.diagnostics.newton_iterations < unattainable.max_newton_iterations,
+                  "convergence floor: plateau stop lands inside the budget");
+            check(floored.diagnostics.max_abs_gradient > 0.0
+                      && floored.diagnostics.max_abs_gradient < 1e-4,
+                  "convergence floor: reported gradient is the best achieved value");
+        }
+
+        tournament_rating::Options tiny_budget;
+        tiny_budget.gradient_tolerance = 1e-12;
+        tiny_budget.max_newton_iterations = 1;
+        auto const failed = tournament_rating::fit(records, tiny_budget);
+        check(!failed.ok, "convergence floor: a still-improving fit under a tiny budget fails");
+        check(failed.error.find("did not converge") != std::string::npos
+                  && failed.error.find("0.000000") == std::string::npos,
+              "convergence floor: failure error prints the real gradient: " + failed.error);
+        check(failed.diagnostics.newton_iterations == 1 && failed.diagnostics.max_abs_gradient > 0.0,
+              "convergence floor: failure diagnostics report iterations and the achieved gradient");
+    }
+
     void test_bootstrap_attempts()
     {
         auto const records = bridge_dataset();
@@ -547,6 +576,7 @@ int main()
     test_reordering();
     test_bootstrap();
     test_se_solve_failure();
+    test_convergence_floor();
     test_bootstrap_attempts();
     test_invalid_inputs();
     test_sparse_graph();
