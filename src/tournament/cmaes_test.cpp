@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <dirent.h>
+#include <filesystem>
 #include <limits>
 #include <print>
 #include <stdexcept>
@@ -709,8 +710,11 @@ int main()
         std::println(stderr, "FAIL: could not read the working directory");
         return 1;
     }
-    char pattern[] = "/tmp/tournament_cmaes_test_XXXXXX";
-    char *dir = mkdtemp(pattern);
+    std::string const pattern
+        = (std::filesystem::temp_directory_path() / "tournament_cmaes_test_XXXXXX").string();
+    std::vector<char> buffer(pattern.begin(), pattern.end());
+    buffer.push_back('\0');
+    char *dir = mkdtemp(buffer.data());
     if (dir == nullptr)
     {
         std::println(stderr, "FAIL: could not create a temporary directory");

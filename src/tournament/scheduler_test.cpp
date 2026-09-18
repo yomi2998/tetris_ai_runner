@@ -115,8 +115,9 @@ namespace
 
     int settled_thread_count(int expected)
     {
+        auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         int count = thread_count();
-        for (int retry = 0; expected >= 0 && count != expected && retry < 100; ++retry)
+        while (expected >= 0 && count != expected && std::chrono::steady_clock::now() < deadline)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             count = thread_count();

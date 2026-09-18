@@ -65,6 +65,9 @@ namespace tournament_rating
 
     struct FitResult
     {
+        // ok means the fit is usable, not that the gradient reached gradient_tolerance:
+        // the fit accepts its floating point plateau, so convergence-sensitive callers
+        // must check diagnostics.max_abs_gradient against their own threshold.
         bool ok = false;
         std::string error;
         std::vector<std::vector<CandidateId>> components;
