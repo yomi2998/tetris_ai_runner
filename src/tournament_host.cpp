@@ -589,20 +589,26 @@ namespace tournament_host
         auto provenance = std::make_shared<tprov::ProvenanceLedger>();
         auto clock = std::make_shared<tt::SystemClock>();
         auto remote_timing = std::make_shared<trem::DeviceTiming>();
+        std::shared_ptr<m_tetris::TetrisContext> const local_context
+            = tuning_toj::TojAdapter::make_shared_context();
+        if (!local_context)
+        {
+            std::println(stderr, "cannot prepare the local engine context");
+            transport->stop();
+            return 1;
+        }
+        TojBackend const local_engine{local_context};
+        taud::ReRun const re_run = [&local_engine](std::vector<tuning::BatchGame> const &games,
+                                                   tuning::RunConfig const &config)
+        {
+            return local_engine.run_games(games, config);
+        };
         tuning::RunConfig run_config;
         run_config.threads = cli.threads;
         run_config.iterations_per_move = static_cast<std::size_t>(cli.iterations);
         run_config.max_rounds = cli.max_rounds;
         {
-            std::shared_ptr<m_tetris::TetrisContext> const calibrate_context
-                = tuning_toj::TojAdapter::make_shared_context();
-            if (!calibrate_context)
-            {
-                std::println(stderr, "cannot prepare the calibration engine context");
-                transport->stop();
-                return 1;
-            }
-            TojBackend const calibrate_engine{calibrate_context};
+            TojBackend const calibrate_engine{local_context};
             tuning::ParamSchema const &schema = tuning_toj::TojAdapter::schema();
             tuning::BatchGame probe;
             probe.id = trun::game_id_for(1, 0);
@@ -627,6 +633,30 @@ namespace tournament_host
         remote_config.log = [](std::string const &message)
         {
             std::println("net: {}", message);
+        };
+        remote_config.audit_rate = cli.audit_rate;
+        remote_config.auditor = re_run;
+        remote_config.on_liar = [registry, &cli](tw::DeviceId device)
+        {
+            registry->blacklist(device);
+            tw::PublicKey const *banned_key = registry->public_key(device);
+            if (banned_key != nullptr && !cli.ban_file.empty())
+            {
+                registry->ban_key(*banned_key);
+                tournament_ban::BanRecord ban_record;
+                ban_record.device = device;
+                ban_record.public_key = *banned_key;
+                ban_record.generation = 0;
+                ban_record.failed_verdicts = 1;
+                ban_record.caught_at_ms = tt::SystemClock().now_ms();
+                tournament_ban::BanFile ban_store(cli.ban_file);
+                std::string ban_error;
+                if (!ban_store.append(ban_record, ban_error))
+                {
+                    std::println(stderr, "ban file append failed: {}", ban_error);
+                }
+            }
+            std::println("net: device {} caught lying by the streaming audit and banned", device);
         };
         trem::RemoteBackend backend(schema, transport, registry, provenance, clock, remote_config);
         trun::RunLimits limits;
@@ -666,20 +696,6 @@ namespace tournament_host
             }
         }
 
-        std::shared_ptr<m_tetris::TetrisContext> const local_context = tuning_toj::TojAdapter::make_shared_context();
-        if (!local_context)
-        {
-            std::println(stderr, "cannot prepare the local engine context");
-            transport->stop();
-            return 1;
-        }
-        TojBackend const local_engine{local_context};
-        taud::ReRun const re_run = [&local_engine](std::vector<tuning::BatchGame> const &games,
-                                        tuning::RunConfig const &config)
-        {
-            return local_engine.run_games(games, config);
-        };
-
         std::uint64_t champion_id = runner.champion();
         std::vector<trun::CandidateId> standings = runner.standings();
         std::int64_t total_games = runner.total_games();
@@ -689,68 +705,22 @@ namespace tournament_host
 
         try
         {
-            auto device_rate = [&](tw::DeviceId device)
+            std::vector<tw::DeviceId> failed_devices;
+            for (auto const *entry : provenance->entries())
             {
-                treg::DeviceStats const *stats = registry->stats(device);
-                return (stats != nullptr && stats->audits_passed > 0) ? cli.audit_rate : 1.0;
-            };
-            std::vector<taud::AuditTarget> const targets = taud::select_targets_rated(*provenance, device_rate,
-                {}, cli.generation_seed);
-            taud::AuditReport const report = taud::audit_records(*provenance, targets, run_config, re_run);
-            std::map<tw::DeviceId, bool> device_passed;
-            for (taud::AuditVerdict const &verdict : report.verdicts)
-            {
-                auto entry = device_passed.emplace(verdict.target.device, verdict.passed);
-                if (!entry.second)
+                if (registry->blacklisted(entry->device)
+                    && std::find(failed_devices.begin(), failed_devices.end(), entry->device)
+                        == failed_devices.end())
                 {
-                    entry.first->second = entry.first->second && verdict.passed;
+                    failed_devices.push_back(entry->device);
                 }
             }
-            for (auto const &[device, passed] : device_passed)
-            {
-                registry->record_audit(device, passed);
-            }
-            std::size_t const failed_verdicts = static_cast<std::size_t>(std::count_if(report.verdicts.begin(),
-                report.verdicts.end(), [](taud::AuditVerdict const &verdict)
-                {
-                    return !verdict.passed;
-                }));
-            std::println("audit: {} sampled, {} failed, devices {}", targets.size(), failed_verdicts,
-                join_ids(report.failed_devices()));
+            std::sort(failed_devices.begin(), failed_devices.end());
+            std::println("streaming audit: {} games audited at acceptance, {} device(s) with games to void",
+                backend.audited_game_ids().size(), failed_devices.size());
 
-            std::vector<tw::DeviceId> const failed_devices = report.failed_devices();
             if (!failed_devices.empty())
             {
-                std::unordered_map<tw::DeviceId, std::uint64_t> per_device_failures;
-                for (taud::AuditVerdict const &verdict : report.verdicts)
-                {
-                    if (!verdict.passed)
-                    {
-                        ++per_device_failures[verdict.target.device];
-                    }
-                }
-                tournament_ban::BanFile ban_store(cli.ban_file);
-                tt::SystemClock catch_clock;
-                for (tw::DeviceId device : failed_devices)
-                {
-                    registry->blacklist(device);
-                    tw::PublicKey const *banned_key = registry->public_key(device);
-                    if (banned_key != nullptr && !cli.ban_file.empty())
-                    {
-                        registry->ban_key(*banned_key);
-                        tournament_ban::BanRecord ban_record;
-                        ban_record.device = device;
-                        ban_record.public_key = *banned_key;
-                        ban_record.generation = 0;
-                        ban_record.failed_verdicts = per_device_failures[device];
-                        ban_record.caught_at_ms = catch_clock.now_ms();
-                        std::string ban_error;
-                        if (!ban_store.append(ban_record, ban_error))
-                        {
-                            std::println(stderr, "ban file append failed: {}", ban_error);
-                        }
-                    }
-                }
                 std::set<tw::GameId> voided_ids;
                 for (tw::DeviceId device : failed_devices)
                 {

@@ -786,6 +786,105 @@ namespace
         check(window_logged, "window expiry drops are logged with arrival and window timings");
     }
 
+    void test_streaming_audit_catches_liar_at_acceptance()
+    {
+        ContextPtr context = tuning_toj::TojAdapter::make_shared_context();
+        TojBackend const engine{context};
+        std::vector<double> const theta_a = theta_for(0);
+        std::vector<double> const theta_b = theta_for(1);
+        std::vector<tuning::BatchGame> games;
+        for (std::uint64_t id = 1; id <= 4; ++id)
+        {
+            tuning::BatchGame game;
+            game.id = id;
+            game.theta_a = theta_a;
+            game.theta_b = theta_b;
+            game.seed_a = tuning::derive_game_seed(911, id, 0);
+            game.seed_b = tuning::derive_game_seed(911, id, 1);
+            games.push_back(std::move(game));
+        }
+        trem::RemoteConfig remote_config;
+        remote_config.games_per_assignment = 2;
+        remote_config.lease_ms = 1000000;
+        remote_config.max_assignment_rounds = 4;
+        remote_config.per_series_device_cap = 8;
+        remote_config.audit_rate = 1.0;
+        remote_config.auditor = [&engine](std::vector<tuning::BatchGame> const &audit_games,
+                                          tuning::RunConfig const &audit_config)
+        {
+            return engine.run_games(audit_games, audit_config);
+        };
+        std::vector<tw::DeviceId> caught;
+        remote_config.on_liar = [&caught](tw::DeviceId device)
+        {
+            caught.push_back(device);
+        };
+
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2)};
+        Cluster cluster(devices, remote_config);
+        cluster.transport->add_device(1, flip_liar_handler(devices[0].keys, engine));
+        cluster.transport->add_device(2, honest_handler(devices[1].keys, engine));
+        std::vector<tuning::GameOutcome> const results = cluster.backend.run_games(games, fast_config());
+        check(outcomes_identical(results, engine.run_games(games, fast_config())),
+              "streaming audit: liar games reassigned with correct results");
+        check(cluster.provenance->games_of_device(1).empty(),
+              "streaming audit: liar has nothing accepted");
+        check(cluster.provenance->games_of_device(2).size() == 4,
+              "streaming audit: honest device covers every game");
+        check(caught.size() == 1 && caught[0] == 1,
+              "streaming audit: the liar catch is reported exactly once");
+        check(cluster.backend.audited_game_ids().size() == 4,
+              "streaming audit: audited game ids cover the liar and honest flights");
+        treg::DeviceStats const *liar_stats = cluster.registry->stats(1);
+        treg::DeviceStats const *honest_stats = cluster.registry->stats(2);
+        check(liar_stats != nullptr && liar_stats->audits_failed >= 1,
+              "streaming audit: liar failure recorded in device stats");
+        check(honest_stats != nullptr && honest_stats->audits_passed >= 1,
+              "streaming audit: honest passes recorded in device stats");
+    }
+
+    void test_streaming_audit_passes_honest_devices()
+    {
+        ContextPtr context = tuning_toj::TojAdapter::make_shared_context();
+        TojBackend const engine{context};
+        std::vector<double> const theta_a = theta_for(0);
+        std::vector<double> const theta_b = theta_for(1);
+        std::vector<tuning::BatchGame> games;
+        for (std::uint64_t id = 1; id <= 4; ++id)
+        {
+            tuning::BatchGame game;
+            game.id = id;
+            game.theta_a = theta_a;
+            game.theta_b = theta_b;
+            game.seed_a = tuning::derive_game_seed(913, id, 0);
+            game.seed_b = tuning::derive_game_seed(913, id, 1);
+            games.push_back(std::move(game));
+        }
+        trem::RemoteConfig remote_config;
+        remote_config.games_per_assignment = 2;
+        remote_config.lease_ms = 1000000;
+        remote_config.max_assignment_rounds = 4;
+        remote_config.per_series_device_cap = 8;
+        remote_config.audit_rate = 1.0;
+        remote_config.auditor = [&engine](std::vector<tuning::BatchGame> const &audit_games,
+                                          tuning::RunConfig const &audit_config)
+        {
+            return engine.run_games(audit_games, audit_config);
+        };
+
+        std::vector<DeviceHarness> devices{make_device(1)};
+        Cluster cluster(devices, remote_config);
+        cluster.transport->add_device(1, honest_handler(devices[0].keys, engine));
+        std::vector<tuning::GameOutcome> const results = cluster.backend.run_games(games, fast_config());
+        check(outcomes_identical(results, engine.run_games(games, fast_config())),
+              "full rate streaming audit keeps honest results correct");
+        check(cluster.provenance->size() == 4, "every honest game is accepted under the audit");
+        check(cluster.backend.audited_game_ids().size() == 4, "every game is recorded as audited");
+        treg::DeviceStats const *stats = cluster.registry->stats(1);
+        check(stats != nullptr && stats->games_dropped == 0 && stats->audits_passed >= 1,
+              "honest device records no drops and at least one audit pass");
+    }
+
     void test_silent_device_exhaustion_counts_rounds()
     {
         std::vector<double> const theta_a = theta_for(0);
@@ -929,6 +1028,8 @@ int main()
     test_failure_modes();
     test_round_budget_scales_with_demand();
     test_slow_sibling_does_not_expire_fast_results();
+    test_streaming_audit_catches_liar_at_acceptance();
+    test_streaming_audit_passes_honest_devices();
     test_silent_device_exhaustion_counts_rounds();
     test_concurrency_capacity_respected();
     test_unspecified_concurrency_acts_as_one();

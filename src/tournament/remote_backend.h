@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "tournament/provenance.h"
@@ -51,8 +52,12 @@ namespace tournament_remote
         int max_assignment_rounds = 4;
         int per_series_device_cap = 2;
         std::uint64_t nonce_seed = 0x5177ED5EEDC0FFEEULL;
+        double audit_rate = 0.25;
         std::shared_ptr<DeviceTiming> timing;
         std::function<void(std::string const &)> log;
+        std::function<std::vector<tuning::GameOutcome>(std::vector<tuning::BatchGame> const &,
+                                                       tuning::RunConfig const &)> auditor;
+        std::function<void(DeviceId)> on_liar;
     };
 
     class RemoteBackend
@@ -71,6 +76,8 @@ namespace tournament_remote
         std::vector<tuning::GameOutcome> run_games(std::vector<tuning::BatchGame> const &games,
                                                    tuning::RunConfig const &config) const;
 
+        std::vector<tournament_wire::GameId> audited_game_ids() const;
+
     private:
         tournament_wire::Nonce next_nonce() const;
 
@@ -82,5 +89,6 @@ namespace tournament_remote
         RemoteConfig config_;
         std::shared_ptr<DeviceTiming> timing_;
         mutable std::shared_ptr<std::atomic<std::uint64_t>> nonce_counter_;
+        mutable std::shared_ptr<std::unordered_set<tournament_wire::GameId>> audited_ids_;
     };
 }

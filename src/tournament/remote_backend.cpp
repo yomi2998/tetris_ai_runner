@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -171,6 +172,7 @@ namespace tournament_remote
         , config_(config)
         , timing_(config.timing ? config.timing : std::make_shared<DeviceTiming>())
         , nonce_counter_(std::make_shared<std::atomic<std::uint64_t>>(0))
+        , audited_ids_(std::make_shared<std::unordered_set<tournament_wire::GameId>>())
     {
         if (!transport_ || !registry_ || !provenance_ || !clock_)
         {
@@ -198,6 +200,13 @@ namespace tournament_remote
         return tuning::mix64(config_.nonce_seed ^ tuning::mix64(counter + 1));
     }
 
+    std::vector<tournament_wire::GameId> RemoteBackend::audited_game_ids() const
+    {
+        std::vector<tournament_wire::GameId> ids(audited_ids_->begin(), audited_ids_->end());
+        std::sort(ids.begin(), ids.end());
+        return ids;
+    }
+
     std::vector<tuning::GameOutcome> RemoteBackend::run_games(std::vector<tuning::BatchGame> const &games,
                                                               tuning::RunConfig const &config) const
     {
@@ -221,6 +230,7 @@ namespace tournament_remote
         std::vector<tuning::GameOutcome> results(total);
         std::vector<bool> done(total, false);
         std::unordered_map<tournament_wire::GameId, std::unordered_set<tournament_wire::DeviceId>> failed_on;
+        std::unordered_set<tournament_wire::DeviceId> caught_devices;
         std::unordered_map<tournament_wire::DeviceId, std::unordered_map<int, int>> series_load;
         for (tournament_provenance::ProvenanceRecord const *entry : provenance_->entries())
         {
@@ -285,6 +295,9 @@ namespace tournament_remote
                 std::uint64_t assigned_at_ms = 0;
                 std::uint64_t completed_at_ms = 0;
                 std::uint64_t wait_ms = 0;
+                bool audit_selected = false;
+                bool audit_error = false;
+                std::vector<tuning::GameOutcome> audit_outcomes;
             };
             std::vector<std::uint32_t> capacities(devices.size(), 1);
             for (std::size_t i = 0; i < devices.size(); ++i)
@@ -396,6 +409,24 @@ namespace tournament_remote
                 {
                     flight.assignment.games.push_back(tournament_wire::to_wire(games[index]));
                 }
+                flight.audit_selected = config_.auditor != nullptr;
+                if (flight.audit_selected)
+                {
+                    tournament_registry::DeviceStats const *stats = registry_->stats(flight.device);
+                    double const rate = (stats != nullptr && stats->audits_passed > 0)
+                        ? config_.audit_rate
+                        : 1.0;
+                    if (rate <= 0.0)
+                    {
+                        flight.audit_selected = false;
+                    }
+                    else if (rate < 1.0)
+                    {
+                        std::mt19937_64 engine(flight.assignment.nonce ^ 0xA0D17EED5ULL);
+                        std::uint64_t const threshold = static_cast<std::uint64_t>(rate * 1000000.0);
+                        flight.audit_selected = engine() % 1000000ULL < threshold;
+                    }
+                }
                 flight.wait_ms = timing_->wait_hint_ms(flight.device, flight.indices.size(), config_.lease_ms);
                 timing_->record_dispatch(flight.device, flight.indices.size());
                 flights.push_back(std::move(flight));
@@ -406,10 +437,34 @@ namespace tournament_remote
             for (Flight &flight : flights)
             {
                 flight.assigned_at_ms = clock_->now_ms();
-                workers.emplace_back([this, &flight]()
+                workers.emplace_back([this, &flight, &config]()
                 {
                     flight.delivery = transport_->request(flight.device, flight.assignment, flight.wait_ms);
                     flight.completed_at_ms = clock_->now_ms();
+                    if (flight.audit_selected
+                        && flight.delivery.status == tournament_transport::DeliveryStatus::Delivered)
+                    {
+                        try
+                        {
+                            std::vector<tuning::BatchGame> audit_games;
+                            audit_games.reserve(flight.assignment.games.size());
+                            for (tournament_wire::WireGame const &game : flight.assignment.games)
+                            {
+                                audit_games.push_back(tournament_wire::from_wire(game));
+                            }
+                            flight.audit_outcomes = config_.auditor(audit_games, config);
+                            if (flight.audit_outcomes.size() != flight.assignment.games.size())
+                            {
+                                flight.audit_outcomes.clear();
+                                flight.audit_error = true;
+                            }
+                        }
+                        catch (std::exception const &)
+                        {
+                            flight.audit_outcomes.clear();
+                            flight.audit_error = true;
+                        }
+                    }
                 });
             }
             for (std::thread &worker : workers)
@@ -443,10 +498,58 @@ namespace tournament_remote
                         }
                     }
                 }
+                bool audit_passed = false;
+                bool audit_failed = false;
+                if (flight.audit_selected && !flight.audit_error
+                    && flight.delivery.status == tournament_transport::DeliveryStatus::Delivered
+                    && flight.audit_outcomes.size() == flight.assignment.games.size())
+                {
+                    bool ids_match = true;
+                    for (std::size_t i = 0; i < flight.audit_outcomes.size(); ++i)
+                    {
+                        if (flight.audit_outcomes[i].id != flight.assignment.games[i].id)
+                        {
+                            ids_match = false;
+                            break;
+                        }
+                    }
+                    if (!ids_match)
+                    {
+                        flight.audit_error = true;
+                    }
+                    else
+                    {
+                        audit_passed = true;
+                        for (std::size_t i = 0; i < flight.audit_outcomes.size(); ++i)
+                        {
+                            if (tournament_wire::encode_outcome(flight.delivery.result.batch.outcomes[i])
+                                != tournament_wire::encode_outcome(
+                                    tournament_wire::to_wire(flight.audit_outcomes[i])))
+                            {
+                                audit_passed = false;
+                                audit_failed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (flight.audit_error && config_.log)
+                {
+                    config_.log("device " + std::to_string(flight.device) + " nonce "
+                        + std::to_string(flight.assignment.nonce) + " audit re-run failed");
+                }
                 std::uint64_t const elapsed_ms = flight.completed_at_ms > flight.assigned_at_ms
                     ? flight.completed_at_ms - flight.assigned_at_ms
                     : 0;
                 bool const expired = elapsed_ms > flight.wait_ms;
+                bool const caught_lying = accepted && !expired && audit_failed;
+                if (caught_lying)
+                {
+                    for (std::size_t index : flight.indices)
+                    {
+                        audited_ids_->insert(games[index].id);
+                    }
+                }
                 if (flight.delivery.status == tournament_transport::DeliveryStatus::Delivered)
                 {
                     if (accepted && !expired)
@@ -471,7 +574,7 @@ namespace tournament_remote
                 {
                     timing_->record_reset(flight.device);
                 }
-                if (accepted && !expired)
+                if (accepted && !expired && !caught_lying)
                 {
                     for (std::size_t i = 0; i < flight.indices.size(); ++i)
                     {
@@ -492,6 +595,14 @@ namespace tournament_remote
                         ++series_load[flight.device][series_of(games[index].id)];
                     }
                     registry_->record_accepted(flight.device, attempted);
+                    if (audit_passed)
+                    {
+                        registry_->record_audit(flight.device, true);
+                        for (std::size_t index : flight.indices)
+                        {
+                            audited_ids_->insert(games[index].id);
+                        }
+                    }
                 }
                 else
                 {
@@ -500,16 +611,25 @@ namespace tournament_remote
                     {
                         failed_on[games[index].id].insert(flight.device);
                     }
+                    if (caught_lying)
+                    {
+                        registry_->record_audit(flight.device, false);
+                        if (caught_devices.insert(flight.device).second && config_.on_liar)
+                        {
+                            config_.on_liar(flight.device);
+                        }
+                    }
                     if (config_.log)
                     {
-                        std::string const why = flight.delivery.status
-                                != tournament_transport::DeliveryStatus::Delivered
-                            ? delivery_status_name(flight.delivery.status)
-                            : (expired
-                                  ? "result arrived " + std::to_string(elapsed_ms)
-                                        + " ms after dispatch, past the " + std::to_string(flight.wait_ms)
-                                        + " ms window"
-                                  : delivery_status_name(flight.delivery.status));
+                        std::string const why = caught_lying
+                            ? std::string("result failed the streaming audit")
+                            : (flight.delivery.status != tournament_transport::DeliveryStatus::Delivered
+                                   ? delivery_status_name(flight.delivery.status)
+                                   : (expired
+                                         ? "result arrived " + std::to_string(elapsed_ms)
+                                               + " ms after dispatch, past the "
+                                               + std::to_string(flight.wait_ms) + " ms window"
+                                         : delivery_status_name(flight.delivery.status)));
                         config_.log("device " + std::to_string(flight.device) + " nonce "
                             + std::to_string(flight.assignment.nonce) + " dropped: " + why);
                     }

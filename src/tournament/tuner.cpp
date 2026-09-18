@@ -1443,6 +1443,39 @@ namespace tournament_tuner
                 {
                     std::println("remote: {}", message);
                 };
+                remote_config.audit_rate = cli.audit_rate;
+                remote_config.auditor = [shared_context](std::vector<tuning::BatchGame> const &games,
+                                                         tuning::RunConfig const &audit_config)
+                {
+                    TojBackend local(shared_context);
+                    return local.run_games(games, audit_config);
+                };
+                auto liar_failures
+                    = std::make_shared<std::unordered_map<std::uint64_t, std::uint64_t>>();
+                remote_config.on_liar
+                    = [device_registry, &ban_store, &cli, generation, liar_failures](std::uint64_t device)
+                {
+                    device_registry->blacklist(device);
+                    tournament_wire::PublicKey const *banned_key = device_registry->public_key(device);
+                    if (banned_key != nullptr && !cli.ban_file.empty())
+                    {
+                        device_registry->ban_key(*banned_key);
+                        tournament_ban::BanRecord ban_record;
+                        ban_record.device = device;
+                        ban_record.public_key = *banned_key;
+                        ban_record.generation = generation;
+                        ban_record.failed_verdicts = ++(*liar_failures)[device];
+                        ban_record.caught_at_ms = tournament_transport::SystemClock().now_ms();
+                        std::string ban_error;
+                        if (!ban_store.append(ban_record, ban_error))
+                        {
+                            std::println(stderr, "gen {} ban file append failed: {}", generation,
+                                         ban_error);
+                        }
+                    }
+                    std::println("remote: device {} caught lying by the streaming audit and banned",
+                                 device);
+                };
                 remote_backend.emplace(tuning_toj::TojAdapter::schema(), net_transport, device_registry,
                                        provenance, std::make_shared<tournament_transport::SystemClock>(),
                                        remote_config);
@@ -1576,72 +1609,34 @@ namespace tournament_tuner
             std::optional<LocalRunner> audited_runner;
             if (provenance && !provenance->empty())
             {
-                auto device_rate = [&device_registry, &cli](std::uint64_t device)
+#if defined(TUNER_HAS_REMOTE)
+                if (remote_backend)
                 {
-                    tournament_registry::DeviceStats const *stats = device_registry->stats(device);
-                    return (stats != nullptr && stats->audits_passed > 0) ? cli.audit_rate : 1.0;
-                };
-                std::vector<tournament_audit::AuditTarget> const audit_targets
-                    = tournament_audit::select_targets_rated(*provenance, device_rate, {}, generation_seed);
-                tournament_audit::AuditReport const audit_report
-                    = tournament_audit::audit_records(*provenance, audit_targets, run_config, engine_rerun);
-                for (tournament_audit::AuditTarget const &target : audit_targets)
-                {
-                    audited_ids.insert(target.game);
-                }
-                std::vector<std::uint64_t> const failed_devices = audit_report.failed_devices();
-                std::unordered_set<std::uint64_t> const failed_set(failed_devices.begin(),
-                                                                   failed_devices.end());
-                std::unordered_set<std::uint64_t> seen_devices;
-                int failed_verdicts = 0;
-                for (tournament_audit::AuditVerdict const &verdict : audit_report.verdicts)
-                {
-                    if (!verdict.passed)
+                    for (std::uint64_t game_id : remote_backend->audited_game_ids())
                     {
-                        ++failed_verdicts;
-                    }
-                    if (seen_devices.insert(verdict.target.device).second)
-                    {
-                        device_registry->record_audit(verdict.target.device,
-                                                      failed_set.count(verdict.target.device) == 0);
+                        audited_ids.insert(game_id);
                     }
                 }
-                std::println("gen {} audit: {} sampled, {} failed verdicts, {} failed devices",
-                             generation, audit_targets.size(), failed_verdicts, failed_devices.size());
+#endif
+                std::vector<std::uint64_t> failed_devices;
+                for (auto const *entry : provenance->entries())
+                {
+                    if (device_registry->blacklisted(entry->device)
+                        && std::find(failed_devices.begin(), failed_devices.end(), entry->device)
+                            == failed_devices.end())
+                    {
+                        failed_devices.push_back(entry->device);
+                    }
+                }
+                std::sort(failed_devices.begin(), failed_devices.end());
+                std::println("gen {} streaming audit: {} games audited at acceptance, {} device(s) with games to void",
+                             generation, audited_ids.size(), failed_devices.size());
                 std::vector<tournament_runner::GameRecord> authoritative_ledger = runner.ledger();
                 if (!failed_devices.empty())
                 {
-                    std::unordered_map<std::uint64_t, std::uint64_t> per_device_failures;
-                    for (tournament_audit::AuditVerdict const &verdict : audit_report.verdicts)
-                    {
-                        if (!verdict.passed)
-                        {
-                            ++per_device_failures[verdict.target.device];
-                        }
-                    }
-                    tournament_transport::SystemClock catch_clock;
                     std::vector<std::uint64_t> voided;
                     for (std::uint64_t device : failed_devices)
                     {
-                        device_registry->blacklist(device);
-                        tournament_wire::PublicKey const *banned_key
-                            = device_registry->public_key(device);
-                        if (banned_key != nullptr && !cli.ban_file.empty())
-                        {
-                            device_registry->ban_key(*banned_key);
-                            tournament_ban::BanRecord ban_record;
-                            ban_record.device = device;
-                            ban_record.public_key = *banned_key;
-                            ban_record.generation = generation;
-                            ban_record.failed_verdicts = per_device_failures[device];
-                            ban_record.caught_at_ms = catch_clock.now_ms();
-                            std::string ban_error;
-                            if (!ban_store.append(ban_record, ban_error))
-                            {
-                                std::println(stderr, "gen {} ban file append failed: {}",
-                                             generation, ban_error);
-                            }
-                        }
                         for (std::uint64_t game : provenance->games_of_device(device))
                         {
                             voided.push_back(game);
