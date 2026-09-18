@@ -69,6 +69,8 @@ namespace tournament_host
         int max_rounds = 600;
         std::int64_t max_games = 10000;
         std::int64_t max_draws = 10000;
+        int audit_workers = 2;
+        std::string trust_file = "tournament_trust.txt";
     };
 
     void print_usage(char const *program)
@@ -86,7 +88,9 @@ namespace tournament_host
         std::println("  series cap 2, client wait 120000 ms, threads 1, iterations 40, max rounds 600, max games 10000,");
         std::println("  max draws 10000");
         std::println("Config: every flag above can live in a json file; tournament_host.json in the working directory is read automatically, --config P reads another file, command line values override the file");
-        std::println("Config keys: address, port, certificate, private_key, devices_file, ban_file, roster_size, generation_seed, audit_rate, games_per_assignment, lease_ms, series_cap, wait_clients_ms, threads, iterations, max_rounds, max_games, max_draws");
+        std::println("Config keys: address, port, certificate, private_key, devices_file, ban_file, roster_size, generation_seed, audit_rate, games_per_assignment, lease_ms, series_cap, wait_clients_ms, threads, iterations, max_rounds, max_games, max_draws, trust_file");
+        std::println("Flags: --trust-file P persists device audit trust across restarts (default tournament_trust.txt, empty string disables)");
+        std::println("Flags: --audit-workers N bounds the local audit re-run lanes (default 2, each lane runs single-threaded re-plays)");
     }
 
     bool apply_config_file(HostConfig &config, nlohmann::json const &values, std::string &error)
@@ -95,7 +99,7 @@ namespace tournament_host
             "address", "port", "certificate", "private_key", "devices_file", "ban_file",
             "roster_size", "generation_seed", "audit_rate", "games_per_assignment", "lease_ms",
             "series_cap", "wait_clients_ms", "threads", "iterations", "max_rounds", "max_games",
-            "max_draws",
+            "max_draws", "audit_workers", "trust_file",
         };
         if (!tournament_config::reject_unknown_keys(values, allowed, error))
         {
@@ -185,6 +189,14 @@ namespace tournament_host
             return false;
         }
         if (!tournament_config::get_i64(values, "max_draws", config.max_draws, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "audit_workers", config.audit_workers, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "trust_file", config.trust_file, error))
         {
             return false;
         }
@@ -445,6 +457,23 @@ namespace tournament_host
                 }
                 ++i;
             }
+            else if (flag == "--trust-file")
+            {
+                if (i + 1 >= argc)
+                {
+                    return fail("flag --trust-file requires a value");
+                }
+                config.trust_file = argv[++i];
+            }
+            else if (flag == "--audit-workers")
+            {
+                if (i + 1 >= argc || !parse_int(argv[i + 1], config.audit_workers)
+                    || config.audit_workers <= 0)
+                {
+                    return fail("flag --audit-workers requires a positive integer");
+                }
+                ++i;
+            }
             else if (flag == "--config")
             {
                 if (i + 1 >= argc)
@@ -544,6 +573,26 @@ namespace tournament_host
             }
             std::println("{} banned device key(s) loaded from {}", ban_records.size(), cli.ban_file);
         }
+        if (!cli.trust_file.empty())
+        {
+            std::string trust_error;
+            if (registry->load_trust(cli.trust_file, trust_error))
+            {
+                registry->set_trust_file(cli.trust_file);
+                std::println("{} trusted device record(s) loaded from {}",
+                             registry->trust_snapshot().size(), cli.trust_file);
+            }
+            else if (trust_error.find("cannot open") == std::string::npos)
+            {
+                std::println(stderr, "cannot load trust file: {}", trust_error);
+                return 1;
+            }
+            else
+            {
+                registry->set_trust_file(cli.trust_file);
+                std::println("starting a fresh trust file at {}", cli.trust_file);
+            }
+        }
         auto transport = std::make_shared<tnet::HostTransport>(registry, net_config_for(cli));
         std::string start_error;
         if (!transport->start(start_error))
@@ -635,6 +684,7 @@ namespace tournament_host
             std::println("net: {}", message);
         };
         remote_config.audit_rate = cli.audit_rate;
+        remote_config.audit_workers = std::max(1, cli.audit_workers);
         remote_config.auditor = re_run;
         remote_config.on_liar = [registry, &cli](tw::DeviceId device)
         {

@@ -1,10 +1,16 @@
 #include "tournament/registry.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <print>
 #include <string>
+#include <system_error>
 #include <vector>
+
+#include "tournament/bytes.h"
 
 namespace
 {
@@ -187,6 +193,108 @@ namespace
               "independence: the second device keeps its own counters");
         check(first && second && !(*first == *second), "independence: the two stat rows differ");
     }
+    void test_trust_persistence()
+    {
+        auto const stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        std::filesystem::path const dir = std::filesystem::temp_directory_path()
+            / ("tournament_registry_trust_test_" + std::to_string(stamp));
+        std::filesystem::create_directories(dir);
+        auto find_record = [](std::vector<tr::TrustRecord> const &records,
+                              tw::PublicKey const &key) -> tr::TrustRecord const *
+        {
+            for (tr::TrustRecord const &record : records)
+            {
+                if (record.public_key == key)
+                {
+                    return &record;
+                }
+            }
+            return nullptr;
+        };
+
+        std::string error;
+        std::string const missing_path = (dir / "trust_missing.txt").string();
+        tr::DeviceRegistry missing_registry;
+        check(!missing_registry.load_trust(missing_path, error),
+              "trust: loading a missing trust file fails");
+        check(error.find("cannot open") != std::string::npos,
+              "trust: a missing trust file reports cannot open");
+
+        tw::KeyPair const keys = tw::generate_keypair();
+        tw::KeyPair const other_keys = tw::generate_keypair();
+        std::string const round_trip_path = (dir / "trust_round_trip.txt").string();
+        {
+            std::ofstream output(round_trip_path, std::ios::binary);
+            output << "7 " << tournament_bytes::encode_hex(keys.public_key) << " 3 1\n";
+            output << "8 " << tournament_bytes::encode_hex(other_keys.public_key) << " 10 2\n";
+        }
+
+        tr::DeviceRegistry registry_a;
+        check(registry_a.load_trust(round_trip_path, error), "trust: the round trip file loads");
+        std::vector<tr::TrustRecord> const preloaded = registry_a.trust_snapshot();
+        check(preloaded.size() == 2, "trust: the preloaded snapshot holds both keys");
+        tr::TrustRecord const *preloaded_known = find_record(preloaded, keys.public_key);
+        check(preloaded_known && preloaded_known->device == 7,
+              "trust: the preload keeps the file device id");
+        check(registry_a.enroll(42, keys.public_key), "trust: enrolling with a preloaded key succeeds");
+        check(registry_a.enroll(43, other_keys.public_key), "trust: enrolling the second key succeeds");
+        tw::KeyPair const fresh_keys = tw::generate_keypair();
+        check(registry_a.enroll(44, fresh_keys.public_key), "trust: enrolling an unknown key succeeds");
+        tr::DeviceStats const *loaded = registry_a.stats(42);
+        check(loaded && loaded->audits_passed == 3,
+              "trust: preloaded passing audits apply to device 42");
+        check(loaded && loaded->audits_failed == 1,
+              "trust: preloaded failing audits apply to device 42");
+        tr::DeviceStats const *second = registry_a.stats(43);
+        check(second && second->audits_passed == 10 && second->audits_failed == 2,
+              "trust: the second preloaded record applies to device 43");
+        tr::DeviceStats const *fresh = registry_a.stats(44);
+        check(fresh && fresh->audits_passed == 0 && fresh->audits_failed == 0,
+              "trust: a device with an unknown key starts at zero audits");
+
+        registry_a.set_trust_file(round_trip_path);
+        check(registry_a.record_audit(42, true), "trust: a passing audit on device 42 succeeds");
+        check(registry_a.record_audit(42, true), "trust: a second passing audit on device 42 succeeds");
+        check(registry_a.record_audit(44, false), "trust: a failing audit on device 44 succeeds");
+
+        tr::DeviceRegistry registry_b;
+        check(registry_b.load_trust(round_trip_path, error), "trust: the persisted file reloads");
+        check(registry_b.enroll(99, keys.public_key), "trust: enrolling the persisted key succeeds");
+        tr::DeviceStats const *carried = registry_b.stats(99);
+        check(carried && carried->audits_passed == 5, "trust: persisted passing audits carry over");
+        check(carried && carried->audits_failed == 1, "trust: persisted failing audits carry over");
+
+        std::vector<tr::TrustRecord> const snapshot = registry_a.trust_snapshot();
+        check(snapshot.size() == 3, "trust: the snapshot merges preload and live devices");
+        tr::TrustRecord const *known = find_record(snapshot, keys.public_key);
+        check(known && known->audits_passed == 5 && known->audits_failed == 1,
+              "trust: the snapshot reflects live counts for the known key");
+        tr::TrustRecord const *unknown = find_record(snapshot, fresh_keys.public_key);
+        check(unknown && unknown->audits_passed == 0 && unknown->audits_failed == 1,
+              "trust: the snapshot contains the unknown key");
+
+        std::string const malformed_path = (dir / "trust_malformed.txt").string();
+        {
+            std::ofstream output(malformed_path, std::ios::binary);
+            output << "not a device line\n";
+        }
+        tr::DeviceRegistry registry_c;
+        check(!registry_c.load_trust(malformed_path, error), "trust: a malformed line fails the load");
+        check(error.find("line 1") != std::string::npos,
+              "trust: a malformed line reports the line number");
+
+        std::string const bad_hex_path = (dir / "trust_bad_hex.txt").string();
+        {
+            std::ofstream output(bad_hex_path, std::ios::binary);
+            output << "7 " << std::string(64, 'z') << " 3 1\n";
+        }
+        tr::DeviceRegistry registry_d;
+        check(!registry_d.load_trust(bad_hex_path, error), "trust: bad public key hex fails the load");
+        check(error.find("line 1") != std::string::npos, "trust: bad hex reports the line number");
+
+        std::error_code cleanup_error;
+        std::filesystem::remove_all(dir, cleanup_error);
+    }
 }
 
 int main()
@@ -200,6 +308,7 @@ int main()
     test_active_devices_sorted();
     test_size_counts_enrollments();
     test_stats_independent();
+    test_trust_persistence();
     std::println("{} checks, {} failures", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

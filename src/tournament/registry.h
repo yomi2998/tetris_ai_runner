@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <map>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "tournament/wire.h"
@@ -24,6 +25,14 @@ namespace tournament_registry
         bool operator==(DeviceStats const &) const = default;
     };
 
+    struct TrustRecord
+    {
+        DeviceId device = 0;
+        PublicKey public_key;
+        int audits_passed = 0;
+        int audits_failed = 0;
+    };
+
     class DeviceRegistry
     {
     public:
@@ -43,6 +52,10 @@ namespace tournament_registry
         std::vector<DeviceId> active_devices() const;
         std::size_t size() const;
 
+        bool load_trust(std::string const &path, std::string &error);
+        void set_trust_file(std::string const &path);
+        std::vector<TrustRecord> trust_snapshot() const;
+
     private:
         struct Entry
         {
@@ -50,8 +63,12 @@ namespace tournament_registry
             DeviceStats stats;
         };
 
+        void persist_trust_locked() const;
+
         mutable std::mutex mutex_;
         std::map<DeviceId, Entry> devices_;
         std::vector<PublicKey> banned_keys_;
+        std::map<PublicKey, TrustRecord> trust_preload_;
+        std::string trust_file_;
     };
 }

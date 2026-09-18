@@ -53,6 +53,7 @@ namespace tournament_remote
         int per_series_device_cap = 2;
         std::uint64_t nonce_seed = 0x5177ED5EEDC0FFEEULL;
         double audit_rate = 0.25;
+        int audit_workers = 2;
         std::shared_ptr<DeviceTiming> timing;
         std::function<void(std::string const &)> log;
         std::function<std::vector<tuning::GameOutcome>(std::vector<tuning::BatchGame> const &,

@@ -1,5 +1,12 @@
 #include "tournament/registry.h"
 
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <system_error>
+
+#include "tournament/bytes.h"
+
 namespace tournament_registry
 {
     bool DeviceRegistry::enroll(DeviceId device, PublicKey const &public_key)
@@ -12,7 +19,17 @@ namespace tournament_registry
                 return false;
             }
         }
-        return devices_.emplace(device, Entry{public_key, DeviceStats{}}).second;
+        auto [it, inserted] = devices_.emplace(device, Entry{public_key, DeviceStats{}});
+        if (inserted)
+        {
+            auto const trust = trust_preload_.find(public_key);
+            if (trust != trust_preload_.end())
+            {
+                it->second.stats.audits_passed = trust->second.audits_passed;
+                it->second.stats.audits_failed = trust->second.audits_failed;
+            }
+        }
+        return inserted;
     }
 
     bool DeviceRegistry::enrolled(DeviceId device) const
@@ -147,7 +164,121 @@ namespace tournament_registry
         {
             it->second.stats.audits_failed += 1;
         }
+        if (!trust_file_.empty())
+        {
+            persist_trust_locked();
+        }
         return true;
+    }
+
+    bool DeviceRegistry::load_trust(std::string const &path, std::string &error)
+    {
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open())
+        {
+            error = "cannot open " + path;
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        trust_preload_.clear();
+        std::string line;
+        std::size_t line_number = 0;
+        while (std::getline(input, line))
+        {
+            ++line_number;
+            if (line.empty())
+            {
+                continue;
+            }
+            std::istringstream fields(line);
+            std::string device_text;
+            std::string key_text;
+            int passed = 0;
+            int failed = 0;
+            if (!(fields >> device_text >> key_text >> passed >> failed) || key_text.size() != 64)
+            {
+                error = path + " line " + std::to_string(line_number)
+                    + ": expected '<device id> <64 hex public key> <audits passed> <audits failed>'";
+                return false;
+            }
+            std::optional<std::vector<std::uint8_t>> const key = tournament_bytes::decode_hex(key_text);
+            if (!key || key->size() != 32)
+            {
+                error = path + " line " + std::to_string(line_number) + ": malformed public key hex";
+                return false;
+            }
+            TrustRecord record;
+            record.public_key = *key;
+            DeviceId parsed_device = 0;
+            std::istringstream(device_text) >> parsed_device;
+            record.device = parsed_device;
+            record.audits_passed = passed;
+            record.audits_failed = failed;
+            trust_preload_[record.public_key] = record;
+        }
+        return true;
+    }
+
+    void DeviceRegistry::set_trust_file(std::string const &path)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        trust_file_ = path;
+    }
+
+    std::vector<TrustRecord> DeviceRegistry::trust_snapshot() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::map<PublicKey, TrustRecord> merged;
+        for (auto const &entry : trust_preload_)
+        {
+            merged[entry.first] = entry.second;
+        }
+        for (auto const &entry : devices_)
+        {
+            TrustRecord record;
+            record.device = entry.first;
+            record.public_key = entry.second.public_key;
+            record.audits_passed = entry.second.stats.audits_passed;
+            record.audits_failed = entry.second.stats.audits_failed;
+            merged[record.public_key] = record;
+        }
+        std::vector<TrustRecord> records;
+        records.reserve(merged.size());
+        for (auto &value : merged)
+        {
+            records.push_back(std::move(value.second));
+        }
+        return records;
+    }
+
+    void DeviceRegistry::persist_trust_locked() const
+    {
+        std::map<PublicKey, TrustRecord> merged;
+        for (auto const &entry : trust_preload_)
+        {
+            merged[entry.first] = entry.second;
+        }
+        for (auto const &entry : devices_)
+        {
+            TrustRecord record;
+            record.device = entry.first;
+            record.public_key = entry.second.public_key;
+            record.audits_passed = entry.second.stats.audits_passed;
+            record.audits_failed = entry.second.stats.audits_failed;
+            merged[record.public_key] = record;
+        }
+        std::string const path = trust_file_ + ".tmp";
+        {
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            for (auto const &entry : merged)
+            {
+                output << entry.second.device << ' '
+                       << tournament_bytes::encode_hex(entry.second.public_key) << ' '
+                       << entry.second.audits_passed << ' ' << entry.second.audits_failed << '\n';
+            }
+        }
+        std::error_code rename_error;
+        std::filesystem::rename(path, trust_file_, rename_error);
     }
 
     std::vector<DeviceId> DeviceRegistry::active_devices() const

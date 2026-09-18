@@ -288,10 +288,11 @@ if (OPENSSL_FOUND)
 
     add_executable(tournament_registry_test
         src/tournament/registry.cpp
+        src/tournament/wire_crypto.cpp
         src/tournament/registry_test.cpp
     )
     target_include_directories(tournament_registry_test PRIVATE src)
-    target_link_libraries(tournament_registry_test PRIVATE Threads::Threads)
+    target_link_libraries(tournament_registry_test PRIVATE OpenSSL::Crypto Threads::Threads)
 
     add_executable(tournament_ban_file_test
         src/tournament/ban_file.cpp

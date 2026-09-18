@@ -87,6 +87,8 @@ namespace tournament_tuner
         int games_per_assignment = 4;
         int series_cap = 2;
         int roster = 0;
+        int audit_workers = 2;
+        std::string trust_file = "tournament_trust.txt";
     };
 
     int thread_budget_for(int threads_arg)
@@ -420,7 +422,7 @@ namespace tournament_tuner
             "incumbent_file", "current_file", "fresh_zero", "threshold", "remote_port",
             "remote_address", "remote_cert", "remote_key", "devices_file", "audit_rate",
             "journal_file", "ban_file", "wait_clients_ms", "lease_ms", "games_per_assignment",
-            "series_cap", "roster",
+            "series_cap", "roster", "audit_workers", "trust_file",
         };
         if (!tournament_config::reject_unknown_keys(values, allowed, error))
         {
@@ -528,6 +530,14 @@ namespace tournament_tuner
         {
             return false;
         }
+        if (!tournament_config::get_int(values, "audit_workers", config.audit_workers, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "trust_file", config.trust_file, error))
+        {
+            return false;
+        }
         return true;
     }
 
@@ -553,6 +563,8 @@ namespace tournament_tuner
         std::println("Flags: --journal-file P sets the provenance journal path (default tournament_journal.bin, remote mode only), --wait-clients-ms N bounds the initial client wait (default 120000)");
         std::println("Flags: --lease-ms N sets the remote result lease (default 30000, remote mode only), --games-per-assignment N batches that many games per remote flight (default 4)");
         std::println("Flags: --series-cap N caps one device's accepted games per series (default 2, raise it for small device pools so late bracket series can spread)");
+        std::println("Flags: --trust-file P persists device audit trust across restarts (default tournament_trust.txt, empty string disables)");
+        std::println("Flags: --audit-workers N bounds the local audit re-run lanes (default 2, each lane runs single-threaded re-plays)");
         std::println("Flags: --ban-file P persists banned device keys across restarts (default tournament_bans.txt, empty string disables)");
         std::println("Flags: --devices-file P restricts remote enrollment to the device ids and keys listed in P (default open enrollment)");
         std::println("Search: iteration budgets only, no time budgets");
@@ -1318,6 +1330,26 @@ namespace tournament_tuner
                 std::println("remote: {} banned device key(s) loaded from {}",
                              ban_records.size(), cli.ban_file);
             }
+            if (!cli.trust_file.empty())
+            {
+                std::string trust_error;
+                if (device_registry->load_trust(cli.trust_file, trust_error))
+                {
+                    device_registry->set_trust_file(cli.trust_file);
+                    std::println("remote: {} trusted device record(s) loaded from {}",
+                                 device_registry->trust_snapshot().size(), cli.trust_file);
+                }
+                else if (trust_error.find("cannot open") == std::string::npos)
+                {
+                    std::println(stderr, "cannot load trust file: {}", trust_error);
+                    return 1;
+                }
+                else
+                {
+                    device_registry->set_trust_file(cli.trust_file);
+                    std::println("remote: starting a fresh trust file at {}", cli.trust_file);
+                }
+            }
             std::println("remote: start clients with remote_client --host <host> --port {} --device-id N --key-file K --fingerprint {}",
                          static_cast<int>(port), *fingerprint);
             for (int waited = 0; device_registry->active_devices().empty();)
@@ -1331,6 +1363,29 @@ namespace tournament_tuner
                 waited += 250;
             }
             std::println("remote: {} client(s) enrolled", device_registry->active_devices().size());
+            {
+                std::vector<tournament_bracket::CandidateId> preview_ids;
+                preview_ids.reserve(static_cast<std::size_t>(roster_size));
+                for (int i = 1; i <= roster_size; ++i)
+                {
+                    preview_ids.push_back(static_cast<tournament_bracket::CandidateId>(i));
+                }
+                tournament_bracket::Bracket preview = tournament_bracket::Bracket::create(preview_ids);
+                if (preview.valid())
+                {
+                    std::vector<tournament_bracket::SeriesView> preview_views;
+                    for (int id : preview.ready_series())
+                    {
+                        preview_views.push_back(preview.series(id));
+                    }
+                    std::vector<tournament_scheduler::SeriesDemand> const preview_demands
+                        = tournament_runner::plan_demands(preview_views);
+                    std::vector<tournament_scheduler::WaveSlot> const preview_wave
+                        = tournament_scheduler::build_wave(preview_demands, 20000);
+                    std::println("remote: wave preview: a fresh generation opens with {} games",
+                                 preview_wave.size());
+                }
+            }
         }
 #endif
         struct LiveBracket
@@ -1444,6 +1499,7 @@ namespace tournament_tuner
                     std::println("remote: {}", message);
                 };
                 remote_config.audit_rate = cli.audit_rate;
+                remote_config.audit_workers = std::max(1, cli.audit_workers);
                 remote_config.auditor = [shared_context](std::vector<tuning::BatchGame> const &games,
                                                          tuning::RunConfig const &audit_config)
                 {
@@ -2175,6 +2231,29 @@ int main(int argc, char *argv[])
                 flag_error = true;
             }
         }
+        else if (std::strcmp(argv[i], "--trust-file") == 0 && i + 1 < argc)
+        {
+            config.trust_file = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--audit-workers") == 0 && i + 1 < argc)
+        {
+            try
+            {
+                int const value = std::stoi(argv[++i]);
+                if (value <= 0)
+                {
+                    flag_error = true;
+                }
+                else
+                {
+                    config.audit_workers = value;
+                }
+            }
+            catch (std::exception const &)
+            {
+                flag_error = true;
+            }
+        }
         else
         {
             positional.push_back(argv[i]);
@@ -2268,6 +2347,11 @@ int main(int argc, char *argv[])
     if (config.roster < 0 || config.roster == 1)
     {
         std::println(stderr, "roster must be 0 (automatic) or at least 2");
+        return 1;
+    }
+    if (config.audit_workers <= 0)
+    {
+        std::println(stderr, "invalid audit workers");
         return 1;
     }
 #if !defined(TUNER_HAS_REMOTE)
