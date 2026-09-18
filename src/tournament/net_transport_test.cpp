@@ -1306,6 +1306,39 @@ namespace
         worker.join();
     }
 
+    void test_websocket_heartbeat()
+    {
+        HostHarness host("ws_heartbeat");
+        check(host.start(tnet::NetConfig{}), "host started for websocket heartbeat test");
+        ClientHarness client;
+        client.id = 1;
+        client.keys = tw::generate_keypair();
+        client.conn = std::make_unique<tnet::WsClientConnection>("127.0.0.1",
+                                                                 host.transport->listening_port(),
+                                                                 host.fingerprint, "/", false, 250);
+        check(client.conn->connected(), "heartbeat websocket client connected");
+        send_intro_hello(client, "test_adapter", tw::protocol_version, 0, 0, 0);
+        check(client.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "heartbeat device enrolled: " + client.detail);
+        check(devices_contain(*host.transport, 1), "heartbeat device listed");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1400));
+        check(client.conn->connected(), "connection alive after several heartbeat intervals");
+        tw::AssignmentBatch const assignment = make_assignment(501, 1, 13, 2);
+        std::thread worker([&]()
+        {
+            honest_worker(client);
+        });
+        auto const delivery = host.transport->request(1, assignment, 5000);
+        check(delivery.status == tt::DeliveryStatus::Delivered,
+              "assignment delivered after idle heartbeat period");
+        bool const echo_ok = delivery.status == tt::DeliveryStatus::Delivered
+            && delivery.result.batch.nonce == 501
+            && tw::verify_result(client.keys.public_key, delivery.result.batch, delivery.result.signature);
+        check(echo_ok, "round trip after heartbeat idling returns a valid signed result");
+        client.conn->close();
+        worker.join();
+    }
+
     void test_concurrent_clients()
     {
         HostHarness host("concurrent");
@@ -1434,6 +1467,7 @@ int main()
     test_late_reply_discarded();
     test_request_wait_covers_slow_client();
     test_request_timeout_reports_peer_activity();
+    test_websocket_heartbeat();
     test_concurrent_clients();
     test_stop_wakes_parked_accept();
     test_stop_wakes_idle_client();

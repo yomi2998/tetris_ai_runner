@@ -48,6 +48,7 @@ namespace remote_client
         bool generate_key = false;
         bool websocket = false;
         bool ca_verified = false;
+        std::uint64_t heartbeat_ms = 30000;
     };
 
     void print_usage(char const *program)
@@ -61,14 +62,15 @@ namespace remote_client
         std::println(stderr, "  --ws speaks WebSocket instead of the raw protocol, for hosts reached through an HTTPS proxy such as Cloudflare");
         std::println(stderr, "  --ca with --ws verifies the server certificate against system roots for the hostname, for proxied connections; without it --ws pins the host fingerprint like the raw protocol");
         std::println(stderr, "  --config P reads run settings from a json file (remote_client.json in the working directory is read automatically), command line values override the file");
-        std::println(stderr, "  config keys: host, port, device_id, key_file, fingerprint, assignments, quiet, flip_outcomes, websocket, ca");
+        std::println(stderr, "  config keys: host, port, device_id, key_file, fingerprint, assignments, quiet, flip_outcomes, websocket, ca, heartbeat_ms");
+        std::println(stderr, "  --heartbeat-ms N sends a websocket ping every N ms while idle (default 30000, 0 disables) so proxies keep the connection open");
     }
 
     bool apply_config_file(ClientConfig &cli, nlohmann::json const &values, std::string &error)
     {
         std::vector<std::string> const allowed{
             "host", "port", "device_id", "key_file", "fingerprint", "assignments", "quiet",
-            "flip_outcomes", "websocket", "ca",
+            "flip_outcomes", "websocket", "ca", "heartbeat_ms",
         };
         if (!tournament_config::reject_unknown_keys(values, allowed, error))
         {
@@ -131,6 +133,10 @@ namespace remote_client
             return false;
         }
         if (!tournament_config::get_bool(values, "ca", cli.ca_verified, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_u64(values, "heartbeat_ms", cli.heartbeat_ms, error))
         {
             return false;
         }
@@ -539,12 +545,15 @@ namespace remote_client
                 {
                     connection = std::make_unique<tnet::WsClientConnection>(cli.host, cli.port,
                                                                              std::string(), "/tournament",
-                                                                             true);
+                                                                             true,
+                                                                             cli.heartbeat_ms);
                 }
                 else
                 {
                     connection = std::make_unique<tnet::WsClientConnection>(cli.host, cli.port,
-                                                                             cli.fingerprint);
+                                                                             cli.fingerprint, "/",
+                                                                             false,
+                                                                             cli.heartbeat_ms);
                 }
             }
             else
@@ -729,6 +738,21 @@ int main(int argc, char *argv[])
                 return 1;
             }
             cli.max_concurrent_assignments = static_cast<std::uint32_t>(*parsed);
+        }
+        else if (std::strcmp(flag, "--heartbeat-ms") == 0)
+        {
+            if (i + 1 >= argc)
+            {
+                return remote_client::missing_value_error(flag, program);
+            }
+            std::optional<std::uint64_t> parsed = remote_client::parse_u64(argv[++i]);
+            if (!parsed)
+            {
+                std::println(stderr, "invalid heartbeat {}", argv[i]);
+                remote_client::print_usage(program);
+                return 1;
+            }
+            cli.heartbeat_ms = *parsed;
         }
         else
         {

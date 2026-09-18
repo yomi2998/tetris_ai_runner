@@ -113,7 +113,8 @@ namespace tournament_net
     {
     public:
         WsClientConnection(std::string host, std::uint16_t port, std::string expected_fingerprint,
-                           std::string path = "/", bool ca_verified = false);
+                           std::string path = "/", bool ca_verified = false,
+                           std::uint64_t heartbeat_ms = 30000);
         ~WsClientConnection() override;
         WsClientConnection(WsClientConnection const &) = delete;
         WsClientConnection &operator=(WsClientConnection const &) = delete;

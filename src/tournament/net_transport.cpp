@@ -1258,6 +1258,36 @@ namespace tournament_net
                 clear_receive_timeout(fd);
                 connected.store(true);
                 reader = std::thread(&ClientCore::reader_loop, this);
+                if (wire.websocket && heartbeat_ms > 0)
+                {
+                    heartbeat = std::thread(&ClientCore::heartbeat_loop, this);
+                }
+            }
+
+            void heartbeat_loop()
+            {
+                std::uint64_t elapsed_ms = 0;
+                while (!stop_requested.load() && !closed.load())
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                    elapsed_ms += 250;
+                    if (elapsed_ms < heartbeat_ms)
+                    {
+                        continue;
+                    }
+                    elapsed_ms = 0;
+                    std::lock_guard<std::mutex> lock(write_mutex);
+                    if (closed.load() || ssl == nullptr)
+                    {
+                        return;
+                    }
+                    if (!ws_write_frame(ssl, wire.send_masked(), kWsOpcodePing, "hb",
+                                        deadline_after(kWriteTimeoutMs)))
+                    {
+                        mark_disconnected();
+                        return;
+                    }
+                }
             }
 
             void reader_loop()
@@ -1381,6 +1411,8 @@ namespace tournament_net
             WireMode wire;
             std::string read_prefix;
             std::thread reader;
+            std::thread heartbeat;
+            std::uint64_t heartbeat_ms = 0;
             std::mutex queue_mutex;
             std::condition_variable queue_cv;
             std::deque<FramedMessage> queue;
@@ -1504,6 +1536,10 @@ namespace tournament_net
             if (first && core.fd >= 0)
             {
                 shutdown(core.fd, SHUT_RDWR);
+            }
+            if (core.heartbeat.joinable())
+            {
+                core.heartbeat.join();
             }
             if (core.reader.joinable())
             {
@@ -2102,8 +2138,10 @@ namespace tournament_net
         }
 
         bool establish(std::string const &host, std::uint16_t port, std::string const &expected_fingerprint,
-                       std::string const &path, bool ca_verified, std::string &error)
+                       std::string const &path, bool ca_verified, std::uint64_t heartbeat_interval_ms,
+                       std::string &error)
         {
+            heartbeat_ms = heartbeat_interval_ms;
             if (!tcp_connect(host, port, error))
             {
                 return false;
@@ -2130,12 +2168,12 @@ namespace tournament_net
     };
 
     WsClientConnection::WsClientConnection(std::string host, std::uint16_t port, std::string expected_fingerprint,
-                                           std::string path, bool ca_verified)
+                                           std::string path, bool ca_verified, std::uint64_t heartbeat_ms)
         : impl_(std::make_unique<Impl>())
     {
         ignore_sigpipe_once();
         std::string error;
-        if (!impl_->establish(host, port, expected_fingerprint, path, ca_verified, error))
+        if (!impl_->establish(host, port, expected_fingerprint, path, ca_verified, heartbeat_ms, error))
         {
             impl_->connect_error = error;
             impl_->connected.store(false);
