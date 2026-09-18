@@ -236,6 +236,7 @@ add_executable(tournament_tuner
     src/tournament/audit.cpp
     src/tournament/ban_file.cpp
     src/tournament/bracket.cpp
+    src/tournament/config_file.cpp
     src/tournament/scheduler.cpp
     src/tournament/rating.cpp
     src/tournament/checkpoint.cpp
@@ -269,6 +270,12 @@ add_executable(tournament_journal_test
     src/tournament/journal_test.cpp
 )
 target_include_directories(tournament_journal_test PRIVATE src third_party/nlohmann/include)
+
+add_executable(tournament_config_file_test
+    src/tournament/config_file.cpp
+    src/tournament/config_file_test.cpp
+)
+target_include_directories(tournament_config_file_test PRIVATE src third_party/nlohmann/include)
 
 if (OPENSSL_FOUND)
     add_executable(tournament_wire_test
@@ -354,6 +361,7 @@ if (OPENSSL_FOUND)
 
     add_executable(remote_client
         src/remote_client.cpp
+        src/tournament/config_file.cpp
         src/tournament/net_transport.cpp
         src/tournament/registry.cpp
         src/tournament/wire.cpp
@@ -361,12 +369,13 @@ if (OPENSSL_FOUND)
         src/tournament/scheduler.cpp
         $<TARGET_OBJECTS:tournament_toj_objects>
     )
-    target_include_directories(remote_client PRIVATE src)
+    target_include_directories(remote_client PRIVATE src third_party/nlohmann/include)
     target_link_libraries(remote_client PRIVATE Threads::Threads OpenSSL::Crypto OpenSSL::SSL)
 
     add_executable(tournament_host
         src/tournament_host.cpp
         src/tournament/ban_file.cpp
+        src/tournament/config_file.cpp
         src/tournament/net_transport.cpp
         src/tournament/registry.cpp
         src/tournament/remote_backend.cpp
@@ -379,7 +388,7 @@ if (OPENSSL_FOUND)
         src/tournament/scheduler.cpp
         $<TARGET_OBJECTS:tournament_toj_objects>
     )
-    target_include_directories(tournament_host PRIVATE src)
+    target_include_directories(tournament_host PRIVATE src third_party/nlohmann/include)
     target_link_libraries(tournament_host PRIVATE Threads::Threads OpenSSL::Crypto OpenSSL::SSL)
 
     add_executable(tournament_remote_backend_test
@@ -418,6 +427,7 @@ add_test(NAME tournament_runner_test COMMAND tournament_runner_test)
 add_test(NAME tuning_engine_match_test COMMAND tuning_engine_match_test)
 add_test(NAME tetris_memory_budget_test COMMAND tetris_memory_budget_test)
 add_test(NAME tournament_journal_test COMMAND tournament_journal_test)
+add_test(NAME tournament_config_file_test COMMAND tournament_config_file_test)
 
 if (OPENSSL_FOUND)
     add_test(NAME tournament_wire_test COMMAND tournament_wire_test)

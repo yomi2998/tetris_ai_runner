@@ -6,6 +6,7 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <optional>
@@ -15,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "tournament/config_file.h"
 #include "tournament/engine_identity.h"
 #include "tournament/net_transport.h"
 #include "tournament/wire.h"
@@ -58,6 +60,81 @@ namespace remote_client
         std::println(stderr, "  --flip-outcomes is test-only: it flips every game outcome before signing");
         std::println(stderr, "  --ws speaks WebSocket instead of the raw protocol, for hosts reached through an HTTPS proxy such as Cloudflare");
         std::println(stderr, "  --ca with --ws verifies the server certificate against system roots for the hostname, for proxied connections; without it --ws pins the host fingerprint like the raw protocol");
+        std::println(stderr, "  --config P reads run settings from a json file (remote_client.json in the working directory is read automatically), command line values override the file");
+        std::println(stderr, "  config keys: host, port, device_id, key_file, fingerprint, assignments, quiet, flip_outcomes, websocket, ca");
+    }
+
+    bool apply_config_file(ClientConfig &cli, nlohmann::json const &values, std::string &error)
+    {
+        std::vector<std::string> const allowed{
+            "host", "port", "device_id", "key_file", "fingerprint", "assignments", "quiet",
+            "flip_outcomes", "websocket", "ca",
+        };
+        if (!tournament_config::reject_unknown_keys(values, allowed, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "host", cli.host, error))
+        {
+            return false;
+        }
+        if (values.contains("port"))
+        {
+            std::uint64_t port = 0;
+            if (!tournament_config::get_u64(values, "port", port, error))
+            {
+                return false;
+            }
+            if (port < 1 || port > 65535)
+            {
+                error = "port must be between 1 and 65535";
+                return false;
+            }
+            cli.port = static_cast<std::uint16_t>(port);
+        }
+        if (!tournament_config::get_u64(values, "device_id", cli.device_id, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "key_file", cli.key_file, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "fingerprint", cli.fingerprint, error))
+        {
+            return false;
+        }
+        if (values.contains("assignments"))
+        {
+            std::uint64_t assignments = 0;
+            if (!tournament_config::get_u64(values, "assignments", assignments, error))
+            {
+                return false;
+            }
+            if (assignments < 1 || assignments > kMaxConcurrentAssignments)
+            {
+                error = "assignments must be between 1 and 64";
+                return false;
+            }
+            cli.max_concurrent_assignments = static_cast<std::uint32_t>(assignments);
+        }
+        if (!tournament_config::get_bool(values, "quiet", cli.quiet, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_bool(values, "flip_outcomes", cli.flip_outcomes, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_bool(values, "websocket", cli.websocket, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_bool(values, "ca", cli.ca_verified, error))
+        {
+            return false;
+        }
+        return true;
     }
 
     int missing_value_error(char const *flag, char const *program)
@@ -514,14 +591,53 @@ int main(int argc, char *argv[])
     std::setbuf(stderr, nullptr);
     char const *program = argc > 0 ? argv[0] : "remote_client";
     remote_client::ClientConfig cli;
-    bool have_host = false;
-    bool have_port = false;
+    std::string config_path = "remote_client.json";
+    bool config_explicit = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--config") == 0)
+        {
+            if (i + 1 >= argc)
+            {
+                return remote_client::missing_value_error("--config", program);
+            }
+            config_path = argv[++i];
+            config_explicit = true;
+        }
+    }
+    std::error_code config_probe;
+    bool const config_present = std::filesystem::exists(config_path, config_probe);
     bool have_device = false;
-    bool have_key = false;
-    bool have_fingerprint = false;
+    if (config_present || config_explicit)
+    {
+        std::string config_error;
+        std::optional<tournament_config::ConfigFile> const loaded
+            = tournament_config::load(config_path, config_error);
+        if (!loaded.has_value()
+            || !remote_client::apply_config_file(cli, loaded->values, config_error))
+        {
+            std::println(stderr, "config: {}", config_error);
+            remote_client::print_usage(program);
+            return 1;
+        }
+        have_device = loaded->values.contains("device_id");
+        std::println("config: loaded {}", config_path);
+    }
+    bool have_host = !cli.host.empty();
+    bool have_port = cli.port != 0;
+    bool have_key = !cli.key_file.empty();
+    bool have_fingerprint = !cli.fingerprint.empty();
     for (int i = 1; i < argc; ++i)
     {
         char const *flag = argv[i];
+        if (std::strcmp(flag, "--config") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                ++i;
+            }
+            continue;
+        }
         if (std::strcmp(flag, "--generate-key") == 0)
         {
             cli.generate_key = true;
@@ -639,7 +755,7 @@ int main(int argc, char *argv[])
     }
     if (!have_host || !have_port || !have_device || !have_key)
     {
-        std::println(stderr, "run mode requires --host --port --device-id --key-file");
+        std::println(stderr, "run mode requires host, port, device id and key file, from flags or the config file");
         remote_client::print_usage(program);
         return 1;
     }

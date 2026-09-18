@@ -33,6 +33,7 @@
 #include "tournament/bytes.h"
 #include "tournament/checkpoint.h"
 #include "tournament/cmaes.h"
+#include "tournament/config_file.h"
 #include "tournament/engine_identity.h"
 #include "tournament/journal.h"
 #if defined(TUNER_HAS_REMOTE)
@@ -85,6 +86,7 @@ namespace tournament_tuner
         std::uint64_t lease_ms = 30000;
         int games_per_assignment = 4;
         int series_cap = 2;
+        int roster = 0;
     };
 
     int thread_budget_for(int threads_arg)
@@ -411,6 +413,124 @@ namespace tournament_tuner
         return tournament_checkpoint::save(data_file, envelope, error);
     }
 
+    bool apply_config_file(TunerConfig &config, nlohmann::json const &values, std::string &error)
+    {
+        std::vector<std::string> const allowed{
+            "generations", "iters_per_move", "seed", "threads", "max_rounds", "pairs", "data_file",
+            "incumbent_file", "current_file", "fresh_zero", "threshold", "remote_port",
+            "remote_address", "remote_cert", "remote_key", "devices_file", "audit_rate",
+            "journal_file", "ban_file", "wait_clients_ms", "lease_ms", "games_per_assignment",
+            "series_cap", "roster",
+        };
+        if (!tournament_config::reject_unknown_keys(values, allowed, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "generations", config.generations, error))
+        {
+            return false;
+        }
+        if (values.contains("iters_per_move"))
+        {
+            std::uint64_t value = 0;
+            if (!tournament_config::get_u64(values, "iters_per_move", value, error))
+            {
+                return false;
+            }
+            config.iters_per_move = static_cast<std::size_t>(value);
+        }
+        if (!tournament_config::get_u64(values, "seed", config.root_seed, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "threads", config.threads, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "max_rounds", config.max_rounds, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "pairs", config.pairs, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "data_file", config.data_file, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "incumbent_file", config.incumbent_file, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "current_file", config.current_file, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_bool(values, "fresh_zero", config.fresh_zero, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_double(values, "threshold", config.threshold, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "remote_port", config.remote_port, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "remote_address", config.remote_address, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "remote_cert", config.remote_certificate, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "remote_key", config.remote_key, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "devices_file", config.devices_file, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_double(values, "audit_rate", config.audit_rate, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "journal_file", config.journal_file, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "ban_file", config.ban_file, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "wait_clients_ms", config.wait_clients_ms, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_u64(values, "lease_ms", config.lease_ms, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "games_per_assignment", config.games_per_assignment,
+                                        error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "series_cap", config.series_cap, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "roster", config.roster, error))
+        {
+            return false;
+        }
+        return true;
+    }
+
     void print_usage(char const *program)
     {
         std::println("Usage:");
@@ -424,6 +544,9 @@ namespace tournament_tuner
         std::println("  {} view [seed] [iters] [max_rounds]", program);
         std::println("View defaults: seed 0 (time-based, printed for replay), iters 50, max_rounds 3600");
         std::println("Threading: budget = threads if given else hardware_threads - 1, game workers = budget / 2, helpers = game workers, roster = 2 * budget (pso candidate count), lambda = roster - 1");
+        std::println("Roster: in remote mode an unset roster defaults to 16 candidates instead of the host thread count, because games run on the clients; set roster in the config file to scale the search with the worker pool");
+        std::println("Config: every parameter above can live in a json file; tournament_tuner.json in the working directory is read automatically, --config P reads another file, command line values override the file");
+        std::println("Config keys: generations, iters_per_move, seed, threads, max_rounds, pairs, data_file, incumbent_file, current_file, fresh_zero, threshold, remote_port, remote_address, remote_cert, remote_key, devices_file, audit_rate, journal_file, ban_file, wait_clients_ms, lease_ms, games_per_assignment, series_cap, roster");
         std::println("Flags: --fresh-zero starts a fresh run from zero weights instead of the incumbent file (ignored when a checkpoint exists)");
         std::println("Flags: --remote-port N distributes matches to remote_client devices over TLS (certificate and key are generated on first use, clients verify the printed fingerprint)");
         std::println("Flags: --remote-cert P and --remote-key P override the certificate paths, --audit-rate R sets the audit sample rate (default 0.25, remote mode only)");
@@ -883,13 +1006,24 @@ namespace tournament_tuner
     {
         int const budget = thread_budget_for(cli.threads);
         int const game_workers = game_workers_for(budget);
-        int const roster_size = roster_size_for(budget);
+        int roster_size = roster_size_for(budget);
+        char const *roster_source = "pso 2x";
+        if (cli.remote_port > 0 && cli.roster == 0)
+        {
+            roster_size = 16;
+            roster_source = "remote default";
+        }
+        if (cli.roster > 0)
+        {
+            roster_size = cli.roster;
+            roster_source = "configured";
+        }
         int const lambda = lambda_for(roster_size);
         int const dimension = static_cast<int>(tuning_toj::TojAdapter::param_count());
         tuning::RunConfig run_config;
         run_config.threads = game_workers;
-        std::println("thread budget {} game workers {} helpers {} roster {} (pso 2x) lambda {}",
-            budget, game_workers, game_workers, roster_size, lambda);
+        std::println("thread budget {} game workers {} helpers {} roster {} ({}) lambda {}",
+            budget, game_workers, game_workers, roster_size, roster_source, lambda);
         run_config.iterations_per_move = cli.iters_per_move;
         run_config.max_rounds = cli.max_rounds;
         if (!tuning::valid_run_config(run_config))
@@ -1816,10 +1950,45 @@ int main(int argc, char *argv[])
         }
         if (first == "status")
         {
-            std::string data_file = "tournament_data.bin";
-            if (argc > 2)
+            std::string config_path = "tournament_tuner.json";
+            for (int i = 2; i < argc; ++i)
             {
-                data_file = argv[2];
+                if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc)
+                {
+                    config_path = argv[++i];
+                }
+            }
+            std::string data_file;
+            bool have_data_file = false;
+            std::error_code config_probe;
+            if (std::filesystem::exists(config_path, config_probe))
+            {
+                std::string config_error;
+                std::optional<tournament_config::ConfigFile> const loaded
+                    = tournament_config::load(config_path, config_error);
+                if (loaded.has_value())
+                {
+                    if (tournament_config::get_string(loaded->values, "data_file", data_file,
+                                                      config_error))
+                    {
+                        have_data_file = !data_file.empty();
+                    }
+                }
+            }
+            for (int i = 2; i < argc; ++i)
+            {
+                if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc)
+                {
+                    ++i;
+                    continue;
+                }
+                data_file = argv[i];
+                have_data_file = true;
+                break;
+            }
+            if (!have_data_file)
+            {
+                data_file = "tournament_data.bin";
             }
             return tournament_tuner::run_status(data_file);
         }
@@ -1856,8 +2025,47 @@ int main(int argc, char *argv[])
     std::vector<char const *> positional;
     positional.push_back(argv[0]);
     bool flag_error = false;
+    std::string config_path = "tournament_tuner.json";
+    bool config_explicit = false;
     for (int i = 1; i < argc; ++i)
     {
+        if (std::strcmp(argv[i], "--config") == 0)
+        {
+            if (i + 1 >= argc)
+            {
+                std::println(stderr, "missing value for --config");
+                tournament_tuner::print_usage(program.c_str());
+                return 1;
+            }
+            config_path = argv[++i];
+            config_explicit = true;
+        }
+    }
+    std::error_code config_probe;
+    bool const config_present = std::filesystem::exists(config_path, config_probe);
+    if (config_present || config_explicit)
+    {
+        std::string config_error;
+        std::optional<tournament_config::ConfigFile> const loaded
+            = tournament_config::load(config_path, config_error);
+        if (!loaded.has_value()
+            || !tournament_tuner::apply_config_file(config, loaded->values, config_error))
+        {
+            std::println(stderr, "config: {}", config_error);
+            return 1;
+        }
+        std::println("config: loaded {}", config_path);
+    }
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--config") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                ++i;
+            }
+            continue;
+        }
         if (std::strcmp(argv[i], "--fresh-zero") == 0)
         {
             config.fresh_zero = true;
@@ -2045,6 +2253,26 @@ int main(int argc, char *argv[])
     if (config.wait_clients_ms <= 0)
     {
         std::println(stderr, "invalid client wait");
+        return 1;
+    }
+    if (config.lease_ms == 0)
+    {
+        std::println(stderr, "invalid lease");
+        return 1;
+    }
+    if (config.games_per_assignment <= 0)
+    {
+        std::println(stderr, "invalid games per assignment");
+        return 1;
+    }
+    if (config.series_cap <= 0)
+    {
+        std::println(stderr, "invalid series cap");
+        return 1;
+    }
+    if (config.roster < 0 || config.roster == 1)
+    {
+        std::println(stderr, "roster must be 0 (automatic) or at least 2");
         return 1;
     }
 #if !defined(TUNER_HAS_REMOTE)

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -19,6 +20,7 @@
 
 #include "tournament/audit.h"
 #include "tournament/ban_file.h"
+#include "tournament/config_file.h"
 #include "tournament/engine_identity.h"
 #include "tournament/net_transport.h"
 #include "tournament/provenance.h"
@@ -83,6 +85,110 @@ namespace tournament_host
         std::println("  roster size 4, generation seed 4242, audit rate 1.0, games per assignment 4, lease 30000 ms,");
         std::println("  series cap 2, client wait 120000 ms, threads 1, iterations 40, max rounds 600, max games 10000,");
         std::println("  max draws 10000");
+        std::println("Config: every flag above can live in a json file; tournament_host.json in the working directory is read automatically, --config P reads another file, command line values override the file");
+        std::println("Config keys: address, port, certificate, private_key, devices_file, ban_file, roster_size, generation_seed, audit_rate, games_per_assignment, lease_ms, series_cap, wait_clients_ms, threads, iterations, max_rounds, max_games, max_draws");
+    }
+
+    bool apply_config_file(HostConfig &config, nlohmann::json const &values, std::string &error)
+    {
+        std::vector<std::string> const allowed{
+            "address", "port", "certificate", "private_key", "devices_file", "ban_file",
+            "roster_size", "generation_seed", "audit_rate", "games_per_assignment", "lease_ms",
+            "series_cap", "wait_clients_ms", "threads", "iterations", "max_rounds", "max_games",
+            "max_draws",
+        };
+        if (!tournament_config::reject_unknown_keys(values, allowed, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "address", config.address, error))
+        {
+            return false;
+        }
+        if (values.contains("port"))
+        {
+            std::uint64_t port = 0;
+            if (!tournament_config::get_u64(values, "port", port, error))
+            {
+                return false;
+            }
+            if (port > 65535)
+            {
+                error = "port must be between 0 and 65535";
+                return false;
+            }
+            config.port = static_cast<std::uint16_t>(port);
+        }
+        if (!tournament_config::get_string(values, "certificate", config.certificate, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "private_key", config.private_key, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "devices_file", config.devices_file, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_string(values, "ban_file", config.ban_file, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "roster_size", config.roster_size, error))
+        {
+            return false;
+        }
+        if (values.contains("roster_size"))
+        {
+            config.roster_size = std::clamp(config.roster_size, 2, 16);
+        }
+        if (!tournament_config::get_u64(values, "generation_seed", config.generation_seed, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_double(values, "audit_rate", config.audit_rate, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "games_per_assignment", config.games_per_assignment,
+                                        error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_u64(values, "lease_ms", config.lease_ms, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "series_cap", config.series_cap, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_u64(values, "wait_clients_ms", config.wait_clients_ms, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "threads", config.threads, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "iterations", config.iterations, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_int(values, "max_rounds", config.max_rounds, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_i64(values, "max_games", config.max_games, error))
+        {
+            return false;
+        }
+        if (!tournament_config::get_i64(values, "max_draws", config.max_draws, error))
+        {
+            return false;
+        }
+        return true;
     }
 
     bool parse_u64(std::string const &text, std::uint64_t &out)
@@ -336,6 +442,14 @@ namespace tournament_host
                 if (i + 1 >= argc || !parse_i64(argv[i + 1], config.max_draws))
                 {
                     return fail("flag --max-draws requires an integer");
+                }
+                ++i;
+            }
+            else if (flag == "--config")
+            {
+                if (i + 1 >= argc)
+                {
+                    return fail("flag --config requires a value");
                 }
                 ++i;
             }
@@ -725,6 +839,36 @@ int main(int argc, char *argv[])
     std::setbuf(stdout, nullptr);
     std::setbuf(stderr, nullptr);
     tournament_host::HostConfig config;
+    std::string config_path = "tournament_host.json";
+    bool config_explicit = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--config") == 0)
+        {
+            if (i + 1 >= argc)
+            {
+                std::println(stderr, "flag --config requires a value");
+                tournament_host::print_usage(argc > 0 ? argv[0] : "tournament_host");
+                return 1;
+            }
+            config_path = argv[++i];
+            config_explicit = true;
+        }
+    }
+    std::error_code config_probe;
+    if (std::filesystem::exists(config_path, config_probe) || config_explicit)
+    {
+        std::string config_error;
+        std::optional<tournament_config::ConfigFile> const loaded
+            = tournament_config::load(config_path, config_error);
+        if (!loaded.has_value()
+            || !tournament_host::apply_config_file(config, loaded->values, config_error))
+        {
+            std::println(stderr, "config: {}", config_error);
+            return 1;
+        }
+        std::println("config: loaded {}", config_path);
+    }
     if (!tournament_host::parse_flags(argc, argv, config))
     {
         return 1;
