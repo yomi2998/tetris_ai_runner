@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -455,12 +456,27 @@ namespace tournament_runner
                 record.rounds = outcome.rounds;
                 filled[it->second] = true;
             }
-            std::vector<GameRecord const *> report_order;
-            for (std::size_t i = 0; i < planned.size(); ++i)
+            std::map<int, std::vector<GameRecord const *>> by_series;
+            for (GameRecord const &record : planned)
             {
-                if (filled[i])
+                by_series[record.series_id].push_back(&record);
+            }
+            std::vector<GameRecord const *> report_order;
+            for (auto &[series_id, records] : by_series)
+            {
+                std::sort(records.begin(), records.end(),
+                          [](GameRecord const *a, GameRecord const *b)
+                          {
+                              return a->game_index < b->game_index;
+                          });
+                for (GameRecord const *record : records)
                 {
-                    report_order.push_back(&planned[i]);
+                    std::size_t const position = static_cast<std::size_t>(record - planned.data());
+                    if (!filled[position])
+                    {
+                        break;
+                    }
+                    report_order.push_back(record);
                 }
             }
             std::sort(report_order.begin(), report_order.end(),
