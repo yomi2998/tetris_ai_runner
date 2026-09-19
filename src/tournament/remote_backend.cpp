@@ -537,6 +537,14 @@ namespace tournament_remote
             bool audit_selected = false;
             std::thread worker;
             std::atomic<bool> finished{false};
+
+            ~Flight()
+            {
+                if (worker.joinable())
+                {
+                    worker.join();
+                }
+            }
         };
 
         std::vector<std::unique_ptr<Flight>> in_flight;

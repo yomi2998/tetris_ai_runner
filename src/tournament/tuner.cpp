@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <print>
+#include <poll.h>
 #include <random>
 #include <string>
 #include <thread>
@@ -1477,36 +1478,78 @@ namespace tournament_tuner
         };
         auto view_state = std::make_shared<tuning::EngineViewState>();
         auto live = std::make_shared<LiveBracket>();
-        std::thread stdin_thread([view_state, live]()
+        std::atomic<bool> stdin_stop{false};
+        auto handle_stdin_line = [&](std::string const &line)
         {
-            std::string line;
-            while (std::getline(std::cin, line))
+            if (line == "view")
             {
-                if (line == "view")
+                view_state->enabled.store(true, std::memory_order_relaxed);
+                std::print("\033[2J");
+                std::println("view enabled, one live game renders from the next round");
+            }
+            else if (line.empty())
+            {
+                view_state->enabled.store(false, std::memory_order_relaxed);
+                std::println("view disabled");
+            }
+            else if (line == "bracket" || line == "status")
+            {
+                std::lock_guard<std::mutex> live_lock(live->mutex);
+                if (live->runner == nullptr)
                 {
-                    view_state->enabled.store(true, std::memory_order_relaxed);
-                    std::print("\033[2J");
-                    std::println("view enabled, one live game renders from the next round");
+                    std::println("no live tournament right now");
+                    return;
                 }
-                else if (line.empty())
+                std::lock_guard<std::mutex> view_lock(view_state->mutex);
+                print_bracket(*live->runner);
+            }
+        };
+        std::thread stdin_thread([view_state, live, &stdin_stop, &handle_stdin_line]()
+        {
+            std::string pending;
+            char buffer[512];
+            while (!stdin_stop.load(std::memory_order_relaxed))
+            {
+                pollfd input;
+                input.fd = 0;
+                input.events = POLLIN;
+                int const ready = poll(&input, 1, 100);
+                if (ready <= 0)
                 {
-                    view_state->enabled.store(false, std::memory_order_relaxed);
-                    std::println("view disabled");
+                    continue;
                 }
-                else if (line == "bracket" || line == "status")
+                ssize_t const got = read(0, buffer, sizeof buffer);
+                if (got <= 0)
                 {
-                    std::lock_guard<std::mutex> live_lock(live->mutex);
-                    if (live->runner == nullptr)
-                    {
-                        std::println("no live tournament right now");
-                        continue;
-                    }
-                    std::lock_guard<std::mutex> view_lock(view_state->mutex);
-                    print_bracket(*live->runner);
+                    break;
+                }
+                pending.append(buffer, static_cast<std::size_t>(got));
+                std::size_t newline = pending.find('\n');
+                while (newline != std::string::npos)
+                {
+                    std::string line = pending.substr(0, newline);
+                    pending.erase(0, newline + 1);
+                    handle_stdin_line(line);
+                    newline = pending.find('\n');
                 }
             }
         });
-        stdin_thread.detach();
+        auto join_stdin_thread = [&stdin_stop, &stdin_thread]()
+        {
+            stdin_stop.store(true, std::memory_order_relaxed);
+            if (stdin_thread.joinable())
+            {
+                stdin_thread.join();
+            }
+        };
+        struct StdinJoiner
+        {
+            std::function<void()> join;
+            ~StdinJoiner()
+            {
+                join();
+            }
+        } stdin_joiner{join_stdin_thread};
         std::println("Type view and Enter to watch one live game per wave, empty line to stop, bracket for live standings");
         for (std::uint64_t generation = start_generation; generation < static_cast<std::uint64_t>(cli.generations); ++generation)
         {

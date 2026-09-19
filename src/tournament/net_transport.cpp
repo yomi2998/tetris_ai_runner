@@ -1917,13 +1917,31 @@ namespace tournament_net
         {
             return;
         }
-        std::vector<std::thread> to_join;
         {
             std::lock_guard<std::mutex> lock(impl_->shared->mutex);
             impl_->shared->shutting_down.store(true);
+            if (impl_->listen_fd >= 0)
+            {
+                shutdown(impl_->listen_fd, SHUT_RDWR);
+            }
+        }
+        if (impl_->accept_thread.joinable())
+        {
+            impl_->accept_thread.join();
+        }
+        std::vector<std::thread> to_join;
+        {
+            std::lock_guard<std::mutex> lock(impl_->shared->mutex);
             for (auto &entry : impl_->shared->connections)
             {
                 entry.second->kill();
+            }
+            for (auto &weak : impl_->shared->live_connections)
+            {
+                if (std::shared_ptr<HostConnection> conn = weak.lock())
+                {
+                    conn->kill();
+                }
             }
             if (impl_->listen_fd >= 0)
             {
@@ -1940,13 +1958,8 @@ namespace tournament_net
                 thread.join();
             }
         }
-        if (impl_->accept_thread.joinable())
-        {
-            impl_->accept_thread.join();
-        }
         if (impl_->listen_fd >= 0)
         {
-            shutdown(impl_->listen_fd, SHUT_RDWR);
             close(impl_->listen_fd);
             impl_->listen_fd = -1;
         }
