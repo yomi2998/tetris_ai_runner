@@ -1,6 +1,7 @@
 #include "tournament/remote_backend.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <deque>
@@ -80,6 +81,10 @@ namespace tournament_remote
         state.silent = false;
         state.last_wait_ms = 0;
         state.outstanding_games = state.outstanding_games > games ? state.outstanding_games - games : 0;
+        if (state.capacity > 0 && state.capacity < state.declared_capacity)
+        {
+            ++state.capacity;
+        }
         if (games == 0 || elapsed_ms == 0)
         {
             return;
@@ -92,10 +97,12 @@ namespace tournament_remote
         state.ms_per_game = state.ms_per_game > 0.0 ? state.ms_per_game * 0.5 + sample * 0.5 : sample;
     }
 
-    void DeviceTiming::record_timeout(DeviceId device, bool peer_active, std::uint64_t waited_ms)
+    void DeviceTiming::record_timeout(DeviceId device, std::uint64_t games, bool peer_active,
+                                      std::uint64_t waited_ms)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         DeviceState &state = devices_[device];
+        state.outstanding_games = state.outstanding_games > games ? state.outstanding_games - games : 0;
         if (peer_active)
         {
             state.silent = false;
@@ -106,6 +113,8 @@ namespace tournament_remote
             state.silent = true;
             state.last_wait_ms = 0;
         }
+        std::uint32_t const base = state.capacity > 0 ? state.capacity : state.declared_capacity;
+        state.capacity = base > 1u ? base / 2u : 1u;
     }
 
     void DeviceTiming::record_reset(DeviceId device)
@@ -115,6 +124,7 @@ namespace tournament_remote
         state.outstanding_games = 0;
         state.last_wait_ms = 0;
         state.silent = false;
+        state.capacity = 0;
     }
 
     std::uint64_t DeviceTiming::wait_hint_ms(DeviceId device, std::uint64_t games,
@@ -158,6 +168,22 @@ namespace tournament_remote
             wait = last_wait > 1800000 ? 3600000 : last_wait * 2;
         }
         return std::min<std::uint64_t>(std::max<std::uint64_t>(wait, lease_ms), 3600000);
+    }
+
+    std::uint32_t DeviceTiming::effective_capacity(DeviceId device, std::uint32_t declared)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        DeviceState &state = devices_[device];
+        if (declared == 0)
+        {
+            declared = 1;
+        }
+        state.declared_capacity = declared;
+        if (state.capacity == 0 || state.capacity > declared)
+        {
+            state.capacity = declared;
+        }
+        return state.capacity;
     }
 
     RemoteBackend::RemoteBackend(tuning::ParamSchema schema,
@@ -510,16 +536,61 @@ namespace tournament_remote
                 });
                 continue;
             }
-            ++round;
-            std::vector<tournament_wire::DeviceId> devices = registry_->active_devices();
+            std::vector<tournament_wire::DeviceId> connected = transport_->devices();
+            std::sort(connected.begin(), connected.end());
+            std::vector<tournament_wire::DeviceId> enrolled = registry_->active_devices();
+            std::vector<tournament_wire::DeviceId> devices;
+            devices.reserve(std::min(connected.size(), enrolled.size()));
+            std::set_intersection(connected.begin(), connected.end(),
+                                  enrolled.begin(), enrolled.end(), std::back_inserter(devices));
             if (devices.empty())
             {
-                throw std::runtime_error("no active devices for remote execution");
+                if (enrolled.empty())
+                {
+                    throw std::runtime_error("no active devices for remote execution");
+                }
+                if (config_.log)
+                {
+                    config_.log("waiting for device connections, " + std::to_string(pending.size())
+                        + " game(s) pending");
+                }
+                auto const grace_began = std::chrono::steady_clock::now();
+                for (;;)
+                {
+                    connected = transport_->devices();
+                    std::sort(connected.begin(), connected.end());
+                    enrolled = registry_->active_devices();
+                    devices.clear();
+                    std::set_intersection(connected.begin(), connected.end(),
+                                          enrolled.begin(), enrolled.end(),
+                                          std::back_inserter(devices));
+                    if (!devices.empty())
+                    {
+                        break;
+                    }
+                    if (enrolled.empty())
+                    {
+                        throw std::runtime_error("no active devices for remote execution");
+                    }
+                    auto const waited_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - grace_began).count();
+                    if (waited_ms < 0
+                        || static_cast<std::uint64_t>(waited_ms) >= config_.reconnect_grace_ms)
+                    {
+                        throw std::runtime_error("no connected devices within "
+                            + std::to_string(config_.reconnect_grace_ms) + " ms");
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                }
             }
+            ++round;
+            std::vector<std::uint32_t> capacities(devices.size(), 1);
             std::uint64_t capacity_total = 0;
-            for (tournament_wire::DeviceId device : devices)
+            for (std::size_t i = 0; i < devices.size(); ++i)
             {
-                capacity_total += std::max<std::uint32_t>(1u, registry_->concurrency(device));
+                capacities[i] = timing_->effective_capacity(
+                    devices[i], std::max<std::uint32_t>(1u, registry_->concurrency(devices[i])));
+                capacity_total += capacities[i];
             }
             if (rounds_limit == 0)
             {
@@ -547,19 +618,18 @@ namespace tournament_remote
                 std::uint64_t wait_ms = 0;
                 bool audit_selected = false;
             };
-            std::vector<std::uint32_t> capacities(devices.size(), 1);
-            for (std::size_t i = 0; i < devices.size(); ++i)
-            {
-                capacities[i] = std::max<std::uint32_t>(1u, registry_->concurrency(devices[i]));
-            }
             std::vector<std::uint32_t> flights_used(devices.size(), 0);
 
+            std::size_t const spread
+                = (pending.size() + devices.size() - 1) / devices.size();
+            std::size_t const effective_chunk
+                = std::min(chunk_size, std::max<std::size_t>(1, spread));
             std::vector<Flight> flights;
             std::size_t cursor = 0;
-            for (std::size_t start = 0; start < pending.size(); start += chunk_size)
+            for (std::size_t start = 0; start < pending.size(); start += effective_chunk)
             {
                 std::vector<std::size_t> indices;
-                for (std::size_t k = start; k < pending.size() && k < start + chunk_size; ++k)
+                for (std::size_t k = start; k < pending.size() && k < start + effective_chunk; ++k)
                 {
                     indices.push_back(pending[k]);
                 }
@@ -751,7 +821,8 @@ namespace tournament_remote
                     }
                     else if (accepted && expired)
                     {
-                        timing_->record_timeout(flight.device, true, flight.wait_ms);
+                        timing_->record_timeout(flight.device, static_cast<std::uint64_t>(attempted),
+                                                true, flight.wait_ms);
                     }
                     else
                     {
@@ -760,7 +831,8 @@ namespace tournament_remote
                 }
                 else if (flight.delivery.status == tournament_transport::DeliveryStatus::Timeout)
                 {
-                    timing_->record_timeout(flight.device, flight.delivery.peer_active, flight.wait_ms);
+                    timing_->record_timeout(flight.device, static_cast<std::uint64_t>(attempted),
+                                            flight.delivery.peer_active, flight.wait_ms);
                 }
                 else
                 {

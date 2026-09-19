@@ -13,8 +13,8 @@
 #include "ai_zzz.h"
 #include "search_tspin.h"
 #include "tetris_core.h"
-#include "tournament/engine_identity.h"
 #include "tuning/domain.h"
+#include "tuning/engine_match.h"
 #include "tuning/match.h"
 #include "tuning/toj_adapter.h"
 
@@ -68,6 +68,86 @@ namespace tournament_identity
                 maps.push_back(map);
             }
             return maps;
+        }
+
+        constexpr std::size_t kCanonicalGames = 2;
+        constexpr std::size_t kCanonicalIterationsPerMove = 24;
+        constexpr int kCanonicalMaxRounds = 80;
+        constexpr std::uint64_t kCanonicalSeed = 0xCA1E5EEDULL;
+
+        template<class Adapter>
+        void hash_bot_round(std::uint64_t &hash, int round,
+                            tuning::EngineBotState<Adapter> const &bot)
+        {
+            hash = tuning::fnv1a_u64(hash, static_cast<std::uint64_t>(round));
+            hash = tuning::fnv1a_byte(hash, bot.dead ? 1 : 0);
+            hash = tuning::fnv1a_byte(hash, static_cast<unsigned char>(bot.hold));
+            hash = tuning::fnv1a_u64(hash, static_cast<std::uint64_t>(bot.combo));
+            hash = tuning::fnv1a_u64(hash, bot.b2b ? 1 : 0);
+            hash = tuning::fnv1a_u64(hash, static_cast<std::uint64_t>(bot.last_clear));
+            hash = tuning::fnv1a_u64(hash, static_cast<std::uint64_t>(bot.total_clear));
+            hash = tuning::fnv1a_u64(hash, static_cast<std::uint64_t>(bot.total_attack));
+            hash = tuning::fnv1a_u64(hash, static_cast<std::uint64_t>(bot.total_block));
+            hash = tuning::fnv1a_u64(hash, static_cast<std::uint64_t>(bot.send_attack));
+        }
+
+        template<class Adapter>
+        std::uint64_t canonical_game_moves_fingerprint(std::shared_ptr<m_tetris::TetrisContext> const &context,
+                                                       std::span<double const> theta_a,
+                                                       std::span<double const> theta_b)
+        {
+            if (!context || theta_a.size() != Adapter::param_count()
+                || theta_b.size() != Adapter::param_count())
+            {
+                return 0;
+            }
+            std::size_t const next_len = Adapter::next_length();
+            std::span<int const> const combo_table = Adapter::combo_table();
+            m_tetris::SearchBudget const budget
+                = m_tetris::SearchBudget::by_iterations(kCanonicalIterationsPerMove);
+            std::size_t const max_rounds = static_cast<std::size_t>(kCanonicalMaxRounds);
+            std::uint64_t hash = tuning::kFnvOffsetBasis ^ 0x6A1E5ULL;
+            for (std::size_t game = 1; game <= kCanonicalGames; ++game)
+            {
+                tuning::EngineBotState<Adapter> a(
+                    tuning::derive_game_seed(kCanonicalSeed, game, 0), max_rounds, next_len, context);
+                tuning::EngineBotState<Adapter> b(
+                    tuning::derive_game_seed(kCanonicalSeed, game, 1), max_rounds, next_len, context);
+                if (!a.instance.apply_theta(theta_a.data(), theta_a.size())
+                    || !b.instance.apply_theta(theta_b.data(), theta_b.size()))
+                {
+                    return 0;
+                }
+                hash = tuning::fnv1a_u64(hash, game);
+                for (int round = 1; round <= kCanonicalMaxRounds; ++round)
+                {
+                    tuning::begin_game_round(a.scenario, b.scenario, round);
+                    tuning::engine_prepare_side(a, next_len);
+                    tuning::engine_prepare_side(b, next_len);
+                    tuning::engine_run_side(a, *context, next_len, budget, combo_table);
+                    tuning::engine_run_side(b, *context, next_len, budget, combo_table);
+                    hash_bot_round(hash, round, a);
+                    hash_bot_round(hash, round, b);
+                    if (a.dead || b.dead)
+                    {
+                        break;
+                    }
+                    int const cancelled = std::min(a.send_attack, b.send_attack);
+                    a.send_attack -= cancelled;
+                    b.send_attack -= cancelled;
+                    if (b.send_attack > 0)
+                    {
+                        a.recv_attack.push_back(b.send_attack);
+                    }
+                    if (a.send_attack > 0)
+                    {
+                        b.recv_attack.push_back(a.send_attack);
+                    }
+                }
+                hash = tuning::fnv1a_u64(hash, a.dead ? 1 : 0);
+                hash = tuning::fnv1a_u64(hash, b.dead ? 1 : 0);
+            }
+            return hash;
         }
 
         struct ConformancePlacement
@@ -186,9 +266,8 @@ namespace tournament_identity
         }
     }
 
-    template<class RunGames>
-    std::uint64_t toj_conformance_fingerprint(std::shared_ptr<m_tetris::TetrisContext> const &context,
-                                              RunGames const &run_games)
+    inline std::uint64_t toj_conformance_fingerprint(
+        std::shared_ptr<m_tetris::TetrisContext> const &context)
     {
         tuning::ParamSchema const schema = tuning_toj::TojAdapter::schema();
         std::vector<double> const theta_a(schema.defaults.begin(), schema.defaults.end());
@@ -199,10 +278,12 @@ namespace tournament_identity
         }
         std::uint64_t const eval_a = detail::toj_eval_fingerprint(context, theta_a);
         std::uint64_t const eval_b = detail::toj_eval_fingerprint(context, theta_b);
-        std::uint64_t const game_hash = adapter_engine_fingerprint<tuning_toj::TojAdapter>(run_games);
+        std::uint64_t const moves
+            = detail::canonical_game_moves_fingerprint<tuning_toj::TojAdapter>(context, theta_a,
+                                                                               theta_b);
         std::uint64_t hash = tuning::fnv1a_u64(tuning::kFnvOffsetBasis ^ 0xC0AF0F0E1ULL, eval_a);
         hash = tuning::fnv1a_u64(hash, eval_b);
-        hash = tuning::fnv1a_u64(hash, game_hash);
+        hash = tuning::fnv1a_u64(hash, moves);
         return hash;
     }
 }

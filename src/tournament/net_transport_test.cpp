@@ -355,6 +355,23 @@ namespace
         return completed;
     }
 
+    struct ParkedRequest
+    {
+        std::atomic<bool> done{false};
+        std::atomic<bool> unreachable{false};
+        std::atomic<std::uint64_t> elapsed_ms{0};
+    };
+
+    bool completes_within(std::atomic<bool> const &flag, std::uint64_t budget_ms)
+    {
+        auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(budget_ms);
+        while (!flag.load() && std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return flag.load();
+    }
+
     struct ProbeFrame
     {
         int opcode = 0;
@@ -779,6 +796,62 @@ namespace
         second.conn->close();
     }
 
+    void test_replacement_wakes_parked_request()
+    {
+        HostHarness host("stale_wake");
+        check(host.start(tnet::NetConfig{}), "host started for parked request replacement test");
+        tw::KeyPair const keys = tw::generate_keypair();
+        auto stale = make_client(host, 1, "test_adapter", tw::protocol_version, 0, &keys);
+        check(stale.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "stale connection enrolled for the replacement wake test: " + stale.detail);
+        check(devices_contain(*host.transport, 1), "stale device listed before replacement");
+        tw::AssignmentBatch const assignment = make_assignment(901, 1, 21, 1);
+        ParkedRequest parked;
+        std::thread requester([&]()
+        {
+            auto const began = std::chrono::steady_clock::now();
+            tt::Delivery const delivery = host.transport->request(1, assignment, 20000);
+            auto const span = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - began).count();
+            parked.unreachable.store(delivery.status == tt::DeliveryStatus::Unreachable);
+            parked.elapsed_ms.store(static_cast<std::uint64_t>(span));
+            parked.done.store(true);
+        });
+        std::string detail;
+        auto const in_flight = stale.conn->next_assignment(5000, detail);
+        check(in_flight.has_value() && in_flight->nonce == 901,
+              "stale connection took the assignment it will never answer: " + detail);
+        bool const outstanding = completes_within(parked.done, 250);
+        check(!outstanding, "answered assignment stays outstanding on the stale connection");
+        auto replacement = make_client(host, 1, "test_adapter", tw::protocol_version, 0, &keys);
+        check(replacement.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "re-enrolling device accepted on a fresh connection: " + replacement.detail);
+        bool const woke = completes_within(parked.done, 6000);
+        requester.join();
+        check(woke, "parked request wakes when its connection is replaced instead of holding its window");
+        check(woke && parked.unreachable.load(),
+              "parked request on the replaced connection wakes as unreachable");
+        check(woke && parked.elapsed_ms.load() >= 250,
+              "parked request survived its outstanding window before waking: "
+                  + std::to_string(parked.elapsed_ms.load()) + " ms");
+        check(woke && parked.elapsed_ms.load() < 6000,
+              "parked request returned in " + std::to_string(parked.elapsed_ms.load())
+                  + " ms of a 20000 ms window");
+        std::thread worker([&]() { honest_worker(replacement); });
+        tw::AssignmentBatch const follow_up = make_assignment(902, 1, 22, 2);
+        tt::Delivery const served = host.transport->request(1, follow_up, 6000);
+        check(served.status == tt::DeliveryStatus::Delivered,
+              "replacement connection answers the next assignment");
+        bool const echo_ok = served.status == tt::DeliveryStatus::Delivered
+            && served.result.batch.nonce == 902
+            && served.result.batch.device == 1
+            && served.result.batch.outcomes.size() == 2
+            && tw::verify_result(keys.public_key, served.result.batch, served.result.signature);
+        check(echo_ok, "replacement connection returns a valid signed result for the follow up nonce");
+        replacement.conn->close();
+        worker.join();
+    }
+
     void test_load_devices_file()
     {
         std::string const hex_one = tournament_bytes::encode_hex(tw::generate_keypair().public_key);
@@ -826,6 +899,33 @@ namespace
         error.clear();
         auto const empty = tnet::load_devices_file(empty_path.string(), error);
         check(empty.has_value() && empty->empty(), "existing empty devices file loads as empty allowlist");
+    }
+
+    void test_bound_device_id_rejects_other_key()
+    {
+        HostHarness host("bound_key");
+        tw::KeyPair const owner = tw::generate_keypair();
+        tw::KeyPair const squatter = tw::generate_keypair();
+        std::filesystem::path const trust_path = temp_dir() / "bound_key_trust.txt";
+        write_file(trust_path, "7 " + tournament_bytes::encode_hex(owner.public_key) + " 3 1\n");
+        std::string trust_error;
+        check(host.registry->load_trust(trust_path.string(), trust_error),
+              "trust file binding a device id loads: " + trust_error);
+        check(host.registry->bound_key(7) != nullptr, "trust file exposes a bound key for the device id");
+        check(!host.registry->enrolled(7), "a bound device id starts unenrolled");
+        check(host.start(tnet::NetConfig{}), "host started for bound device id test");
+        auto squatter_client = make_client(host, 7, "test_adapter", tw::protocol_version, 0, &squatter);
+        check(squatter_client.status == tnet::ClientConnection::HelloStatus::Rejected,
+              "stranger key for a bound device id is refused: " + squatter_client.detail);
+        check(squatter_client.detail == "device id is bound to another key",
+              "bound device rejection carries the binding reason: " + squatter_client.detail);
+        check(!host.registry->enrolled(7), "refused stranger never enrolls the bound device id");
+        check(host.transport->devices().empty(), "refused stranger never appears in transport devices()");
+        auto owner_client = make_client(host, 7, "test_adapter", tw::protocol_version, 0, &owner);
+        check(owner_client.status == tnet::ClientConnection::HelloStatus::Accepted,
+              "bound key still enrolls after the stranger refusal: " + owner_client.detail);
+        check(devices_contain(*host.transport, 7), "bound device listed after its owner enrolls");
+        owner_client.conn->close();
     }
 
     void test_allowlist_enrollment()
@@ -1451,8 +1551,10 @@ int main()
     test_pin_enforcement();
     test_duplicate_device_key_rules();
     test_replacement_logs_local_shutdown();
+    test_replacement_wakes_parked_request();
     test_load_devices_file();
     test_allowlist_enrollment();
+    test_bound_device_id_rejects_other_key();
     test_blacklisted_reconnect_rejected();
     test_engine_fingerprint_pin();
     test_connection_cap();

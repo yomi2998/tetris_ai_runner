@@ -54,6 +54,64 @@ namespace
         return dir;
     }
 
+    tournament_ban::BanRecord ban_record(tw::DeviceId device, tw::PublicKey const &key,
+                                         std::uint64_t marker)
+    {
+        tournament_ban::BanRecord record;
+        record.device = device;
+        record.public_key = key;
+        record.generation = marker;
+        record.failed_verdicts = marker;
+        record.caught_at_ms = marker;
+        return record;
+    }
+
+    void write_ban_file(std::string const &path,
+                        std::vector<tournament_ban::BanRecord> const &records)
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        for (tournament_ban::BanRecord const &record : records)
+        {
+            output << record.device << ' ' << tournament_bytes::encode_hex(record.public_key)
+                   << ' ' << record.generation << ' ' << record.failed_verdicts << ' '
+                   << record.caught_at_ms << '\n';
+        }
+    }
+
+    bool key_banned_on_a_mutable_registry(tr::DeviceRegistry &registry, tw::PublicKey const &key)
+    {
+        return registry.key_banned(key);
+    }
+
+    tw::PublicKey const *bound_key_on_a_const_registry(tr::DeviceRegistry const &registry,
+                                                       tw::DeviceId device)
+    {
+        return registry.bound_key(device);
+    }
+
+    void write_trust_file(std::string const &path, std::vector<tr::TrustRecord> const &records)
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        for (tr::TrustRecord const &record : records)
+        {
+            output << record.device << ' '
+                   << tournament_bytes::encode_hex(record.public_key) << ' '
+                   << record.audits_passed << ' ' << record.audits_failed << '\n';
+        }
+    }
+
+    static_assert(requires(tr::DeviceRegistry &registry, tw::PublicKey const &key)
+                  {
+                      registry.key_banned(key);
+                  },
+                  "key_banned reloads the ban file and must stay callable on a mutable registry");
+
+    static_assert(requires(tr::DeviceRegistry const &registry, tw::DeviceId device)
+                  {
+                      registry.bound_key(device);
+                  },
+                  "bound_key only reads the trust preload and must stay callable on a const registry");
+
     void test_enroll_and_lookups()
     {
         tr::DeviceRegistry registry;
@@ -352,6 +410,326 @@ namespace
         std::filesystem::remove_all(dir, cleanup);
     }
 
+    void test_ban_file_reload_follows_the_file()
+    {
+        std::filesystem::path const dir = fresh_dir("tournament_registry_reload_file");
+        std::string const path = (dir / "bans.txt").string();
+        std::vector<std::string> notes;
+
+        tr::DeviceRegistry registry;
+        registry.set_log([&notes](std::string const &text)
+        {
+            notes.push_back(text);
+        });
+        check(registry.enroll(5, full_key(0x50)),
+              "ban reload: the first device enrolls before any file ban");
+        check(registry.enroll(6, full_key(0x60)),
+              "ban reload: the second device enrolls before any file ban");
+        check(registry.enroll(7, full_key(0x70)),
+              "ban reload: the third device enrolls before any file ban");
+        check(registry.blacklist(7), "ban reload: the third device is blacklisted by hand");
+
+        write_ban_file(path, {ban_record(6, full_key(0x60), 1)});
+        registry.set_ban_file(path);
+        check(registry.key_banned(full_key(0x60)),
+              "ban reload: a key listed in the ban file reads banned");
+        check(!registry.key_banned(full_key(0x50)),
+              "ban reload: a key absent from the ban file reads unbanned");
+        check(registry.blacklisted(6),
+              "ban reload: the device holding a listed key is blacklisted");
+        check(!registry.blacklisted(5),
+              "ban reload: the device holding an unlisted key is not blacklisted");
+        check(registry.enrolled(6), "ban reload: a file ban leaves the device enrolled");
+        check(registry.active_devices() == std::vector<tw::DeviceId>{5},
+              "ban reload: the active list drops the banned device and the hand blacklisted device");
+        check(notes.size() == 1, "ban reload: reading a new file logs one note");
+        check(notes.size() == 1
+                  && notes[0] == "ban file reloaded: 1 banned key(s), was 0, 1 device(s) blacklisted",
+              "ban reload: the first note counts the keys, the old count, and the blacklisted device");
+        notes.clear();
+
+        write_ban_file(path,
+                       {ban_record(5, full_key(0x50), 100), ban_record(6, full_key(0x60), 10000)});
+        check(registry.key_banned(full_key(0x50)),
+              "ban reload: a key added to the file later flips to banned");
+        check(registry.blacklisted(5),
+              "ban reload: adding a key to the file blacklists the device holding it");
+        check(registry.blacklisted(6),
+              "ban reload: a key that stays in the file keeps its device blacklisted");
+        check(registry.active_devices().empty(),
+              "ban reload: every device holding a listed key leaves the active list");
+        check(notes.size() == 1
+                  && notes[0] == "ban file reloaded: 2 banned key(s), was 1, 1 device(s) blacklisted",
+              "ban reload: the growth note counts the added key and the newly blacklisted device");
+        notes.clear();
+
+        write_ban_file(path, {ban_record(6, full_key(0x60), 7)});
+        check(!registry.key_banned(full_key(0x50)),
+              "ban reload: removing a key from the file flips it back to unbanned");
+        check(!registry.blacklisted(5),
+              "ban reload: removing a key from the file unblacklists the device holding it");
+        check(registry.blacklisted(6),
+              "ban reload: the key that stayed in the file keeps its device blacklisted");
+        check(registry.active_devices() == std::vector<tw::DeviceId>{5},
+              "ban reload: the unblacklisted device returns to the active list");
+        check(notes.size() == 1
+                  && notes[0] == "ban file reloaded: 1 banned key(s), was 2, 1 device(s) unblacklisted",
+              "ban reload: the shrink note counts the removed key and the unblacklisted device");
+        notes.clear();
+
+        write_ban_file(path, {ban_record(5, full_key(0x50), 200), ban_record(6, full_key(0x60), 3000)});
+        check(registry.key_banned(full_key(0x50)), "ban reload: both listed keys read banned again");
+        check(registry.key_banned(full_key(0x60)), "ban reload: the second key still reads banned");
+        check(notes.size() == 1
+                  && notes[0] == "ban file reloaded: 2 banned key(s), was 1, 1 device(s) blacklisted",
+              "ban reload: re adding a key counts only the device the reload blacklisted");
+        notes.clear();
+
+        write_ban_file(path, {});
+        check(!registry.key_banned(full_key(0x60)), "ban reload: an empty ban file unbans every key");
+        check(!registry.blacklisted(6), "ban reload: an empty ban file unblacklists that device");
+        check(!registry.blacklisted(5), "ban reload: an empty ban file unblacklists the other device");
+        check(registry.blacklisted(7),
+              "ban reload: a hand blacklist for a key the file never listed survives every reload");
+        check(registry.active_devices() == std::vector<tw::DeviceId>{5, 6},
+              "ban reload: an empty ban file restores the devices it blacklisted");
+        check(notes.size() == 1
+                  && notes[0] == "ban file reloaded: 0 banned key(s), was 2, 2 device(s) unblacklisted",
+              "ban reload: the empty file note counts both unblacklisted devices");
+        notes.clear();
+
+        check(registry.enroll(8, full_key(0x50)),
+              "ban reload: a key dropped from the file can enroll a new device again");
+        check(!key_banned_on_a_mutable_registry(registry, full_key(0x50)),
+              "ban reload: key_banned reads the fresh file through a mutable registry");
+        check(!registry.key_banned(full_key(0x70)),
+              "ban reload: a key the file never listed reads unbanned");
+        check(registry.blacklisted(7), "ban reload: that lookup leaves the hand blacklist in place");
+        check(notes.empty(), "ban reload: an unchanged ban file logs nothing");
+
+        write_ban_file(path, {ban_record(5, full_key(0x50), 5)});
+        check(registry.key_banned(full_key(0x50)), "ban reload: a key written back into the file bans again");
+        check(registry.blacklisted(5), "ban reload: writing the key back blacklists its device");
+
+        write_ban_file(path, {ban_record(5, full_key(0x60), 5)});
+        std::error_code time_error;
+        std::filesystem::file_time_type const written
+            = std::filesystem::last_write_time(path, time_error);
+        std::filesystem::last_write_time(path, written + std::chrono::seconds(1), time_error);
+        check(registry.key_banned(full_key(0x60)),
+              "ban reload: a same size rewrite is picked up through its mtime");
+        check(!registry.key_banned(full_key(0x50)),
+              "ban reload: the key a same size rewrite dropped reads unbanned");
+        check(registry.blacklisted(6),
+              "ban reload: the rewrite blacklists the device holding the new key");
+        check(!registry.blacklisted(5),
+              "ban reload: the rewrite unblacklists the device holding the old key");
+
+        std::error_code cleanup;
+        std::filesystem::remove_all(dir, cleanup);
+    }
+
+    void test_ban_file_reload_note_rules()
+    {
+        std::filesystem::path const dir = fresh_dir("tournament_registry_reload_notes");
+        std::string const path = (dir / "bans.txt").string();
+        write_ban_file(path, {ban_record(5, full_key(0x50), 1)});
+        std::vector<std::string> notes;
+
+        tr::DeviceRegistry unlogged;
+        unlogged.set_ban_file(path);
+        check(unlogged.key_banned(full_key(0x50)),
+              "ban note: a registry without a log callback still reads the ban file");
+
+        tr::DeviceRegistry registry;
+        registry.set_log([&notes](std::string const &text)
+        {
+            notes.push_back(text);
+        });
+        check(registry.enroll(5, full_key(0x50)),
+              "ban note: the device enrolls before its key is banned in memory");
+        check(registry.ban_key(full_key(0x50)), "ban note: the key is banned in memory first");
+        registry.set_ban_file(path);
+        check(registry.key_banned(full_key(0x50)),
+              "ban note: a file that matches the in-memory ban still reads banned");
+        check(notes.empty(), "ban note: a reload that changes nothing logs nothing");
+
+        write_ban_file(path, {ban_record(5, full_key(0x50), 200000)});
+        check(registry.key_banned(full_key(0x50)),
+              "ban note: a rewritten file holding the same key still reads banned");
+        check(notes.empty(), "ban note: rewriting the same key set logs nothing");
+
+        check(registry.enroll(6, full_key(0x60)), "ban note: a second device enrolls while unbanned");
+        check(!registry.blacklisted(6), "ban note: the new device starts unblacklisted");
+        write_ban_file(path, {ban_record(6, full_key(0x60), 300)});
+        check(registry.key_banned(full_key(0x60)),
+              "ban note: swapping the listed key reads the new key banned");
+        check(notes.size() == 1
+                  && notes[0] == "ban file reloaded: 1 banned key(s), was 1, 1 device(s) unblacklisted, "
+                      "1 device(s) blacklisted",
+              "ban note: a swap names both the unblacklisted and the blacklisted device");
+        notes.clear();
+
+        write_ban_file(path, {});
+        check(notes.empty(), "ban note: a file change stays unlogged until a key is looked up");
+        check(!registry.key_banned(full_key(0x60)), "ban note: the pending change unbans on lookup");
+        check(notes.size() == 1
+                  && notes[0] == "ban file reloaded: 0 banned key(s), was 1, 1 device(s) unblacklisted",
+              "ban note: the next lookup logs the pending change once");
+        check(!registry.key_banned(full_key(0x60)),
+              "ban note: a repeat lookup on the emptied file still reads unbanned");
+        check(!registry.key_banned(full_key(0x50)),
+              "ban note: the key dropped two reloads ago stays unbanned");
+        check(notes.size() == 1, "ban note: repeat lookups on an unchanged file add no notes");
+
+        std::vector<std::string> quiet;
+        tr::DeviceRegistry fileless;
+        fileless.set_log([&quiet](std::string const &text)
+        {
+            quiet.push_back(text);
+        });
+        check(!fileless.key_banned(full_key(0x50)),
+              "ban note: a registry with no ban file reads unbanned");
+        check(quiet.empty(), "ban note: a registry with no ban file logs no note");
+
+        std::error_code cleanup;
+        std::filesystem::remove_all(dir, cleanup);
+    }
+
+    void test_ban_file_removal_unbans_every_key()
+    {
+        std::filesystem::path const dir = fresh_dir("tournament_registry_removal");
+        std::string const path = (dir / "bans.txt").string();
+        write_ban_file(path, {ban_record(5, full_key(0x50), 1), ban_record(6, full_key(0x60), 12)});
+        std::vector<std::string> notes;
+
+        tr::DeviceRegistry registry;
+        registry.set_log([&notes](std::string const &text)
+        {
+            notes.push_back(text);
+        });
+        check(registry.enroll(5, full_key(0x50)),
+              "ban removal: the first device enrolls before the ban");
+        check(registry.enroll(6, full_key(0x60)),
+              "ban removal: the second device enrolls before the ban");
+        check(registry.enroll(7, full_key(0x70)),
+              "ban removal: the clean device enrolls before the ban");
+        registry.set_ban_file(path);
+        check(registry.key_banned(full_key(0x50)),
+              "ban removal: both file bans are read before the file goes away");
+        check(registry.blacklisted(5), "ban removal: the first listed device is blacklisted");
+        check(registry.blacklisted(6), "ban removal: the second listed device is blacklisted");
+        check(registry.active_devices() == std::vector<tw::DeviceId>{7},
+              "ban removal: only the unlisted device stays active");
+        notes.clear();
+
+        std::filesystem::remove(path);
+        check(!registry.key_banned(full_key(0x50)),
+              "ban removal: deleting the ban file unbans its keys");
+        check(!registry.key_banned(full_key(0x60)),
+              "ban removal: every key of the deleted file reads unbanned");
+        check(!registry.blacklisted(5),
+              "ban removal: deleting the ban file unblacklists the first device");
+        check(!registry.blacklisted(6),
+              "ban removal: deleting the ban file unblacklists every device");
+        check(registry.active_devices() == std::vector<tw::DeviceId>{5, 6, 7},
+              "ban removal: the active list is restored when the ban file is deleted");
+        check(notes.size() == 1 && notes[0] == "ban file removed: every key unbanned",
+              "ban removal: the deletion note replaces the reload count note");
+        check(registry.enroll(8, full_key(0x50)),
+              "ban removal: a key of the deleted file can enroll again");
+
+        check(!registry.key_banned(full_key(0x70)),
+              "ban removal: a missing ban file keeps reading unbanned");
+        check(notes.size() == 1, "ban removal: a missing ban file logs the removal only once");
+
+        write_ban_file(path, {ban_record(6, full_key(0x60), 900000)});
+        check(registry.key_banned(full_key(0x60)),
+              "ban removal: a recreated ban file bans its keys again");
+        check(registry.blacklisted(6), "ban removal: a recreated ban file blacklists the device again");
+        check(!registry.blacklisted(5),
+              "ban removal: a recreated file leaves a device it does not list unblacklisted");
+        check(notes.size() == 2
+                  && notes[1] == "ban file reloaded: 1 banned key(s), was 0, 1 device(s) blacklisted",
+              "ban removal: the recreated file logs a reload note counting the new ban");
+
+        std::error_code cleanup;
+        std::filesystem::remove_all(dir, cleanup);
+    }
+
+    void test_trust_binding_rejects_two_keys_for_one_device()
+    {
+        std::filesystem::path const dir = fresh_dir("tournament_registry_trust_conflict");
+        std::string const conflict_path = (dir / "trust_conflict.txt").string();
+        write_trust_file(conflict_path,
+                         {tr::TrustRecord{7, full_key(0x71), 3, 1},
+                          tr::TrustRecord{8, full_key(0x80), 1, 0},
+                          tr::TrustRecord{7, full_key(0x72), 0, 4}});
+        std::string error;
+        tr::DeviceRegistry registry;
+        check(!registry.load_trust(conflict_path, error),
+              "trust binding: one device id bound to two public keys is rejected");
+        check(error.find("line 3") != std::string::npos,
+              "trust binding: the rejection names the line of the conflicting record");
+        check(error.find("different public key") != std::string::npos,
+              "trust binding: the rejection says the key differs from the binding");
+        check(error.find("device id 7") != std::string::npos,
+              "trust binding: the rejection names the device id that clashed");
+
+        std::string const repeat_path = (dir / "trust_repeat.txt").string();
+        write_trust_file(repeat_path,
+                         {tr::TrustRecord{7, full_key(0x73), 2, 1},
+                          tr::TrustRecord{7, full_key(0x73), 2, 1}});
+        tr::DeviceRegistry repeat;
+        check(repeat.load_trust(repeat_path, error),
+              "trust binding: the same key repeated for one device id loads");
+        check(repeat.bound_key(7) != nullptr && *repeat.bound_key(7) == full_key(0x73),
+              "trust binding: the repeated record still reports one binding");
+        check(repeat.trust_snapshot().size() == 1,
+              "trust binding: a duplicated binding holds one preload record");
+
+        std::error_code cleanup;
+        std::filesystem::remove_all(dir, cleanup);
+    }
+
+    void test_trust_binding_gates_enrollment()
+    {
+        std::filesystem::path const dir = fresh_dir("tournament_registry_trust_binding");
+        std::string const path = (dir / "trust.txt").string();
+        write_trust_file(path, {tr::TrustRecord{7, full_key(0x71), 3, 1},
+                                tr::TrustRecord{9, full_key(0x90), 0, 4}});
+        std::string error;
+        tr::DeviceRegistry registry;
+        check(registry.load_trust(path, error), "trust binding: a one key per device file loads");
+        tw::PublicKey const *bound = registry.bound_key(7);
+        check(bound != nullptr && *bound == full_key(0x71),
+              "trust binding: bound_key reports the preloaded public key");
+        check(bound_key_on_a_const_registry(registry, 9) != nullptr
+                  && *bound_key_on_a_const_registry(registry, 9) == full_key(0x90),
+              "trust binding: a const registry reports the second binding");
+        check(registry.bound_key(8) == nullptr,
+              "trust binding: a device id missing from the trust file has no binding");
+
+        check(!registry.enroll(7, full_key(0x72)),
+              "trust binding: a bound device id refuses a different public key");
+        check(!registry.enrolled(7), "trust binding: a refused enrollment leaves the id unenrolled");
+        check(registry.size() == 0, "trust binding: a refused enrollment stores no device");
+        check(registry.enroll(7, full_key(0x71)),
+              "trust binding: the bound public key enrolls its device id");
+        check(registry.enroll(8, full_key(0x72)),
+              "trust binding: an unbound device id enrolls a key the file never mentions");
+        check(registry.bound_key(8) == nullptr,
+              "trust binding: an enrollment outside the trust file creates no binding");
+        tr::DeviceStats const *stats = registry.stats(7);
+        check(stats != nullptr && stats->audits_passed == 3 && stats->audits_failed == 1,
+              "trust binding: the bound record carries its audits to the enrolled id");
+        check(registry.trust_snapshot().size() == 3,
+              "trust binding: the snapshot keeps both preload keys and the unbound enrollment");
+
+        std::error_code cleanup;
+        std::filesystem::remove_all(dir, cleanup);
+    }
+
     void test_remove_trust_record()
     {
         std::filesystem::path const dir = fresh_dir("tournament_registry_unban");
@@ -414,6 +792,11 @@ int main()
     test_stats_independent();
     test_trust_persistence();
     test_ban_file_live_reload();
+    test_ban_file_reload_follows_the_file();
+    test_ban_file_reload_note_rules();
+    test_ban_file_removal_unbans_every_key();
+    test_trust_binding_rejects_two_keys_for_one_device();
+    test_trust_binding_gates_enrollment();
     test_remove_trust_record();
     std::println("{} checks, {} failures", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

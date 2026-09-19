@@ -6,12 +6,9 @@
 #include <vector>
 
 #include "tournament/toj_conformance.h"
-#include "tuning/engine_match.h"
 
 namespace
 {
-    using TojBackend = tuning::EngineMatchBackend<tuning_toj::TojAdapter>;
-
     int failures = 0;
 
     void check(bool condition, std::string const &name)
@@ -32,21 +29,9 @@ namespace
             check(false, "conformance: contexts prepare");
             return;
         }
-        TojBackend backend_a(context_a);
-        TojBackend backend_b(context_b);
-        auto run_a = [&backend_a](std::vector<tuning::BatchGame> const &games,
-                                  tuning::RunConfig const &config)
-        {
-            return backend_a.run_games(games, config);
-        };
-        auto run_b = [&backend_b](std::vector<tuning::BatchGame> const &games,
-                                  tuning::RunConfig const &config)
-        {
-            return backend_b.run_games(games, config);
-        };
-        std::uint64_t const first = tournament_identity::toj_conformance_fingerprint(context_a, run_a);
-        std::uint64_t const second = tournament_identity::toj_conformance_fingerprint(context_b, run_b);
-        std::uint64_t const repeat = tournament_identity::toj_conformance_fingerprint(context_a, run_a);
+        std::uint64_t const first = tournament_identity::toj_conformance_fingerprint(context_a);
+        std::uint64_t const second = tournament_identity::toj_conformance_fingerprint(context_b);
+        std::uint64_t const repeat = tournament_identity::toj_conformance_fingerprint(context_a);
         check(first != 0, "conformance: fingerprint is nonzero");
         check(first == second, "conformance: independent contexts agree");
         check(first == repeat, "conformance: repeated computation is stable");

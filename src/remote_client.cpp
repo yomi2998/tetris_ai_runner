@@ -528,13 +528,7 @@ namespace remote_client
         hello.protocol = tw::protocol_version;
         hello.adapter_id = std::string(schema.adapter_id);
         hello.schema_hash = tuning::schema_hash(schema);
-        auto probe_run = [&backend](std::vector<tuning::BatchGame> const &games,
-                                    tuning::RunConfig const &probe_config)
-        {
-            return backend.run_games(games, probe_config);
-        };
-        hello.engine_fingerprint = tournament_identity::toj_conformance_fingerprint(shared_context,
-                                                                                    probe_run);
+        hello.engine_fingerprint = tournament_identity::toj_conformance_fingerprint(shared_context);
         hello.max_concurrent_assignments = cli.max_concurrent_assignments;
         std::size_t backoff_step = 0;
         for (;;)

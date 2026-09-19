@@ -20,6 +20,13 @@ namespace tournament_registry
                 return false;
             }
         }
+        for (auto const &entry : trust_preload_)
+        {
+            if (entry.second.device == device && !(entry.first == public_key))
+            {
+                return false;
+            }
+        }
         auto [it, inserted] = devices_.emplace(device, Entry{public_key, DeviceStats{}});
         if (inserted)
         {
@@ -44,6 +51,19 @@ namespace tournament_registry
         std::lock_guard<std::mutex> lock(mutex_);
         auto const it = devices_.find(device);
         return it == devices_.end() ? nullptr : &it->second.public_key;
+    }
+
+    PublicKey const *DeviceRegistry::bound_key(DeviceId device) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto const &entry : trust_preload_)
+        {
+            if (entry.second.device == device)
+            {
+                return &entry.first;
+            }
+        }
+        return nullptr;
     }
 
     DeviceStats const *DeviceRegistry::stats(DeviceId device) const
@@ -93,18 +113,27 @@ namespace tournament_registry
         return true;
     }
 
-    bool DeviceRegistry::key_banned(PublicKey const &public_key) const
+    bool DeviceRegistry::key_banned(PublicKey const &public_key)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        refresh_bans_locked();
-        for (PublicKey const &banned : banned_keys_)
+        std::string reload_note;
+        bool banned = false;
         {
-            if (banned == public_key)
+            std::lock_guard<std::mutex> lock(mutex_);
+            reload_note = refresh_bans_locked();
+            for (PublicKey const &entry : banned_keys_)
             {
-                return true;
+                if (entry == public_key)
+                {
+                    banned = true;
+                    break;
+                }
             }
         }
-        return false;
+        if (!reload_note.empty() && log_)
+        {
+            log_(reload_note);
+        }
+        return banned;
     }
 
     void DeviceRegistry::set_ban_file(std::string const &path)
@@ -114,12 +143,29 @@ namespace tournament_registry
         ban_checked_ = false;
     }
 
-    void DeviceRegistry::refresh_bans_locked() const
+    void DeviceRegistry::set_log(std::function<void(std::string const &)> log)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        log_ = std::move(log);
+    }
+
+    std::string DeviceRegistry::refresh_bans_locked()
     {
         if (ban_file_.empty())
         {
-            return;
+            return {};
         }
+        auto key_listed = [](std::vector<PublicKey> const &keys, PublicKey const &key)
+        {
+            for (PublicKey const &entry : keys)
+            {
+                if (entry == key)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
         std::error_code stat_error;
         std::filesystem::file_time_type const written
             = std::filesystem::last_write_time(ban_file_, stat_error);
@@ -128,38 +174,78 @@ namespace tournament_registry
             if (stat_error == std::errc::no_such_file_or_directory && !banned_keys_.empty())
             {
                 banned_keys_.clear();
+                for (auto &entry : devices_)
+                {
+                    entry.second.stats.blacklisted = false;
+                }
                 ban_checked_ = true;
                 ban_stamp_ = 0;
                 ban_bytes_ = 0;
+                return "ban file removed: every key unbanned";
             }
-            return;
+            return {};
         }
         std::uintmax_t const bytes = std::filesystem::file_size(ban_file_, stat_error);
         if (stat_error)
         {
-            return;
+            return {};
         }
         std::uint64_t const stamp
             = static_cast<std::uint64_t>(written.time_since_epoch().count());
         if (ban_checked_ && stamp == ban_stamp_ && bytes == ban_bytes_)
         {
-            return;
+            return {};
         }
         tournament_ban::BanFile store(ban_file_);
         std::vector<tournament_ban::BanRecord> records;
         std::string load_error;
         if (!store.load(records, load_error))
         {
-            return;
+            return {};
         }
-        banned_keys_.clear();
+        std::vector<PublicKey> fresh;
+        fresh.reserve(records.size());
         for (tournament_ban::BanRecord &record : records)
         {
-            banned_keys_.push_back(std::move(record.public_key));
+            fresh.push_back(std::move(record.public_key));
         }
+        std::size_t const previous = banned_keys_.size();
+        std::size_t unblacklisted = 0;
+        std::size_t blacklisted = 0;
+        for (auto &entry : devices_)
+        {
+            bool const was = key_listed(banned_keys_, entry.second.public_key);
+            bool const now = key_listed(fresh, entry.second.public_key);
+            if (was && !now)
+            {
+                entry.second.stats.blacklisted = false;
+                ++unblacklisted;
+            }
+            else if (!was && now)
+            {
+                entry.second.stats.blacklisted = true;
+                ++blacklisted;
+            }
+        }
+        banned_keys_ = std::move(fresh);
         ban_stamp_ = stamp;
         ban_bytes_ = bytes;
         ban_checked_ = true;
+        if (banned_keys_.size() == previous && unblacklisted == 0 && blacklisted == 0)
+        {
+            return {};
+        }
+        std::string note = "ban file reloaded: " + std::to_string(banned_keys_.size())
+            + " banned key(s), was " + std::to_string(previous);
+        if (unblacklisted != 0)
+        {
+            note += ", " + std::to_string(unblacklisted) + " device(s) unblacklisted";
+        }
+        if (blacklisted != 0)
+        {
+            note += ", " + std::to_string(blacklisted) + " device(s) blacklisted";
+        }
+        return note;
     }
 
     bool DeviceRegistry::set_concurrency(DeviceId device, std::uint32_t concurrent_assignments)
@@ -238,6 +324,7 @@ namespace tournament_registry
         }
         std::lock_guard<std::mutex> lock(mutex_);
         trust_preload_.clear();
+        std::map<DeviceId, PublicKey> bound_ids;
         std::string line;
         std::size_t line_number = 0;
         while (std::getline(input, line))
@@ -271,6 +358,14 @@ namespace tournament_registry
             record.device = parsed_device;
             record.audits_passed = passed;
             record.audits_failed = failed;
+            auto const bound = bound_ids.find(parsed_device);
+            if (bound != bound_ids.end() && !(bound->second == *key))
+            {
+                error = path + " line " + std::to_string(line_number) + ": device id "
+                    + device_text + " is already bound to a different public key";
+                return false;
+            }
+            bound_ids.emplace(parsed_device, *key);
             trust_preload_[record.public_key] = record;
         }
         return true;

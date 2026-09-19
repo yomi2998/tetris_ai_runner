@@ -74,6 +74,7 @@ namespace tournament_host
         int audit_workers = 2;
         std::string trust_file = "tournament_trust.txt";
         std::string unban_key;
+        std::uint64_t reconnect_grace_ms = 60000;
     };
 
     void print_usage(char const *program)
@@ -91,10 +92,11 @@ namespace tournament_host
         std::println("  series cap 2, client wait 120000 ms, threads 1, iterations 40, max rounds 600, max games 10000,");
         std::println("  max draws 10000");
         std::println("Config: every flag above can live in a json file; tournament_host.json in the working directory is read automatically, --config P reads another file, command line values override the file");
-        std::println("Config keys: address, port, certificate, private_key, devices_file, ban_file, roster_size, generation_seed, audit_rate, games_per_assignment, lease_ms, series_cap, wait_clients_ms, threads, iterations, max_rounds, max_games, max_draws, trust_file");
+        std::println("Config keys: address, port, certificate, private_key, devices_file, ban_file, roster_size, generation_seed, audit_rate, games_per_assignment, lease_ms, series_cap, wait_clients_ms, threads, iterations, max_rounds, max_games, max_draws, trust_file, reconnect_grace_ms");
         std::println("Flags: --trust-file P persists device audit trust across restarts (default tournament_trust.txt, empty string disables)");
         std::println("Flags: --audit-workers N bounds the local audit re-run lanes (default 2, each lane runs single-threaded re-plays)");
         std::println("Flags: --unban K removes the ban record and the trust record for the 64 hex character device public key K from the ban and trust files, then exits");
+        std::println("Flags: --reconnect-grace-ms N waits up to N ms for enrolled devices to reconnect before a round fails (default 60000, 0 fails immediately)");
     }
 
     bool apply_config_file(HostConfig &config, nlohmann::json const &values, std::string &error)
@@ -103,7 +105,7 @@ namespace tournament_host
             "address", "port", "certificate", "private_key", "devices_file", "ban_file",
             "roster_size", "generation_seed", "audit_rate", "games_per_assignment", "lease_ms",
             "series_cap", "wait_clients_ms", "threads", "iterations", "max_rounds", "max_games",
-            "max_draws", "audit_workers", "trust_file",
+            "max_draws", "audit_workers", "trust_file", "reconnect_grace_ms",
         };
         if (!tournament_config::reject_unknown_keys(values, allowed, error))
         {
@@ -486,6 +488,16 @@ namespace tournament_host
                 }
                 config.unban_key = argv[++i];
             }
+            else if (flag == "--reconnect-grace-ms")
+            {
+                std::uint64_t value = 0;
+                if (i + 1 >= argc || !parse_u64(argv[i + 1], value))
+                {
+                    return fail("flag --reconnect-grace-ms requires a nonnegative integer");
+                }
+                config.reconnect_grace_ms = value;
+                ++i;
+            }
             else if (flag == "--config")
             {
                 if (i + 1 >= argc)
@@ -572,14 +584,8 @@ namespace tournament_host
         config.expected_schema_hash = tuning::schema_hash(schema);
         config.devices_file = cli.devices_file;
         auto probe_context = tuning_toj::TojAdapter::make_shared_context();
-        TojBackend probe_backend{probe_context};
-        auto probe_run = [&probe_backend](std::vector<tuning::BatchGame> const &games,
-                                          tuning::RunConfig const &probe_config)
-        {
-            return probe_backend.run_games(games, probe_config);
-        };
         config.expected_engine_fingerprint
-            = tournament_identity::toj_conformance_fingerprint(probe_context, probe_run);
+            = tournament_identity::toj_conformance_fingerprint(probe_context);
         config.log = [](std::string const &message)
         {
             std::println("net: {}", message);
@@ -637,6 +643,10 @@ namespace tournament_host
             }
             std::println("{} banned device key(s) loaded from {}", ban_records.size(), cli.ban_file);
             registry->set_ban_file(cli.ban_file);
+            registry->set_log([](std::string const &message)
+            {
+                std::println("net: {}", message);
+            });
         }
         if (!cli.trust_file.empty())
         {
@@ -743,6 +753,7 @@ namespace tournament_host
         trem::RemoteConfig remote_config;
         remote_config.games_per_assignment = cli.games_per_assignment;
         remote_config.lease_ms = cli.lease_ms;
+        remote_config.reconnect_grace_ms = cli.reconnect_grace_ms;
         remote_config.max_assignment_rounds = 4;
         remote_config.per_series_device_cap = cli.series_cap;
         remote_config.timing = remote_timing;
@@ -759,7 +770,6 @@ namespace tournament_host
             tw::PublicKey const *banned_key = registry->public_key(device);
             if (banned_key != nullptr && !cli.ban_file.empty())
             {
-                registry->ban_key(*banned_key);
                 tournament_ban::BanRecord ban_record;
                 ban_record.device = device;
                 ban_record.public_key = *banned_key;
@@ -772,6 +782,7 @@ namespace tournament_host
                 {
                     std::println(stderr, "ban file append failed: {}", ban_error);
                 }
+                registry->ban_key(*banned_key);
             }
             std::println("net: device {} caught lying by the streaming audit and banned", device);
         };

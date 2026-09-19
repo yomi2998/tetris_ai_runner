@@ -12,6 +12,8 @@
 #include "tuning/match.h"
 #include "tuning/toj_adapter.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -19,6 +21,7 @@
 #include <print>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -370,6 +373,10 @@ namespace
         remote_config.lease_ms = 1000000;
         remote_config.max_assignment_rounds = 4;
         remote_config.per_series_device_cap = 2;
+        remote_config.log = [](std::string const &message)
+        {
+            std::println("DEBUG {}", message);
+        };
         Cluster cluster(devices, remote_config);
         cluster.transport->add_device(1, honest_handler(devices[0].keys, engine));
         cluster.transport->add_device(2, flip_liar_handler(devices[1].keys, engine));
@@ -486,10 +493,14 @@ namespace
               "silent dropper is reassigned and results stay correct");
         check(silent_cluster.provenance->games_of_device(1).empty(), "silent dropper has nothing accepted");
         check(silent_cluster.provenance->games_of_device(2).size() == 2, "honest device covers dropped games");
-        check(silent_cluster.registry->stats(1) != nullptr && silent_cluster.registry->stats(1)->games_dropped >= 2,
+        check(silent_cluster.registry->stats(1) != nullptr && silent_cluster.registry->stats(1)->games_dropped >= 1,
               "dropper drop stats recorded");
 
-        Cluster late_cluster(devices, remote_config);
+        std::shared_ptr<trem::DeviceTiming> const late_timing = std::make_shared<trem::DeviceTiming>();
+        late_timing->record_delivery(2, 1, 200);
+        trem::RemoteConfig late_config = remote_config;
+        late_config.timing = late_timing;
+        Cluster late_cluster(devices, late_config);
         std::shared_ptr<tt::ManualClock> const clock = late_cluster.clock;
         tw::KeyPair const late_keys = devices[0].keys;
         late_cluster.transport->add_device(
@@ -505,7 +516,7 @@ namespace
               "late but valid results are discarded and reassigned");
         check(late_cluster.provenance->games_of_device(1).empty(), "late device has nothing accepted");
         check(late_cluster.provenance->games_of_device(2).size() == 2, "honest device covers late games");
-        check(late_cluster.registry->stats(1) != nullptr && late_cluster.registry->stats(1)->games_dropped >= 2,
+        check(late_cluster.registry->stats(1) != nullptr && late_cluster.registry->stats(1)->games_dropped >= 1,
               "late device drop stats recorded");
     }
 
@@ -562,7 +573,7 @@ namespace
             check(outcomes_identical(result, local), name + ": results still correct via honest device");
             check(cluster.provenance->games_of_device(1).empty(), name + ": tampered device accepted nothing");
             treg::DeviceStats const *stats = cluster.registry->stats(1);
-            check(stats != nullptr && stats->games_dropped >= 2, name + ": tampered device drop stats recorded");
+            check(stats != nullptr && stats->games_dropped >= 1, name + ": tampered device drop stats recorded");
         };
 
         run_tampered([](tw::ResultBatch &held)
@@ -577,9 +588,9 @@ namespace
 
         run_tampered([](tw::ResultBatch &held)
         {
-            if (held.outcomes.size() == 2)
+            if (!held.outcomes.empty())
             {
-                std::swap(held.outcomes[0].id, held.outcomes[1].id);
+                held.outcomes[0].id += 1000;
             }
         }, "outcome id mismatch");
 
@@ -984,6 +995,211 @@ namespace
               "unspecified capacity results match the attributed device outcome");
     }
 
+    std::uint64_t ms_since(std::chrono::steady_clock::time_point const &began)
+    {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began)
+                .count());
+    }
+
+    void test_device_timing_capacity_backoff()
+    {
+        trem::DeviceTiming timing;
+        check(timing.effective_capacity(1, 8) == 8, "an idle device starts at its declared capacity");
+        timing.record_timeout(1, 0, true, 1000);
+        check(timing.effective_capacity(1, 8) == 4, "a timeout halves the device capacity");
+        timing.record_timeout(1, 0, true, 1000);
+        check(timing.effective_capacity(1, 8) == 2, "a second timeout halves the capacity again");
+        timing.record_timeout(1, 0, true, 1000);
+        check(timing.effective_capacity(1, 8) == 1, "capacity backoff stops at one outstanding flight");
+        timing.record_timeout(1, 0, true, 1000);
+        check(timing.effective_capacity(1, 8) == 1, "repeated timeouts never take capacity below one");
+        timing.record_delivery(1, 1, 200);
+        check(timing.effective_capacity(1, 8) == 2, "a delivered flight recovers one capacity step");
+        timing.record_delivery(1, 1, 200);
+        check(timing.effective_capacity(1, 8) == 3, "the next delivery recovers one more step");
+        for (int step = 0; step < 8; ++step)
+        {
+            timing.record_delivery(1, 1, 200);
+        }
+        check(timing.effective_capacity(1, 8) == 8, "capacity recovery stops at the declared capacity");
+        check(timing.effective_capacity(1, 3) == 3, "a lowered declared capacity clamps the stored value");
+        timing.record_timeout(1, 0, true, 1000);
+        check(timing.effective_capacity(1, 3) == 1, "halving an odd declared capacity floors at one");
+        timing.record_reset(1);
+        check(timing.effective_capacity(1, 3) == 3, "a reconnect reset restores the full declared capacity");
+        check(timing.effective_capacity(2, 5) == 5, "an unseen device is seeded with its declared capacity");
+        check(timing.effective_capacity(3, 0) == 1, "a zero declared capacity is treated as one flight");
+    }
+
+    void test_device_timing_timeout_releases_outstanding_games()
+    {
+        trem::DeviceTiming timing;
+        timing.seed_ms_per_game(100.0);
+        timing.record_dispatch(1, 8);
+        std::uint64_t const backlog_ms = timing.wait_hint_ms(1, 2, 1000);
+        std::uint64_t const idle_ms = timing.wait_hint_ms(2, 2, 1000);
+        check(backlog_ms > idle_ms, "outstanding games widen the wait window of a busy device");
+        timing.record_timeout(1, 3, true, 500);
+        std::uint64_t const partial_ms = timing.wait_hint_ms(1, 2, 1000);
+        check(partial_ms < backlog_ms && partial_ms > idle_ms,
+              "a timeout releases exactly the timed out games from the backlog");
+        timing.record_timeout(1, 5, true, 500);
+        check(timing.wait_hint_ms(1, 2, 1000) == idle_ms,
+              "timing out the rest of the backlog returns the device to its idle window");
+        timing.record_dispatch(1, 6);
+        timing.record_timeout(1, 20, true, 500);
+        check(timing.wait_hint_ms(1, 2, 1000) == idle_ms,
+              "a timeout larger than the backlog cannot drive it negative");
+        timing.record_dispatch(1, 6);
+        timing.record_reset(1);
+        check(timing.wait_hint_ms(1, 2, 1000) == idle_ms,
+              "a reconnect reset drops the outstanding games of the lost connection");
+    }
+
+    void test_reconnect_grace_waits_for_blipped_devices()
+    {
+        std::vector<DeviceHarness> devices{make_device(1)};
+        trem::RemoteConfig config = fabricated_remote_config();
+        config.games_per_assignment = 2;
+        config.reconnect_grace_ms = 8000;
+        config.timing = std::make_shared<trem::DeviceTiming>();
+        Cluster cluster(devices, config);
+        tw::KeyPair const keys_one = devices[0].keys;
+        std::shared_ptr<tl::LoopbackTransport> const transport = cluster.transport;
+        transport->add_device(1, fabricated_handler(keys_one, 1));
+        transport->remove_device(1);
+        std::thread reconnect([transport, keys_one]()
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            transport->add_device(1, fabricated_handler(keys_one, 1));
+        });
+        auto const began = std::chrono::steady_clock::now();
+        std::string failure;
+        std::vector<tuning::GameOutcome> results;
+        try
+        {
+            results = cluster.backend.run_games(fabricated_games(2), fast_config());
+        }
+        catch (std::runtime_error const &error)
+        {
+            failure = error.what();
+        }
+        reconnect.join();
+        std::uint64_t const waited_ms = ms_since(began);
+        check(failure.empty(), "a blipped device that returns within the grace does not fail the run: " + failure);
+        check(waited_ms >= 200, "run_games holds the pending games while it waits for a reconnect");
+        check(cluster.provenance->size() == 2, "the returned device plays every pending game");
+        check(results.size() == 2 && fabricated_results_match(results, *cluster.provenance, 1),
+              "results after a reconnect match the device that played them");
+    }
+
+    void test_reconnect_grace_expiry_names_the_grace_window()
+    {
+        std::vector<DeviceHarness> devices{make_device(1)};
+        trem::RemoteConfig config = fabricated_remote_config();
+        config.games_per_assignment = 2;
+        config.reconnect_grace_ms = 500;
+        config.timing = std::make_shared<trem::DeviceTiming>();
+        Cluster cluster(devices, config);
+        std::string failure;
+        auto const began = std::chrono::steady_clock::now();
+        try
+        {
+            cluster.backend.run_games(fabricated_games(2), fast_config());
+        }
+        catch (std::runtime_error const &error)
+        {
+            failure = error.what();
+        }
+        check(failure.find("no connected devices within") != std::string::npos,
+              "run_games gives up once the reconnect grace expires: " + failure);
+        check(failure.find("no connected devices within 500 ms") != std::string::npos,
+              "the expired grace error names the configured grace in milliseconds");
+        check(ms_since(began) >= 500, "the grace is waited out in full before the run is abandoned");
+        check(cluster.provenance->size() == 0, "an abandoned grace window attributes no games");
+    }
+
+    void test_empty_enrolled_set_throws_without_a_grace_wait()
+    {
+        std::vector<DeviceHarness> devices{make_device(1)};
+        trem::RemoteConfig config = fabricated_remote_config();
+        config.games_per_assignment = 2;
+        config.reconnect_grace_ms = 20000;
+        config.timing = std::make_shared<trem::DeviceTiming>();
+        Cluster cluster({}, config);
+        cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1));
+        std::string failure;
+        auto const began = std::chrono::steady_clock::now();
+        try
+        {
+            cluster.backend.run_games(fabricated_games(2), fast_config());
+        }
+        catch (std::runtime_error const &error)
+        {
+            failure = error.what();
+        }
+        check(failure.find("no active devices") != std::string::npos,
+              "an empty enrolled set fails with the no active devices error: " + failure);
+        check(ms_since(began) < 250, "an empty enrolled set is not held by the reconnect grace");
+        check(cluster.provenance->size() == 0, "a device that was never enrolled plays no games");
+    }
+
+    void test_dispatch_skips_devices_inactive_in_the_registry()
+    {
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2)};
+        trem::RemoteConfig config = fabricated_remote_config();
+        config.games_per_assignment = 2;
+        config.timing = std::make_shared<trem::DeviceTiming>();
+        Cluster cluster(devices, config);
+        cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1));
+        cluster.transport->add_device(2, fabricated_handler(devices[1].keys, -1));
+        cluster.registry->blacklist(2);
+        std::vector<tuning::GameOutcome> const results
+            = cluster.backend.run_games(fabricated_games(2), fast_config());
+        check(cluster.transport->devices().size() == 2, "both devices stay connected to the transport");
+        check(cluster.provenance->games_of_device(2).empty(),
+              "a connected device that is no longer active receives no games");
+        check(cluster.provenance->games_of_device(1) == std::vector<tw::GameId>{1, 2},
+              "the active device of the intersection covers every pending game");
+        check(results.size() == 2 && fabricated_results_match(results, *cluster.provenance, 1),
+              "intersection only dispatch keeps the attributed results consistent");
+        treg::DeviceStats const *dropped = cluster.registry->stats(2);
+        check(dropped != nullptr && dropped->games_accepted == 0 && dropped->games_dropped == 0,
+              "the deactivated device records neither acceptances nor drops");
+    }
+
+    void test_short_tail_spreads_one_game_per_device()
+    {
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2), make_device(3), make_device(4),
+                                           make_device(5), make_device(6)};
+        trem::RemoteConfig config = fabricated_remote_config();
+        config.games_per_assignment = 4;
+        config.timing = std::make_shared<trem::DeviceTiming>();
+        Cluster cluster(devices, config);
+        cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1));
+        for (std::size_t index = 1; index < devices.size(); ++index)
+        {
+            cluster.transport->add_device(devices[index].id, fabricated_handler(devices[index].keys, -1));
+        }
+        std::vector<tuning::GameOutcome> const results
+            = cluster.backend.run_games(fabricated_games(3), fast_config());
+        std::size_t reached_devices = 0;
+        std::size_t largest_device_share = 0;
+        for (std::size_t index = 0; index < devices.size(); ++index)
+        {
+            treg::DeviceStats const *stats = cluster.registry->stats(devices[index].id);
+            std::size_t const accepted = stats == nullptr ? 0 : static_cast<std::size_t>(stats->games_accepted);
+            reached_devices = reached_devices + (accepted > 0 ? 1 : 0);
+            largest_device_share = std::max(largest_device_share, accepted);
+        }
+        check(cluster.provenance->size() == 3, "a tail shorter than the fleet still plays every game");
+        check(reached_devices == 3, "a three game tail reaches three different devices");
+        check(largest_device_share == 1, "no device absorbs the whole tail while peers sit idle");
+        check(results.size() == 3 && fabricated_results_match(results, *cluster.provenance, 1),
+              "the spread tail attributes each game to the device that played it");
+    }
+
     void test_degenerate_capacity_liveness()
     {
         {
@@ -1033,6 +1249,13 @@ int main()
     test_silent_device_exhaustion_counts_rounds();
     test_concurrency_capacity_respected();
     test_unspecified_concurrency_acts_as_one();
+    test_device_timing_capacity_backoff();
+    test_device_timing_timeout_releases_outstanding_games();
+    test_reconnect_grace_waits_for_blipped_devices();
+    test_reconnect_grace_expiry_names_the_grace_window();
+    test_empty_enrolled_set_throws_without_a_grace_wait();
+    test_dispatch_skips_devices_inactive_in_the_registry();
+    test_short_tail_spreads_one_game_per_device();
     test_degenerate_capacity_liveness();
     std::println("remote backend integration: {} checks, {} failures", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

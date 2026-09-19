@@ -243,13 +243,8 @@ namespace repro_probe
             std::vector<tuning::GameOutcome> const outcomes = backend.run_games(games, run_config);
             print_outcomes(outcomes);
             std::println("checksum {:016x}", outcome_checksum(outcomes));
-            auto probe_run = [&backend](std::vector<tuning::BatchGame> const &probe_games,
-                                        tuning::RunConfig const &probe_config)
-            {
-                return backend.run_games(probe_games, probe_config);
-            };
             std::uint64_t const conformance
-                = tournament_identity::toj_conformance_fingerprint(shared_context, probe_run);
+                = tournament_identity::toj_conformance_fingerprint(shared_context);
             std::println("conformance {:016x}", conformance);
             return 0;
         }

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -40,11 +41,12 @@ namespace tournament_registry
         bool enroll(DeviceId device, PublicKey const &public_key);
         bool enrolled(DeviceId device) const;
         PublicKey const *public_key(DeviceId device) const;
+        PublicKey const *bound_key(DeviceId device) const;
         DeviceStats const *stats(DeviceId device) const;
         bool blacklist(DeviceId device);
         bool blacklisted(DeviceId device) const;
         bool ban_key(PublicKey const &public_key);
-        bool key_banned(PublicKey const &public_key) const;
+        bool key_banned(PublicKey const &public_key);
         bool set_concurrency(DeviceId device, std::uint32_t concurrent_assignments);
         std::uint32_t concurrency(DeviceId device) const;
         bool record_accepted(DeviceId device, int games);
@@ -58,6 +60,7 @@ namespace tournament_registry
         std::vector<TrustRecord> trust_snapshot() const;
 
         void set_ban_file(std::string const &path);
+        void set_log(std::function<void(std::string const &)> log);
 
     private:
         struct Entry
@@ -67,17 +70,18 @@ namespace tournament_registry
         };
 
         void persist_trust_locked() const;
-        void refresh_bans_locked() const;
+        std::string refresh_bans_locked();
 
         mutable std::mutex mutex_;
         std::map<DeviceId, Entry> devices_;
-        mutable std::vector<PublicKey> banned_keys_;
+        std::vector<PublicKey> banned_keys_;
         std::map<PublicKey, TrustRecord> trust_preload_;
         std::string trust_file_;
         std::string ban_file_;
-        mutable std::uint64_t ban_stamp_ = 0;
-        mutable std::uintmax_t ban_bytes_ = 0;
-        mutable bool ban_checked_ = false;
+        std::uint64_t ban_stamp_ = 0;
+        std::uintmax_t ban_bytes_ = 0;
+        bool ban_checked_ = false;
+        std::function<void(std::string const &)> log_;
     };
 
     bool remove_trust_record(std::string const &path, PublicKey const &public_key, bool &removed,

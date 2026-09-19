@@ -13,6 +13,8 @@
 
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -536,6 +538,18 @@ namespace tournament_net
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
         }
 
+        void enable_keepalive(int fd)
+        {
+            int const enabled = 1;
+            int const idle = 30;
+            int const interval = 10;
+            int const count = 3;
+            setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof enabled);
+            setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle);
+            setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof interval);
+            setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof count);
+        }
+
         std::string http_trim(std::string const &text)
         {
             std::size_t const begin = text.find_first_not_of(" \t");
@@ -852,10 +866,19 @@ namespace tournament_net
                     return false;
                 }
             }
-            else if (!shared.registry->enroll(hello->device, hello->public_key))
+            else
             {
-                reason = "enrollment failed";
-                return false;
+                tournament_wire::PublicKey const *bound = shared.registry->bound_key(hello->device);
+                if (bound != nullptr && *bound != hello->public_key)
+                {
+                    reason = "device id is bound to another key";
+                    return false;
+                }
+                if (!shared.registry->enroll(hello->device, hello->public_key))
+                {
+                    reason = "enrollment failed";
+                    return false;
+                }
             }
             shared.registry->set_concurrency(hello->device, hello->max_concurrent_assignments);
             return true;
@@ -1038,6 +1061,7 @@ namespace tournament_net
             }
             if (stale)
             {
+                stale->fail_all(DeliveryStatus::Unreachable);
                 stale->kill();
                 if (shared->config.log)
                 {
@@ -1090,6 +1114,7 @@ namespace tournament_net
                 }
                 std::shared_ptr<HostConnection> conn = std::make_shared<HostConnection>();
                 conn->fd = fd;
+                enable_keepalive(fd);
                 shared->live_connections.push_back(conn);
                 std::thread(handle_connection, shared, conn).detach();
             }

@@ -90,6 +90,7 @@ namespace tournament_tuner
         int roster = 0;
         int audit_workers = 2;
         std::string trust_file = "tournament_trust.txt";
+        std::uint64_t reconnect_grace_ms = 60000;
     };
 
     int thread_budget_for(int threads_arg)
@@ -423,7 +424,7 @@ namespace tournament_tuner
             "incumbent_file", "current_file", "fresh_zero", "threshold", "remote_port",
             "remote_address", "remote_cert", "remote_key", "devices_file", "audit_rate",
             "journal_file", "ban_file", "wait_clients_ms", "lease_ms", "games_per_assignment",
-            "series_cap", "roster", "audit_workers", "trust_file",
+            "series_cap", "roster", "audit_workers", "trust_file", "reconnect_grace_ms",
         };
         if (!tournament_config::reject_unknown_keys(values, allowed, error))
         {
@@ -539,6 +540,11 @@ namespace tournament_tuner
         {
             return false;
         }
+        if (!tournament_config::get_u64(values, "reconnect_grace_ms",
+                                        config.reconnect_grace_ms, error))
+        {
+            return false;
+        }
         return true;
     }
 
@@ -557,7 +563,7 @@ namespace tournament_tuner
         std::println("Threading: budget = threads if given else hardware_threads - 1, game workers = budget / 2, helpers = game workers, roster = 2 * budget (pso candidate count), lambda = roster - 1");
         std::println("Roster: in remote mode an unset roster defaults to 16 candidates instead of the host thread count, because games run on the clients; set roster in the config file to scale the search with the worker pool");
         std::println("Config: every parameter above can live in a json file; tournament_tuner.json in the working directory is read automatically, --config P reads another file, command line values override the file");
-        std::println("Config keys: generations, iters_per_move, seed, threads, max_rounds, pairs, data_file, incumbent_file, current_file, fresh_zero, threshold, remote_port, remote_address, remote_cert, remote_key, devices_file, audit_rate, journal_file, ban_file, wait_clients_ms, lease_ms, games_per_assignment, series_cap, roster");
+        std::println("Config keys: generations, iters_per_move, seed, threads, max_rounds, pairs, data_file, incumbent_file, current_file, fresh_zero, threshold, remote_port, remote_address, remote_cert, remote_key, devices_file, audit_rate, journal_file, ban_file, wait_clients_ms, lease_ms, games_per_assignment, series_cap, roster, reconnect_grace_ms");
         std::println("Flags: --fresh-zero starts a fresh run from zero weights instead of the incumbent file (ignored when a checkpoint exists)");
         std::println("Flags: --remote-port N distributes matches to remote_client devices over TLS (certificate and key are generated on first use, clients verify the printed fingerprint)");
         std::println("Flags: --remote-cert P and --remote-key P override the certificate paths, --audit-rate R sets the audit sample rate (default 0.25, remote mode only)");
@@ -568,10 +574,11 @@ namespace tournament_tuner
         std::println("Flags: --audit-workers N bounds the local audit re-run lanes (default 2, each lane runs single-threaded re-plays)");
         std::println("Flags: --ban-file P persists banned device keys across restarts (default tournament_bans.txt, empty string disables)");
         std::println("Flags: --unban K removes the ban record and the trust record for the 64 hex character device public key K from the ban and trust files, then exits");
+        std::println("Flags: --reconnect-grace-ms N waits up to N ms for enrolled devices to reconnect before a round fails (default 60000, 0 fails immediately, remote mode only)");
         std::println("Flags: --devices-file P restricts remote enrollment to the device ids and keys listed in P (default open enrollment)");
         std::println("Search: iteration budgets only, no time budgets");
         std::println("Checkpoint: tournament_data.bin with .bak fallback, resume by generation");
-        std::println("During runs: type view and Enter for one live game per wave, empty line to stop, bracket for live standings");
+        std::println("During runs: type view and Enter for one live game per wave, empty line to stop the live view, bracket for live standings");
         std::println("Outputs: tournament_incumbent.bin anchor, tournament_current.bin latest champion");
         std::println("Existing tuner files are not touched");
     }
@@ -1312,17 +1319,8 @@ namespace tournament_tuner
                 return 1;
             }
             device_registry = std::make_shared<tournament_registry::DeviceRegistry>();
-            std::uint64_t engine_fingerprint = 0;
-            {
-                TojBackend probe_engine(shared_context);
-                auto probe_run = [&probe_engine](std::vector<tuning::BatchGame> const &games,
-                                                 tuning::RunConfig const &probe_config)
-                {
-                    return probe_engine.run_games(games, probe_config);
-                };
-                engine_fingerprint = tournament_identity::toj_conformance_fingerprint(shared_context,
-                                                                                      probe_run);
-            }
+            std::uint64_t const engine_fingerprint
+                = tournament_identity::toj_conformance_fingerprint(shared_context);
             tournament_net::NetConfig net_config;
             net_config.listen_address = cli.remote_address;
             net_config.port = static_cast<std::uint16_t>(cli.remote_port);
@@ -1386,6 +1384,10 @@ namespace tournament_tuner
                              ban_records.size(), cli.ban_file);
                 device_registry->set_ban_file(cli.ban_file);
             }
+            device_registry->set_log([](std::string const &message)
+            {
+                std::println("remote: {}", message);
+            });
             if (!cli.trust_file.empty())
             {
                 std::string trust_error;
@@ -1547,6 +1549,7 @@ namespace tournament_tuner
                 tournament_remote::RemoteConfig remote_config;
                 remote_config.games_per_assignment = cli.games_per_assignment;
                 remote_config.lease_ms = cli.lease_ms;
+                remote_config.reconnect_grace_ms = cli.reconnect_grace_ms;
                 remote_config.per_series_device_cap = cli.series_cap;
                 remote_config.nonce_seed = generation_seed_for(root_seed, generation);
                 remote_config.timing = remote_timing;
@@ -1571,7 +1574,6 @@ namespace tournament_tuner
                     tournament_wire::PublicKey const *banned_key = device_registry->public_key(device);
                     if (banned_key != nullptr && !cli.ban_file.empty())
                     {
-                        device_registry->ban_key(*banned_key);
                         tournament_ban::BanRecord ban_record;
                         ban_record.device = device;
                         ban_record.public_key = *banned_key;
@@ -1584,6 +1586,7 @@ namespace tournament_tuner
                             std::println(stderr, "gen {} ban file append failed: {}", generation,
                                          ban_error);
                         }
+                        device_registry->ban_key(*banned_key);
                     }
                     std::println("remote: device {} caught lying by the streaming audit and banned",
                                  device);
@@ -1917,7 +1920,6 @@ namespace tournament_tuner
                                 = device_registry->public_key(device);
                             if (banned_key != nullptr && !cli.ban_file.empty())
                             {
-                                device_registry->ban_key(*banned_key);
                                 tournament_ban::BanRecord ban_record;
                                 ban_record.device = device;
                                 ban_record.public_key = *banned_key;
@@ -1930,6 +1932,7 @@ namespace tournament_tuner
                                     std::println(stderr, "gen {} ban file append failed: {}",
                                                  generation, ban_error);
                                 }
+                                device_registry->ban_key(*banned_key);
                             }
                         }
                         std::println(stderr,
@@ -2223,6 +2226,17 @@ int main(int argc, char *argv[])
         else if (std::strcmp(argv[i], "--unban") == 0 && i + 1 < argc)
         {
             unban_key = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--reconnect-grace-ms") == 0 && i + 1 < argc)
+        {
+            try
+            {
+                config.reconnect_grace_ms = std::stoull(argv[++i]);
+            }
+            catch (std::exception const &)
+            {
+                flag_error = true;
+            }
         }
         else if (std::strcmp(argv[i], "--wait-clients-ms") == 0 && i + 1 < argc)
         {
