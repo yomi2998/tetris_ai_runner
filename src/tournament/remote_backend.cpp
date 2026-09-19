@@ -501,9 +501,33 @@ namespace tournament_remote
             }
         };
 
+        auto stop_now = [&]()
+        {
+            return config_.stop_requested && config_.stop_requested();
+        };
+        auto throw_stopped = [&]()
+        {
+            std::vector<std::pair<tuning::GameId, tuning::GameOutcome>> completed;
+            for (std::size_t i = 0; i < total; ++i)
+            {
+                if (done[i])
+                {
+                    completed.emplace_back(games[i].id, results[i]);
+                }
+            }
+            std::size_t const completed_count = completed.size();
+            throw tuning::BackendStopped(std::move(completed),
+                "stop requested with " + std::to_string(completed_count) + " of "
+                    + std::to_string(total) + " game(s) completed");
+        };
+
         for (;;)
         {
             drain_verdicts();
+            if (stop_now())
+            {
+                throw_stopped();
+            }
             std::vector<std::size_t> pending;
             pending.reserve(total);
             for (std::size_t i = 0; i < total; ++i)
@@ -530,10 +554,14 @@ namespace tournament_remote
                         + " verdict(s) outstanding");
                 }
                 std::unique_lock<std::mutex> lock(audit_mutex);
-                verdict_cv.wait(lock, [&verdicts, &audit_outstanding]()
+                verdict_cv.wait_for(lock, std::chrono::milliseconds(250), [&verdicts, &audit_outstanding]()
                 {
                     return !verdicts.empty() || audit_outstanding == 0;
                 });
+                if (stop_now())
+                {
+                    throw_stopped();
+                }
                 continue;
             }
             std::vector<tournament_wire::DeviceId> connected = transport_->devices();
@@ -579,6 +607,10 @@ namespace tournament_remote
                     {
                         throw std::runtime_error("no connected devices within "
                             + std::to_string(config_.reconnect_grace_ms) + " ms");
+                    }
+                    if (stop_now())
+                    {
+                        throw_stopped();
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(250));
                 }

@@ -61,6 +61,7 @@ namespace tournament_remote
         int audit_workers = 2;
         std::shared_ptr<DeviceTiming> timing;
         std::function<void(std::string const &)> log;
+        std::function<bool()> stop_requested;
         std::function<std::vector<tuning::GameOutcome>(std::vector<tuning::BatchGame> const &,
                                                        tuning::RunConfig const &)> auditor;
         std::function<void(DeviceId)> on_liar;

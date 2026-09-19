@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -12,6 +13,7 @@
 #include <optional>
 #include <print>
 #include <set>
+#include <signal.h>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -38,6 +40,22 @@
 
 namespace tournament_host
 {
+    std::atomic<bool> g_stop_requested{false};
+
+    extern "C" void request_stop_on_signal(int)
+    {
+        g_stop_requested.store(true, std::memory_order_relaxed);
+    }
+
+    void install_signal_handlers()
+    {
+        struct sigaction action;
+        std::memset(&action, 0, sizeof action);
+        action.sa_handler = request_stop_on_signal;
+        sigaction(SIGTERM, &action, nullptr);
+        sigaction(SIGINT, &action, nullptr);
+    }
+
     namespace taud = tournament_audit;
     namespace tbr = tournament_bracket;
     namespace tnet = tournament_net;
@@ -609,6 +627,7 @@ namespace tournament_host
 
     int run_host(HostConfig const &cli)
     {
+        install_signal_handlers();
         if (!file_exists(cli.certificate) || !file_exists(cli.private_key))
         {
             std::string error;
@@ -685,6 +704,12 @@ namespace tournament_host
         std::uint64_t waited_ms = 0;
         while (registry->active_devices().empty() && waited_ms < cli.wait_clients_ms)
         {
+            if (g_stop_requested.load(std::memory_order_relaxed))
+            {
+                std::println("stopped by signal before any client enrolled");
+                transport->stop();
+                return 0;
+            }
             if (waited_ms % 1000 == 0)
             {
                 std::println("waiting for clients, enrolled={}", registry->active_devices().size());
@@ -763,6 +788,10 @@ namespace tournament_host
         };
         remote_config.audit_rate = cli.audit_rate;
         remote_config.audit_workers = std::max(1, cli.audit_workers);
+        remote_config.stop_requested = []()
+        {
+            return g_stop_requested.load(std::memory_order_relaxed);
+        };
         remote_config.auditor = re_run;
         remote_config.on_liar = [registry, &cli](tw::DeviceId device)
         {
@@ -801,7 +830,20 @@ namespace tournament_host
         }
         for (;;)
         {
+            if (g_stop_requested.load(std::memory_order_relaxed))
+            {
+                std::println("stopped by signal at a wave boundary");
+                transport->stop();
+                return 0;
+            }
             trun::RunResult const step = runner.run_next_wave();
+            if (step.error.code == trun::ErrorCode::BackendStopped)
+            {
+                std::println("stopped by signal with {} of this wave's game(s) completed, no checkpoint to resume from",
+                             runner.total_games());
+                transport->stop();
+                return 0;
+            }
             if (step.error.code != trun::ErrorCode::None)
             {
                 std::println(stderr, "tournament wave failed: {}", step.error.detail);

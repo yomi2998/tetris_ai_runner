@@ -4,6 +4,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "tuning/domain.h"
@@ -68,6 +71,30 @@ namespace tuning
         double apl_a = 0.0;
         double apl_b = 0.0;
         WinReason reason = WinReason::Unknown;
+    };
+
+    class BackendStopped : public std::exception
+    {
+    public:
+        BackendStopped(std::vector<std::pair<GameId, GameOutcome>> completed, std::string detail)
+            : completed_(std::move(completed))
+            , detail_(std::move(detail))
+        {
+        }
+
+        std::vector<std::pair<GameId, GameOutcome>> const &completed() const
+        {
+            return completed_;
+        }
+
+        char const *what() const noexcept override
+        {
+            return detail_.c_str();
+        }
+
+    private:
+        std::vector<std::pair<GameId, GameOutcome>> completed_;
+        std::string detail_;
     };
 
     inline constexpr std::uint64_t mix64(std::uint64_t x)

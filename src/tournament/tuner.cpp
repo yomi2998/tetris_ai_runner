@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <signal.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -58,6 +60,22 @@
 
 namespace tournament_tuner
 {
+    std::atomic<bool> g_stop_requested{false};
+
+    extern "C" void request_stop_on_signal(int)
+    {
+        g_stop_requested.store(true, std::memory_order_relaxed);
+    }
+
+    void install_signal_handlers()
+    {
+        struct sigaction action;
+        std::memset(&action, 0, sizeof action);
+        action.sa_handler = request_stop_on_signal;
+        sigaction(SIGTERM, &action, nullptr);
+        sigaction(SIGINT, &action, nullptr);
+    }
+
     using TojBackend = tuning::EngineMatchBackend<tuning_toj::TojAdapter>;
     using LocalRunner = tournament_runner::TournamentRunner<TojBackend>;
     using RuntimeRunner = tournament_runner::TournamentRunner<tournament_runtime::RuntimeBackend>;
@@ -1078,6 +1096,7 @@ namespace tournament_tuner
 
     int run_tournament(TunerConfig const &cli)
     {
+        install_signal_handlers();
         int const budget = thread_budget_for(cli.threads);
         int const game_workers = game_workers_for(budget);
         int roster_size = roster_size_for(budget);
@@ -1412,6 +1431,11 @@ namespace tournament_tuner
                          static_cast<int>(port), *fingerprint);
             for (int waited = 0; device_registry->active_devices().empty();)
             {
+                if (g_stop_requested.load(std::memory_order_relaxed))
+                {
+                    std::println("remote: stopped by signal before any client enrolled");
+                    return 0;
+                }
                 if (waited >= cli.wait_clients_ms)
                 {
                     std::println(stderr, "remote: no clients enrolled within {} ms", cli.wait_clients_ms);
@@ -1559,6 +1583,10 @@ namespace tournament_tuner
                 };
                 remote_config.audit_rate = cli.audit_rate;
                 remote_config.audit_workers = std::max(1, cli.audit_workers);
+                remote_config.stop_requested = []()
+                {
+                    return g_stop_requested.load(std::memory_order_relaxed);
+                };
                 remote_config.auditor = [shared_context](std::vector<tuning::BatchGame> const &games,
                                                          tuning::RunConfig const &audit_config)
                 {
@@ -1635,10 +1663,77 @@ namespace tournament_tuner
                 std::println(stderr, "gen {} ledger replay failed: {}", generation, runner.error().detail);
                 return 1;
             }
+            auto journal_new_entries = [&]()
+            {
+                if (!provenance)
+                {
+                    return;
+                }
+                for (auto const *entry : provenance->entries())
+                {
+                    if (journaled_ids.insert(entry->game_id).second)
+                    {
+                        std::string append_error;
+                        if (!journal.append(*entry, append_error))
+                        {
+                            std::println(stderr, "gen {} journal append failed: {}",
+                                         generation, append_error);
+                        }
+                    }
+                }
+            };
+            auto persist_wave_checkpoint = [&](std::int64_t waves) -> bool
+            {
+                std::string save_error;
+                if (!save_progress(cli.data_file, identity, generation, root_seed, cli,
+                                   cma_config, pre_tell_hex, incumbent, roster_entries,
+                                   runner.ledger(), waves, save_error))
+                {
+                    std::println(stderr, "cannot save wave checkpoint: {}", save_error);
+                    return false;
+                }
+                return true;
+            };
+            auto stop_checkpoint = [&]()
+            {
+                journal_new_entries();
+                if (!persist_wave_checkpoint(prior_waves + runner.total_waves()))
+                {
+                    return false;
+                }
+                std::println("gen {} stopped by signal, checkpoint holds {} game(s) for this generation",
+                             generation, runner.ledger().size());
+                return true;
+            };
             tournament_runner::RunResult run_result;
             for (;;)
             {
+                if (g_stop_requested.load(std::memory_order_relaxed))
+                {
+                    std::println("gen {} stopped by signal at a wave boundary", generation);
+#if defined(TUNER_HAS_REMOTE)
+                    if (net_transport)
+                    {
+                        net_transport->stop();
+                    }
+#endif
+                    return 0;
+                }
                 tournament_runner::RunResult step = runner.run_next_wave();
+                if (step.error.code == tournament_runner::ErrorCode::BackendStopped)
+                {
+                    if (!stop_checkpoint())
+                    {
+                        return 1;
+                    }
+#if defined(TUNER_HAS_REMOTE)
+                    if (net_transport)
+                    {
+                        net_transport->stop();
+                    }
+#endif
+                    return 0;
+                }
                 if (step.error.code != tournament_runner::ErrorCode::None)
                 {
                     run_result = step;
@@ -1670,29 +1765,11 @@ namespace tournament_tuner
                 std::println("gen {} wave {} games {} draws {} ready {} {}",
                     generation, ledger_waves, ledger_games, ledger_draws,
                     runner.bracket().ready_series().size(), active);
-                if (provenance)
-                {
-                    for (auto const *entry : provenance->entries())
-                    {
-                        if (journaled_ids.insert(entry->game_id).second)
-                        {
-                            std::string append_error;
-                            if (!journal.append(*entry, append_error))
-                            {
-                                std::println(stderr, "gen {} journal append failed: {}",
-                                             generation, append_error);
-                            }
-                        }
-                    }
-                }
+                journal_new_entries();
                 if (!step.complete)
                 {
-                    std::string save_error;
-                    if (!save_progress(cli.data_file, identity, generation, root_seed, cli,
-                                       cma_config, pre_tell_hex, incumbent, roster_entries,
-                                       runner.ledger(), ledger_waves, save_error))
+                    if (!persist_wave_checkpoint(ledger_waves))
                     {
-                        std::println(stderr, "cannot save wave checkpoint: {}", save_error);
                         return 1;
                     }
                     continue;

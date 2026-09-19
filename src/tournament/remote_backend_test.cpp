@@ -268,6 +268,120 @@ namespace
         return true;
     }
 
+    struct StopCapture
+    {
+        bool stopped = false;
+        std::string message;
+        std::vector<tuning::GameOutcome> results;
+        std::vector<std::pair<tuning::GameId, tuning::GameOutcome>> completed;
+    };
+
+    StopCapture capture_backend_stop(trem::RemoteBackend const &backend,
+                                     std::vector<tuning::BatchGame> const &games,
+                                     tuning::RunConfig const &config)
+    {
+        StopCapture captured;
+        try
+        {
+            captured.results = backend.run_games(games, config);
+        }
+        catch (tuning::BackendStopped const &stop)
+        {
+            captured.stopped = true;
+            captured.message = stop.what();
+            captured.completed = stop.completed();
+        }
+        catch (std::exception const &error)
+        {
+            captured.message = std::string("unexpected throw: ") + error.what();
+        }
+        return captured;
+    }
+
+    std::vector<tw::GameId> completed_ids(std::vector<std::pair<tuning::GameId, tuning::GameOutcome>> const &completed)
+    {
+        std::vector<tw::GameId> ids;
+        ids.reserve(completed.size());
+        for (auto const &entry : completed)
+        {
+            ids.push_back(entry.first);
+        }
+        return ids;
+    }
+
+    bool completed_matches_provenance(std::vector<std::pair<tuning::GameId, tuning::GameOutcome>> const &completed,
+                                      tprov::ProvenanceLedger const &provenance)
+    {
+        if (completed.size() != provenance.size())
+        {
+            return false;
+        }
+        for (auto const &entry : completed)
+        {
+            tprov::ProvenanceRecord const *record = provenance.find(entry.first);
+            if (record == nullptr
+                || record->game_id != entry.second.id
+                || tw::encode_outcome(record->reported) != tw::encode_outcome(tw::to_wire(entry.second)))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    tl::DeviceHandler counting_fabricated_handler(tw::KeyPair keys,
+                                                  int winner,
+                                                  std::shared_ptr<std::atomic<std::uint64_t>> deliveries)
+    {
+        tl::DeviceHandler inner = fabricated_handler(keys, winner);
+        return [inner, deliveries](tw::AssignmentBatch const &assignment)
+        {
+            std::optional<tw::SignedResult> held = inner(assignment);
+            deliveries->fetch_add(1, std::memory_order_relaxed);
+            return held;
+        };
+    }
+
+    tl::DeviceHandler stopping_fabricated_handler(tw::KeyPair keys,
+                                                  int winner,
+                                                  std::shared_ptr<std::atomic<bool>> stop_flag)
+    {
+        tl::DeviceHandler inner = fabricated_handler(keys, winner);
+        return [inner, stop_flag](tw::AssignmentBatch const &assignment)
+        {
+            std::optional<tw::SignedResult> held = inner(assignment);
+            stop_flag->store(true, std::memory_order_relaxed);
+            return held;
+        };
+    }
+
+    std::shared_ptr<std::atomic<std::uint64_t>> count_logged(trem::RemoteConfig &config,
+                                                             std::string const &needle)
+    {
+        auto seen = std::make_shared<std::atomic<std::uint64_t>>(0);
+        config.log = [seen, needle](std::string const &message)
+        {
+            if (message.find(needle) != std::string::npos)
+            {
+                seen->fetch_add(1, std::memory_order_relaxed);
+            }
+        };
+        return seen;
+    }
+
+    std::thread flip_stop_when_logged(std::shared_ptr<std::atomic<bool>> stop_flag,
+                                      std::shared_ptr<std::atomic<std::uint64_t>> seen)
+    {
+        return std::thread([stop_flag, seen]()
+        {
+            for (int polled = 0; polled < 400 && seen->load(std::memory_order_relaxed) == 0; ++polled)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            stop_flag->store(true, std::memory_order_relaxed);
+        });
+    }
+
     void test_honest_batch_matches_local()
     {
         ContextPtr context = tuning_toj::TojAdapter::make_shared_context();
@@ -1232,6 +1346,219 @@ namespace
                   "final fallback tier accepted every degenerate chunk");
         }
     }
+
+    void test_stop_requested_before_the_first_round_throws()
+    {
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2)};
+        trem::RemoteConfig remote_config = fabricated_remote_config();
+        remote_config.games_per_assignment = 2;
+        remote_config.timing = std::make_shared<trem::DeviceTiming>();
+        auto deliveries = std::make_shared<std::atomic<std::uint64_t>>(0);
+        remote_config.stop_requested = []()
+        {
+            return true;
+        };
+        Cluster cluster(devices, remote_config);
+        cluster.transport->add_device(1, counting_fabricated_handler(devices[0].keys, 1, deliveries));
+        cluster.transport->add_device(2, counting_fabricated_handler(devices[1].keys, -1, deliveries));
+        std::vector<tuning::BatchGame> const games = fabricated_games(4);
+
+        auto const began = std::chrono::steady_clock::now();
+        StopCapture const captured = capture_backend_stop(cluster.backend, games, fast_config());
+        check(captured.stopped, "a stop request before the first round raises BackendStopped");
+        check(captured.completed.empty(), "the pre round stop reports no completed games");
+        check(deliveries->load(std::memory_order_relaxed) == 0, "the pre round stop dispatches no flight");
+        check(cluster.provenance->empty(), "the pre round stop credits no game");
+        check(captured.message.find("stop requested with 0 of 4 game(s) completed") != std::string::npos,
+              "the pre round stop message counts no completed games: " + captured.message);
+        check(ms_since(began) < 500, "the pre round stop returns without touching the fleet");
+    }
+
+    void test_stop_after_a_credited_flight_returns_accepted_games()
+    {
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2)};
+        trem::RemoteConfig remote_config = fabricated_remote_config();
+        remote_config.games_per_assignment = 2;
+        remote_config.timing = std::make_shared<trem::DeviceTiming>();
+        auto stop_flag = std::make_shared<std::atomic<bool>>(false);
+        remote_config.stop_requested = [stop_flag]()
+        {
+            return stop_flag->load(std::memory_order_relaxed);
+        };
+        Cluster cluster(devices, remote_config);
+        cluster.transport->add_device(1, stopping_fabricated_handler(devices[0].keys, 1, stop_flag));
+        cluster.transport->add_device(
+            2, [](tw::AssignmentBatch const &) { return std::optional<tw::SignedResult>{}; });
+        std::vector<tuning::BatchGame> const games = fabricated_games(4);
+
+        auto const began = std::chrono::steady_clock::now();
+        StopCapture const captured = capture_backend_stop(cluster.backend, games, fast_config());
+        std::uint64_t const stopped_after_ms = ms_since(began);
+        check(captured.stopped,
+              "a stop request raised by a delivering device raises BackendStopped: " + captured.message);
+        check(completed_ids(captured.completed) == std::vector<tw::GameId>{1, 2},
+              "the stopped set holds exactly the flights accepted before the stop");
+        check(completed_matches_provenance(captured.completed, *cluster.provenance),
+              "the stopped set matches the accepted provenance outcome for every game id");
+        check(cluster.provenance->games_of_device(2).empty(),
+              "the flight the device dropped is absent from the stopped set");
+        check(captured.message.find("stop requested with 2 of 4 game(s) completed") != std::string::npos,
+              "the stop message names the two completed games of four: " + captured.message);
+        check(stopped_after_ms < 5000, "the wave ends on the stop request instead of hanging");
+    }
+
+    void test_stop_between_rounds_names_completed_and_total_counts()
+    {
+        std::vector<DeviceHarness> devices{make_device(1)};
+        trem::RemoteConfig remote_config = fabricated_remote_config();
+        remote_config.timing = std::make_shared<trem::DeviceTiming>();
+        auto deliveries = std::make_shared<std::atomic<std::uint64_t>>(0);
+        remote_config.stop_requested = [deliveries]()
+        {
+            return deliveries->load(std::memory_order_relaxed) >= 3;
+        };
+        Cluster cluster(devices, remote_config);
+        cluster.registry->set_concurrency(1, 1);
+        cluster.transport->add_device(1, counting_fabricated_handler(devices[0].keys, 1, deliveries));
+        std::vector<tuning::BatchGame> const games = fabricated_games(4);
+
+        auto const began = std::chrono::steady_clock::now();
+        StopCapture const captured = capture_backend_stop(cluster.backend, games, fast_config());
+        check(captured.stopped, "a stop request flipped between rounds raises BackendStopped");
+        check(completed_ids(captured.completed) == std::vector<tw::GameId>{1, 2, 3},
+              "stopping between rounds keeps the three chunks credited so far");
+        check(completed_matches_provenance(captured.completed, *cluster.provenance),
+              "the between rounds stopped set matches the accepted provenance");
+        check(captured.message.find("stop requested with 3 of 4 game(s) completed") != std::string::npos,
+              "the stop message names three completed games of four: " + captured.message);
+        check(deliveries->load(std::memory_order_relaxed) == 3,
+              "the stop request ends the wave before another chunk is dispatched");
+        check(ms_since(began) < 5000, "the between rounds stop returns without hanging");
+    }
+
+    void test_stop_while_audit_drain_wait_is_parked_throws()
+    {
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2)};
+        trem::RemoteConfig remote_config = fabricated_remote_config();
+        remote_config.games_per_assignment = 2;
+        remote_config.audit_rate = 0.0;
+        remote_config.audit_workers = 1;
+        remote_config.timing = std::make_shared<trem::DeviceTiming>();
+        auto stop_flag = std::make_shared<std::atomic<bool>>(false);
+        remote_config.stop_requested = [stop_flag]()
+        {
+            return stop_flag->load(std::memory_order_relaxed);
+        };
+        auto drain_waits = count_logged(remote_config, "audit drain:");
+        remote_config.auditor = [stop_flag, drain_waits](std::vector<tuning::BatchGame> const &audit_games,
+                                                         tuning::RunConfig const &)
+        {
+            for (int polled = 0; polled < 400
+                && drain_waits->load(std::memory_order_relaxed) < 2; ++polled)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            stop_flag->store(true, std::memory_order_relaxed);
+            std::vector<tuning::GameOutcome> verdict;
+            verdict.reserve(audit_games.size());
+            for (tuning::BatchGame const &game : audit_games)
+            {
+                verdict.push_back(tw::from_wire(fabricated_outcome(game.id, 1)));
+            }
+            return verdict;
+        };
+        Cluster cluster(devices, remote_config);
+        cluster.registry->record_audit(1, true);
+        cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1));
+        cluster.transport->add_device(2, fabricated_handler(devices[1].keys, 1));
+        std::vector<tuning::BatchGame> const games = fabricated_games(4);
+
+        auto const began = std::chrono::steady_clock::now();
+        StopCapture const captured = capture_backend_stop(cluster.backend, games, fast_config());
+        std::uint64_t const stopped_after_ms = ms_since(began);
+        check(drain_waits->load(std::memory_order_relaxed) >= 2,
+              "the accepted audit selected flight leaves the run waiting on a verdict");
+        check(captured.stopped, "a stop request parked in the audit drain wait raises BackendStopped: "
+              + captured.message);
+        check(completed_ids(captured.completed) == std::vector<tw::GameId>{1, 2},
+              "the parked drain stop returns only the games credited before the wait");
+        check(cluster.provenance->games_of_device(2).empty(),
+              "the flight awaiting a verdict credits nothing when the stop lands");
+        check(captured.message.find("stop requested with 2 of 4 game(s) completed") != std::string::npos,
+              "the parked drain stop message counts two completed games of four: " + captured.message);
+        check(stopped_after_ms < 5000, "the audit drain wait releases on the stop request instead of hanging");
+    }
+
+    void test_unrequested_stop_leaves_run_games_unchanged()
+    {
+        std::vector<DeviceHarness> devices{make_device(1), make_device(2), make_device(3)};
+        trem::RemoteConfig plain_config = fabricated_remote_config();
+        plain_config.games_per_assignment = 2;
+        plain_config.timing = std::make_shared<trem::DeviceTiming>();
+        std::vector<tuning::BatchGame> const games = fabricated_games(6);
+
+        Cluster plain_cluster(devices, plain_config);
+        plain_cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1));
+        plain_cluster.transport->add_device(2, fabricated_handler(devices[1].keys, -1));
+        plain_cluster.transport->add_device(3, fabricated_handler(devices[2].keys, -1));
+        std::vector<tuning::GameOutcome> const plain_results
+            = plain_cluster.backend.run_games(games, fast_config());
+
+        trem::RemoteConfig hooked_config = plain_config;
+        auto polls = std::make_shared<std::atomic<std::uint64_t>>(0);
+        hooked_config.stop_requested = [polls]()
+        {
+            polls->fetch_add(1, std::memory_order_relaxed);
+            return false;
+        };
+        Cluster hooked_cluster(devices, hooked_config);
+        hooked_cluster.transport->add_device(1, fabricated_handler(devices[0].keys, 1));
+        hooked_cluster.transport->add_device(2, fabricated_handler(devices[1].keys, -1));
+        hooked_cluster.transport->add_device(3, fabricated_handler(devices[2].keys, -1));
+        StopCapture const captured = capture_backend_stop(hooked_cluster.backend, games, fast_config());
+
+        check(polls->load(std::memory_order_relaxed) >= 1,
+              "run_games consults the stop predicate while it works through a wave");
+        check(!captured.stopped && captured.message.empty(),
+              "a stop predicate that stays false never stops a run: " + captured.message);
+        check(captured.results.size() == 6, "the unstopped wave still returns every game result");
+        check(outcomes_identical(captured.results, plain_results),
+              "an always false stop predicate leaves the outcomes unchanged");
+        check(hooked_cluster.provenance->size() == 6 && plain_cluster.provenance->size() == 6,
+              "an always false stop predicate credits the whole wave as before");
+    }
+
+    void test_stop_during_the_reconnect_grace_returns_before_the_grace_expires()
+    {
+        std::vector<DeviceHarness> devices{make_device(1)};
+        trem::RemoteConfig remote_config = fabricated_remote_config();
+        remote_config.games_per_assignment = 2;
+        remote_config.reconnect_grace_ms = 20000;
+        remote_config.timing = std::make_shared<trem::DeviceTiming>();
+        auto stop_flag = std::make_shared<std::atomic<bool>>(false);
+        remote_config.stop_requested = [stop_flag]()
+        {
+            return stop_flag->load(std::memory_order_relaxed);
+        };
+        auto waits = count_logged(remote_config, "waiting for device connections");
+        Cluster cluster(devices, remote_config);
+        std::thread watcher = flip_stop_when_logged(stop_flag, waits);
+        std::vector<tuning::BatchGame> const games = fabricated_games(2);
+        auto const began = std::chrono::steady_clock::now();
+        StopCapture const captured = capture_backend_stop(cluster.backend, games, fast_config());
+        std::uint64_t const stopped_after_ms = ms_since(began);
+        watcher.join();
+
+        check(waits->load(std::memory_order_relaxed) >= 1,
+              "pending games wait in the reconnect grace for the device that never connects");
+        check(captured.stopped,
+              "a stop request during the reconnect grace raises BackendStopped: " + captured.message);
+        check(captured.completed.empty(), "a stop during the reconnect grace completes no games");
+        check(cluster.provenance->empty(), "a stop during the reconnect grace credits no game");
+        check(captured.message.find("stop requested with 0 of 2 game(s) completed") != std::string::npos,
+              "the reconnect grace stop message counts no completed games: " + captured.message);
+        check(stopped_after_ms < 10000, "the reconnect grace stop returns long before the grace expires");
+    }
 }
 
 int main()
@@ -1257,6 +1584,12 @@ int main()
     test_dispatch_skips_devices_inactive_in_the_registry();
     test_short_tail_spreads_one_game_per_device();
     test_degenerate_capacity_liveness();
+    test_stop_requested_before_the_first_round_throws();
+    test_stop_after_a_credited_flight_returns_accepted_games();
+    test_stop_between_rounds_names_completed_and_total_counts();
+    test_stop_while_audit_drain_wait_is_parked_throws();
+    test_unrequested_stop_leaves_run_games_unchanged();
+    test_stop_during_the_reconnect_grace_returns_before_the_grace_expires();
     std::println("remote backend integration: {} checks, {} failures", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

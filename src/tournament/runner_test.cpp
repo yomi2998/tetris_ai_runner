@@ -7,6 +7,7 @@
 #include <print>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -109,23 +110,38 @@ namespace
         return pseudo_winner(series, index);
     }
 
+    int pseudo_rounds(std::uint64_t game_id)
+    {
+        return static_cast<int>(tu::mix64(game_id ^ 0xABCDEFULL) % 13u) + 1;
+    }
+
+    tu::WinReason winner_reason(int winner)
+    {
+        return winner > 0 ? tu::WinReason::ASurvivor
+            : winner < 0 ? tu::WinReason::BSurvivor : tu::WinReason::CapDraw;
+    }
+
+    tu::GameOutcome expected_outcome(Script const &script, std::uint64_t game_id)
+    {
+        int series = 0;
+        int index = 0;
+        tr::decode_game_id(game_id, series, index);
+        int const winner = script_winner(script, series, index);
+        tu::GameOutcome outcome;
+        outcome.id = game_id;
+        outcome.winner = winner;
+        outcome.rounds = pseudo_rounds(game_id);
+        outcome.reason = winner_reason(winner);
+        return outcome;
+    }
+
     std::vector<tu::GameOutcome> assemble_outcomes(std::vector<tu::BatchGame> const &games, Script const &script)
     {
         std::vector<tu::GameOutcome> results;
         results.reserve(games.size());
         for (tu::BatchGame const &game : games)
         {
-            int series = 0;
-            int index = 0;
-            tr::decode_game_id(game.id, series, index);
-            int const winner = script_winner(script, series, index);
-            tu::GameOutcome outcome;
-            outcome.id = game.id;
-            outcome.winner = winner;
-            outcome.rounds = static_cast<int>(tu::mix64(game.id ^ 0xABCDEFULL) % 13u) + 1;
-            outcome.reason = winner > 0 ? tu::WinReason::ASurvivor
-                : winner < 0 ? tu::WinReason::BSurvivor : tu::WinReason::CapDraw;
-            results.push_back(outcome);
+            results.push_back(expected_outcome(script, game.id));
         }
         return results;
     }
@@ -195,6 +211,112 @@ namespace
     };
 
     static_assert(tu::MatchBackend<ScriptedBackend>);
+
+    constexpr int kStoppedForeignSeries = 4242;
+
+    enum class StopFault
+    {
+        None,
+        UnknownGameId,
+        DuplicateGameId,
+        WinnerAboveDomain,
+        WinnerBelowDomain,
+        NegativeRounds,
+        ReasonMismatch,
+    };
+
+    struct StopSpec
+    {
+        std::size_t completed = 0;
+        bool reversed = false;
+        StopFault fault = StopFault::None;
+    };
+
+    void tamper_completed(std::vector<std::pair<tu::GameId, tu::GameOutcome>> &completed, StopSpec const &spec)
+    {
+        if (completed.empty() || spec.fault == StopFault::None)
+        {
+            return;
+        }
+        switch (spec.fault)
+        {
+        case StopFault::UnknownGameId:
+            completed.back().first = tr::game_id_for(kStoppedForeignSeries, 0);
+            break;
+        case StopFault::DuplicateGameId:
+        {
+            auto const duplicate = completed.back();
+            completed.push_back(duplicate);
+            break;
+        }
+        case StopFault::WinnerAboveDomain:
+            completed.back().second.winner = 7;
+            break;
+        case StopFault::WinnerBelowDomain:
+            completed.back().second.winner = -2;
+            break;
+        case StopFault::NegativeRounds:
+            completed.back().second.rounds = -1;
+            break;
+        case StopFault::ReasonMismatch:
+            completed.back().second.winner = 1;
+            completed.back().second.reason = tu::WinReason::CapDraw;
+            break;
+        default:
+            break;
+        }
+    }
+
+    struct StoppingBackend
+    {
+        std::shared_ptr<Script> script = std::make_shared<Script>();
+        std::shared_ptr<CallLog> log = std::make_shared<CallLog>();
+        std::shared_ptr<StopSpec> spec = std::make_shared<StopSpec>();
+
+        tu::ParamSchema schema() const
+        {
+            return fake_schema();
+        }
+
+        bool validate(std::vector<double> const &theta) const
+        {
+            return theta.size() == 3 && tu::theta_finite(theta.data(), theta.size());
+        }
+
+        std::vector<tu::GameOutcome> run_games(std::vector<tu::BatchGame> const &games, tu::RunConfig config) const
+        {
+            if (games.empty() || !tu::valid_run_config(config))
+            {
+                return {};
+            }
+            log->configs.push_back(config);
+            std::vector<std::uint64_t> ids;
+            ids.reserve(games.size());
+            for (tu::BatchGame const &game : games)
+            {
+                ids.push_back(game.id);
+            }
+            log->call_ids.push_back(std::move(ids));
+            std::vector<tu::GameOutcome> const results = assemble_outcomes(games, *script);
+            std::size_t const keep = std::min(spec->completed, results.size());
+            std::vector<std::pair<tu::GameId, tu::GameOutcome>> completed;
+            completed.reserve(keep + 1);
+            for (std::size_t i = 0; i < keep; ++i)
+            {
+                completed.emplace_back(results[i].id, results[i]);
+            }
+            if (spec->reversed)
+            {
+                std::reverse(completed.begin(), completed.end());
+            }
+            tamper_completed(completed, *spec);
+            throw tu::BackendStopped(std::move(completed),
+                                     "stop requested with " + std::to_string(keep) + " of "
+                                         + std::to_string(games.size()) + " game(s) completed");
+        }
+    };
+
+    static_assert(tu::MatchBackend<StoppingBackend>);
 
     struct ExecutorBackend
     {
@@ -293,6 +415,51 @@ namespace
         auto log = backend.log;
         return RunnerHandle{Runner(std::move(backend), std::move(roster), seed, config, limits, std::move(prior)),
                             std::move(log)};
+    }
+
+    using StoppedRunner = tr::TournamentRunner<StoppingBackend>;
+
+    struct StoppedRunnerHandle
+    {
+        StoppedRunner runner;
+        std::shared_ptr<CallLog> log;
+    };
+
+    StoppedRunnerHandle make_stopping_runner(std::vector<tr::RosterEntry> roster, std::shared_ptr<Script> script,
+                                             std::uint64_t seed, tr::RunLimits limits, StopSpec spec,
+                                             tu::RunConfig config = {2, 500, 200},
+                                             std::vector<tr::GameRecord> prior = {})
+    {
+        StoppingBackend backend;
+        backend.script = std::move(script);
+        backend.spec = std::make_shared<StopSpec>(spec);
+        auto log = backend.log;
+        return StoppedRunnerHandle{StoppedRunner(std::move(backend), std::move(roster), seed, config, limits,
+                                                 std::move(prior)),
+                                   std::move(log)};
+    }
+
+    std::map<std::uint64_t, tr::GameRecord const *> records_by_id(std::vector<tr::GameRecord> const &records)
+    {
+        std::map<std::uint64_t, tr::GameRecord const *> by_id;
+        for (tr::GameRecord const &record : records)
+        {
+            by_id[record.game_id] = &record;
+        }
+        return by_id;
+    }
+
+    bool record_matches_backend_outcome(tb::Bracket const &bracket, tr::GameRecord const &record,
+                                        tu::GameOutcome const &outcome)
+    {
+        tb::SeriesView const view = bracket.series(record.series_id);
+        bool const side_a_is_player_one = record.seat.side_a_is_player_one;
+        return record.game_id == tr::game_id_for(record.series_id, record.game_index)
+            && record.seat == tr::seat_for(record.game_index, view.side_a, view.side_b)
+            && record.rounds == outcome.rounds
+            && record.winner == tr::normalize_outcome(outcome.winner, side_a_is_player_one)
+            && record.reason == tr::normalize_reason(outcome.reason, side_a_is_player_one)
+            && tr::reason_matches_winner(record.reason, record.winner);
     }
 
     int always_a(int, int index)
@@ -947,6 +1114,253 @@ namespace
         }
     }
 
+    void run_stopped_wave_tests()
+    {
+        auto const roster = make_roster({101, 202});
+        auto const script = script_with_series({{0, always_a}, {1, always_a}, {2, always_a}});
+        tr::RunLimits const limits{4, 0, 0};
+        auto stopped = make_stopping_runner(roster, script, 77, limits, StopSpec{2});
+        tr::RunResult const result = stopped.runner.run_next_wave();
+        check(result.error.code == tr::ErrorCode::BackendStopped && !result.complete,
+              "stopped_wave_returns_backend_stopped_error");
+        check(stopped.runner.error().code == tr::ErrorCode::BackendStopped
+                  && !stopped.runner.error().detail.empty(),
+              "stopped_error_carries_the_backend_detail");
+        check(stopped.log->call_ids.size() == 1 && stopped.log->call_ids[0].size() == 4,
+              "stopped_backend_is_asked_for_the_whole_wave");
+
+        std::vector<tr::GameRecord> const &ledger = stopped.runner.ledger();
+        auto const by_id = records_by_id(ledger);
+        check(ledger.size() == 2 && by_id.size() == 2, "stopped_wave_keeps_completed_games_in_ledger");
+        bool prefix_kept = by_id.count(tr::game_id_for(0, 0)) == 1 && by_id.count(tr::game_id_for(0, 1)) == 1;
+        check(by_id.count(tr::game_id_for(0, 2)) == 0 && by_id.count(tr::game_id_for(0, 3)) == 0,
+              "stopped_wave_drops_incomplete_games_from_ledger");
+        bool faithful = prefix_kept && ledger.size() == 2;
+        bool bracket_side_a_won = true;
+        for (tr::GameRecord const &record : ledger)
+        {
+            faithful = faithful && record.series_id == 0
+                && record_matches_backend_outcome(stopped.runner.bracket(), record,
+                                                  expected_outcome(*script, record.game_id));
+            bracket_side_a_won = bracket_side_a_won && record.winner == tb::GameWinner::SideA;
+        }
+        check(faithful, "stopped_games_keep_winner_reason_rounds_and_seats");
+        check(bracket_side_a_won && ledger.size() == 2,
+              "stopped_outcomes_are_normalized_to_bracket_seats");
+        check(stopped.runner.total_games() == static_cast<std::int64_t>(ledger.size())
+                  && stopped.runner.total_games() == 2 && stopped.runner.total_draws() == 0,
+              "stopped_wave_counts_only_completed_games");
+        check(stopped.runner.bracket().series(0).games_played == 2,
+              "stopped_games_are_reported_to_the_bracket");
+
+        tr::RunResult const again = stopped.runner.run_next_wave();
+        check(again.error.code == tr::ErrorCode::BackendStopped && stopped.runner.ledger().size() == 2
+                  && stopped.log->call_ids.size() == 1,
+              "stopped_error_is_sticky_and_reruns_nothing");
+
+        auto resumed = make_runner(roster, script, 77, limits, {2, 500, 200}, ledger);
+        check(resumed.runner.ok() && resumed.runner.total_games() == 2,
+              "stopped_prefix_ledger_replays_without_error");
+        tb::SeriesView const replayed = resumed.runner.bracket().series(0);
+        check(replayed.games_played == 2 && replayed.games_a == 2 && replayed.games_b == 0
+                  && replayed.sets_a == 0 && replayed.status == tb::SeriesStatus::Ready,
+              "replayed_stop_restores_the_series_score");
+        tr::RunResult const next = resumed.runner.run_next_wave();
+        bool indices_ok = next.error.code == tr::ErrorCode::None && resumed.log->call_ids.size() == 1
+            && resumed.log->call_ids[0].size() == 4;
+        if (indices_ok)
+        {
+            for (std::size_t i = 0; i < resumed.log->call_ids[0].size(); ++i)
+            {
+                int series = 0;
+                int index = 0;
+                tr::decode_game_id(resumed.log->call_ids[0][i], series, index);
+                indices_ok = indices_ok && series == 0 && index == 2 + static_cast<int>(i);
+            }
+        }
+        check(indices_ok, "resumed_after_stop_plays_the_next_game_indices");
+        tr::RunResult const finished = resumed.runner.run();
+        auto reference = make_runner(roster, script, 77, limits);
+        tr::RunResult const reference_result = reference.runner.run();
+        check(finished.complete && reference_result.complete,
+              "tournament_resumed_after_a_stop_completes");
+        check(tr::canonical_ledger(resumed.runner.ledger()) == tr::canonical_ledger(reference.runner.ledger())
+                  && resumed.runner.checksum() == reference.runner.checksum()
+                  && resumed.runner.champion() == reference.runner.champion(),
+              "resumed_after_stop_matches_the_uninterrupted_ledger");
+    }
+
+    void run_interleaved_stop_tests()
+    {
+        auto const roster = make_roster({1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007});
+        auto const script = std::make_shared<Script>();
+        tr::RunLimits const limits{8, 0, 0};
+        StopSpec spec;
+        spec.completed = 5;
+        spec.reversed = true;
+        auto stopped = make_stopping_runner(roster, script, 4242, limits, spec);
+        tr::RunResult const result = stopped.runner.run_next_wave();
+        std::map<int, int> completed_per_series;
+        bool faithful = result.error.code == tr::ErrorCode::BackendStopped
+            && stopped.runner.ledger().size() == 5 && stopped.log->call_ids.size() == 1
+            && stopped.log->call_ids[0].size() == 8;
+        if (faithful)
+        {
+            for (tr::GameRecord const &record : stopped.runner.ledger())
+            {
+                ++completed_per_series[record.series_id];
+                faithful = faithful && record_matches_backend_outcome(stopped.runner.bracket(), record,
+                                                                      expected_outcome(*script, record.game_id));
+            }
+        }
+        check(faithful, "reversed_completed_list_is_absorbed_by_game_id");
+        check(completed_per_series[0] == 2 && completed_per_series[1] == 1
+                  && completed_per_series[2] == 1 && completed_per_series[3] == 1,
+              "stopped_games_are_matched_to_series_not_request_position");
+        bool reported = true;
+        for (int id = 0; id < 4; ++id)
+        {
+            reported = reported
+                && stopped.runner.bracket().series(id).games_played == completed_per_series[id];
+        }
+        check(reported, "stopped_wave_reports_games_to_every_series");
+        check(tr::canonical_ledger(stopped.runner.ledger()) == stopped.runner.ledger(),
+              "stopped_games_are_ledged_in_series_and_index_order");
+
+        auto resumed = make_runner(roster, script, 4242, limits, {2, 500, 200}, stopped.runner.ledger());
+        check(resumed.runner.ok() && resumed.runner.total_games() == 5,
+              "interleaved_stop_ledger_replays_without_error");
+        std::map<int, int> bases;
+        for (int id : resumed.runner.bracket().ready_series())
+        {
+            bases[id] = resumed.runner.bracket().series(id).games_played;
+        }
+        check(bases[0] == 2 && bases[1] == 1 && bases[2] == 1 && bases[3] == 1,
+              "replayed_stop_advances_games_played_per_series");
+        tr::RunResult const next = resumed.runner.run_next_wave();
+        bool contiguous = next.error.code == tr::ErrorCode::None && resumed.log->call_ids.size() == 1
+            && resumed.log->call_ids[0].size() == 8;
+        std::map<int, int> requested;
+        if (contiguous)
+        {
+            for (std::uint64_t game_id : resumed.log->call_ids[0])
+            {
+                int series = 0;
+                int index = 0;
+                tr::decode_game_id(game_id, series, index);
+                contiguous = contiguous && index == bases[series] + requested[series];
+                ++requested[series];
+            }
+        }
+        check(contiguous, "resumed_after_an_interleaved_stop_continues_every_series_at_its_index");
+        tr::RunResult const finished = resumed.runner.run();
+        auto reference = make_runner(roster, script, 4242, limits);
+        tr::RunResult const reference_result = reference.runner.run();
+        check(finished.complete && reference_result.complete
+                  && tr::canonical_ledger(resumed.runner.ledger())
+                          == tr::canonical_ledger(reference.runner.ledger())
+                  && resumed.runner.checksum() == reference.runner.checksum(),
+              "interleaved_stop_resume_matches_the_uninterrupted_run");
+    }
+
+    void run_stopped_clinch_tests()
+    {
+        auto const roster = make_roster({101, 202});
+        auto const script = script_with_series({{0, always_a}, {1, always_a}, {2, always_a}});
+        auto first = make_stopping_runner(roster, script, 77, tr::RunLimits{22, 0, 0}, StopSpec{21});
+        tr::RunResult const first_result = first.runner.run_next_wave();
+        check(first_result.error.code == tr::ErrorCode::BackendStopped && first.runner.ledger().size() == 21,
+              "set_spanning_stop_keeps_every_completed_game");
+        tb::SeriesView const mid = first.runner.bracket().series(0);
+        check(mid.sets_a == 1 && mid.games_a == 10 && mid.status == tb::SeriesStatus::Ready,
+              "stopped_set_win_is_recorded_in_the_bracket");
+
+        StopSpec clinch_spec;
+        clinch_spec.completed = 1;
+        auto clinch = make_stopping_runner(roster, script, 77, {}, clinch_spec, {2, 500, 200},
+                                           first.runner.ledger());
+        check(clinch.runner.ok() && clinch.log->call_ids.empty(),
+              "set_clinch_replay_accepts_the_partial_ledger");
+        tr::RunResult const clinch_result = clinch.runner.run_next_wave();
+        tb::SeriesView const won = clinch.runner.bracket().series(0);
+        check(clinch_result.error.code == tr::ErrorCode::BackendStopped
+                  && clinch.runner.ledger().size() == 22 && won.sets_a == 2
+                  && won.status == tb::SeriesStatus::Complete && won.winner == 101ULL,
+              "stopped_games_finish_the_series_at_its_set_target");
+        std::vector<int> const ready = clinch.runner.bracket().ready_series();
+        check(std::find(ready.begin(), ready.end(), 0) == ready.end(),
+              "stopped_clinch_drops_the_series_from_the_ready_set");
+        check(std::find(ready.begin(), ready.end(), 1) != ready.end(),
+              "stopped_clinch_promotes_the_next_series");
+
+        auto replayed = make_runner(roster, script, 77, {}, {2, 500, 200}, clinch.runner.ledger());
+        std::vector<int> const replayed_ready = replayed.runner.bracket().ready_series();
+        check(replayed.runner.ok() && replayed.runner.total_games() == 22
+                  && std::find(replayed_ready.begin(), replayed_ready.end(), 0) == replayed_ready.end(),
+              "replayed_stopped_ledger_keeps_the_series_finished");
+        tr::RunResult const finished = replayed.runner.run();
+        auto reference = make_runner(roster, script, 77, tr::RunLimits{22, 0, 0});
+        tr::RunResult const reference_result = reference.runner.run();
+        check(finished.complete && reference_result.complete
+                  && replayed.runner.champion() == reference.runner.champion()
+                  && replayed.runner.checksum() == reference.runner.checksum(),
+              "replayed_stopped_clinch_completes_like_an_uninterrupted_run");
+    }
+
+    void run_stopped_malformed_tests()
+    {
+        auto const roster = make_roster({101, 202});
+        auto const script = script_with_series({{0, always_a}, {1, always_a}, {2, always_a}});
+        struct StoppedCase
+        {
+            StopFault fault;
+            std::string_view name;
+        };
+        std::vector<StoppedCase> const cases{
+            {StopFault::UnknownGameId, "stopped_unknown_game_id_is_rejected"},
+            {StopFault::DuplicateGameId, "stopped_duplicate_game_id_is_rejected"},
+            {StopFault::WinnerAboveDomain, "stopped_winner_above_domain_is_rejected"},
+            {StopFault::WinnerBelowDomain, "stopped_winner_below_domain_is_rejected"},
+            {StopFault::NegativeRounds, "stopped_negative_rounds_is_rejected"},
+            {StopFault::ReasonMismatch, "stopped_reason_mismatch_is_rejected"},
+        };
+        for (StoppedCase const &stopped_case : cases)
+        {
+            StopSpec spec;
+            spec.completed = 3;
+            spec.fault = stopped_case.fault;
+            auto handle = make_stopping_runner(roster, script, 77, tr::RunLimits{4, 0, 0}, spec);
+            tr::RunResult const result = handle.runner.run_next_wave();
+            check(!result.complete && result.error.code == tr::ErrorCode::BackendMalformedOutcome
+                      && handle.runner.ledger().empty() && handle.runner.total_games() == 0
+                      && handle.runner.bracket().series(0).games_played == 0
+                      && handle.runner.bracket().series(0).status == tb::SeriesStatus::Ready,
+                  stopped_case.name);
+            check(result.error.game_id != 0, "stopped_malformed_error_names_the_offending_game");
+            tr::RunResult const again = handle.runner.run_next_wave();
+            check(again.error.code == tr::ErrorCode::BackendMalformedOutcome
+                      && handle.log->call_ids.size() == 1 && handle.runner.ledger().empty(),
+                  "stopped_malformed_error_is_sticky");
+        }
+        {
+            auto empty = make_stopping_runner(roster, script, 77, tr::RunLimits{4, 0, 0}, StopSpec{});
+            tr::RunResult const result = empty.runner.run_next_wave();
+            check(result.error.code == tr::ErrorCode::BackendStopped && empty.runner.ledger().empty()
+                      && empty.runner.total_games() == 0 && !empty.runner.ok()
+                      && empty.runner.bracket().series(0).games_played == 0,
+                  "stop_before_any_game_finishes_keeps_the_ledger_empty");
+        }
+        {
+            StopSpec unknown;
+            unknown.completed = 3;
+            unknown.fault = StopFault::UnknownGameId;
+            auto handle = make_stopping_runner(roster, script, 77, tr::RunLimits{4, 0, 0}, unknown);
+            tr::RunResult const result = handle.runner.run_next_wave();
+            check(result.error.game_id == tr::game_id_for(kStoppedForeignSeries, 0),
+                  "rejected_stopped_game_id_is_reported");
+        }
+    }
+
     void run_validation_tests()
     {
         {
@@ -1020,6 +1434,10 @@ int main()
     run_malformed_backend_tests();
     run_limit_tests();
     run_resume_tests();
+    run_stopped_wave_tests();
+    run_interleaved_stop_tests();
+    run_stopped_clinch_tests();
+    run_stopped_malformed_tests();
     run_validation_tests();
     run_executor_backend_test();
     std::println("{}/{} checks passed", checks - failures, checks);

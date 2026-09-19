@@ -68,6 +68,7 @@ namespace tournament_runner
         GameIndexOverflow,
         LedgerCorrupt,
         SeedMismatch,
+        BackendStopped,
     };
 
     struct RunnerError
@@ -403,6 +404,96 @@ namespace tournament_runner
             return true;
         }
 
+        bool absorb_stopped_wave(std::vector<GameRecord> &planned,
+                                 tuning::BackendStopped const &stop, RunResult &result)
+        {
+            std::unordered_map<std::uint64_t, std::size_t> by_game_id;
+            by_game_id.reserve(planned.size());
+            for (std::size_t i = 0; i < planned.size(); ++i)
+            {
+                by_game_id.emplace(planned[i].game_id, i);
+            }
+            std::int64_t draws = 0;
+            std::vector<bool> filled(planned.size(), false);
+            for (auto const &[game_id, outcome] : stop.completed())
+            {
+                auto const it = by_game_id.find(game_id);
+                if (it == by_game_id.end())
+                {
+                    error_ = RunnerError{ErrorCode::BackendMalformedOutcome, -1, game_id,
+                                         "stopped backend returned an unknown game id"};
+                    return false;
+                }
+                if (filled[it->second])
+                {
+                    error_ = RunnerError{ErrorCode::BackendMalformedOutcome, planned[it->second].series_id,
+                                         game_id, "stopped backend returned a duplicate game"};
+                    return false;
+                }
+                GameRecord &record = planned[it->second];
+                if (outcome.winner < -1 || outcome.winner > 1)
+                {
+                    error_ = RunnerError{ErrorCode::BackendMalformedOutcome, record.series_id,
+                                         record.game_id, "outcome winner is outside the supported domain"};
+                    return false;
+                }
+                if (outcome.rounds < 0)
+                {
+                    error_ = RunnerError{ErrorCode::BackendMalformedOutcome, record.series_id,
+                                         record.game_id, "outcome rounds is negative"};
+                    return false;
+                }
+                GameWinner const backend_winner = normalize_outcome(outcome.winner, true);
+                if (!reason_matches_winner(outcome.reason, backend_winner))
+                {
+                    error_ = RunnerError{ErrorCode::BackendMalformedOutcome, record.series_id,
+                                         record.game_id, "outcome reason does not match winner"};
+                    return false;
+                }
+                record.winner = normalize_outcome(outcome.winner, record.seat.side_a_is_player_one);
+                record.reason = normalize_reason(outcome.reason, record.seat.side_a_is_player_one);
+                record.rounds = outcome.rounds;
+                filled[it->second] = true;
+            }
+            std::vector<GameRecord const *> report_order;
+            for (std::size_t i = 0; i < planned.size(); ++i)
+            {
+                if (filled[i])
+                {
+                    report_order.push_back(&planned[i]);
+                }
+            }
+            std::sort(report_order.begin(), report_order.end(),
+                      [](GameRecord const *a, GameRecord const *b)
+                      {
+                          if (a->series_id != b->series_id)
+                          {
+                              return a->series_id < b->series_id;
+                          }
+                          return a->game_index < b->game_index;
+                      });
+            for (GameRecord const *record : report_order)
+            {
+                if (bracket_->report_game(record->series_id, record->game_index, record->winner)
+                    != tournament_bracket::ReportStatus::Accepted)
+                {
+                    error_ = RunnerError{ErrorCode::BracketRejected, record->series_id, record->game_id,
+                                         "bracket rejected a stopped wave outcome"};
+                    return false;
+                }
+                ledger_.push_back(*record);
+                if (record->winner == GameWinner::Draw)
+                {
+                    ++draws;
+                }
+            }
+            totals_.games += static_cast<std::int64_t>(report_order.size());
+            totals_.draws += draws;
+            error_ = RunnerError{ErrorCode::BackendStopped, -1, 0, stop.what()};
+            result.error = error_;
+            return false;
+        }
+
         bool execute_wave(std::vector<tournament_scheduler::WaveSlot> const &wave,
                           std::vector<SeriesView> const &views, RunResult &result)
         {
@@ -460,6 +551,10 @@ namespace tournament_runner
             try
             {
                 outcomes = backend_.run_games(games, run_config_);
+            }
+            catch (tuning::BackendStopped const &stop)
+            {
+                return absorb_stopped_wave(planned, stop, result);
             }
             catch (std::exception const &e)
             {
